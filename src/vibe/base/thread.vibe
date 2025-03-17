@@ -1,0 +1,289 @@
+;; Thread Library
+(define-library-vibe (vibe thread)
+  "Thread and synchronization primitives for concurrent programming"
+  (export make-thread thread-start! thread-join! thread-detach!
+          make-mutex mutex-lock! mutex-unlock! mutex-try-lock!
+          make-condition-variable condition-wait! condition-notify! condition-notify-all!
+          make-semaphore semaphore-wait! semaphore-post!)
+
+(define-bitcode 'vibe:thread "
+; Thread structure
+%thread = type {
+  i8*,     ; pthread handle
+  i1,      ; detached flag
+  i8*      ; function pointer
+}
+
+; Mutex structure
+%mutex = type {
+  i8*      ; pthread mutex handle
+}
+
+; Condition variable structure
+%condition = type {
+  i8*      ; pthread condition handle
+}
+
+; Semaphore structure
+%semaphore = type {
+  i8*      ; semaphore handle
+}
+
+; Thread creation
+define %vibe_value @make_thread(%vibe_value %func) {
+  %thread = call i8* @GC_malloc(i64 24)  ; sizeof(%thread)
+  %handle_ptr = getelementptr i8, i8* %thread, i64 0
+  store i8* null, i8** %handle_ptr
+  %detached_ptr = getelementptr i8, i8* %thread, i64 8
+  store i1 false, i1* %detached_ptr
+  %func_ptr = getelementptr i8, i8* %thread, i64 16
+  store i8* %func, i8** %func_ptr
+  %result = call %vibe_value @create_thread_value(i8* %thread)
+  ret %vibe_value %result
+}
+
+define %vibe_value @thread_start(%vibe_value %thread_val) {
+  %thread = call i8* @get_thread_value(%vibe_value %thread_val)
+  %handle_ptr = getelementptr i8, i8* %thread, i64 0
+  %func_ptr = getelementptr i8, i8* %thread, i64 16
+  %func = load i8*, i8** %func_ptr
+  %result = call i32 @pthread_create(i8** %handle_ptr, i8* null, i8* (i8*)* @thread_wrapper, i8* %func)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @thread_join(%vibe_value %thread_val) {
+  %thread = call i8* @get_thread_value(%vibe_value %thread_val)
+  %handle_ptr = getelementptr i8, i8* %thread, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_join(i8* %handle, i8** null)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @thread_detach(%vibe_value %thread_val) {
+  %thread = call i8* @get_thread_value(%vibe_value %thread_val)
+  %handle_ptr = getelementptr i8, i8* %thread, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %detached_ptr = getelementptr i8, i8* %thread, i64 8
+  store i1 true, i1* %detached_ptr
+  %result = call i32 @pthread_detach(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Mutex operations
+define %vibe_value @make_mutex() {
+  %mutex = call i8* @GC_malloc(i64 8)  ; sizeof(%mutex)
+  %handle_ptr = getelementptr i8, i8* %mutex, i64 0
+  %handle = call i8* @GC_malloc(i64 40)  ; sizeof(pthread_mutex_t)
+  store i8* %handle, i8** %handle_ptr
+  call i32 @pthread_mutex_init(i8* %handle, i8* null)
+  %result = call %vibe_value @create_mutex_value(i8* %mutex)
+  ret %vibe_value %result
+}
+
+define %vibe_value @mutex_lock(%vibe_value %mutex_val) {
+  %mutex = call i8* @get_mutex_value(%vibe_value %mutex_val)
+  %handle_ptr = getelementptr i8, i8* %mutex, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_mutex_lock(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @mutex_unlock(%vibe_value %mutex_val) {
+  %mutex = call i8* @get_mutex_value(%vibe_value %mutex_val)
+  %handle_ptr = getelementptr i8, i8* %mutex, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_mutex_unlock(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @mutex_try_lock(%vibe_value %mutex_val) {
+  %mutex = call i8* @get_mutex_value(%vibe_value %mutex_val)
+  %handle_ptr = getelementptr i8, i8* %mutex, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_mutex_trylock(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Condition variable operations
+define %vibe_value @make_condition() {
+  %cond = call i8* @GC_malloc(i64 8)  ; sizeof(%condition)
+  %handle_ptr = getelementptr i8, i8* %cond, i64 0
+  %handle = call i8* @GC_malloc(i64 48)  ; sizeof(pthread_cond_t)
+  store i8* %handle, i8** %handle_ptr
+  call i32 @pthread_cond_init(i8* %handle, i8* null)
+  %result = call %vibe_value @create_condition_value(i8* %cond)
+  ret %vibe_value %result
+}
+
+define %vibe_value @condition_wait(%vibe_value %cond_val, %vibe_value %mutex_val) {
+  %cond = call i8* @get_condition_value(%vibe_value %cond_val)
+  %mutex = call i8* @get_mutex_value(%vibe_value %mutex_val)
+  %cond_handle_ptr = getelementptr i8, i8* %cond, i64 0
+  %mutex_handle_ptr = getelementptr i8, i8* %mutex, i64 0
+  %cond_handle = load i8*, i8** %cond_handle_ptr
+  %mutex_handle = load i8*, i8** %mutex_handle_ptr
+  %result = call i32 @pthread_cond_wait(i8* %cond_handle, i8* %mutex_handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @condition_notify(%vibe_value %cond_val) {
+  %cond = call i8* @get_condition_value(%vibe_value %cond_val)
+  %handle_ptr = getelementptr i8, i8* %cond, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_cond_signal(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @condition_notify_all(%vibe_value %cond_val) {
+  %cond = call i8* @get_condition_value(%vibe_value %cond_val)
+  %handle_ptr = getelementptr i8, i8* %cond, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @pthread_cond_broadcast(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Semaphore operations
+define %vibe_value @make_semaphore(%vibe_value %initial_val) {
+  %sem = call i8* @GC_malloc(i64 8)  ; sizeof(%semaphore)
+  %handle_ptr = getelementptr i8, i8* %sem, i64 0
+  %handle = call i8* @GC_malloc(i64 32)  ; sizeof(sem_t)
+  store i8* %handle, i8** %handle_ptr
+  %initial = call i32 @get_integer(%vibe_value %initial_val)
+  call i32 @sem_init(i8* %handle, i32 0, i32 %initial)
+  %result = call %vibe_value @create_semaphore_value(i8* %sem)
+  ret %vibe_value %result
+}
+
+define %vibe_value @semaphore_wait(%vibe_value %sem_val) {
+  %sem = call i8* @get_semaphore_value(%vibe_value %sem_val)
+  %handle_ptr = getelementptr i8, i8* %sem, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @sem_wait(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+define %vibe_value @semaphore_post(%vibe_value %sem_val) {
+  %sem = call i8* @get_semaphore_value(%vibe_value %sem_val)
+  %handle_ptr = getelementptr i8, i8* %sem, i64 0
+  %handle = load i8*, i8** %handle_ptr
+  %result = call i32 @sem_post(i8* %handle)
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Thread wrapper function
+define i8* @thread_wrapper(i8* %arg) {
+  %func = bitcast i8* %arg to %vibe_value ()*
+  call %vibe_value %func()
+  ret i8* null
+}
+
+; External function declarations
+declare i32 @pthread_create(i8**, i8*, i8* (i8*)*, i8*)
+declare i32 @pthread_join(i8*, i8**)
+declare i32 @pthread_detach(i8*)
+declare i32 @pthread_mutex_init(i8*, i8*)
+declare i32 @pthread_mutex_lock(i8*)
+declare i32 @pthread_mutex_unlock(i8*)
+declare i32 @pthread_mutex_trylock(i8*)
+declare i32 @pthread_cond_init(i8*, i8*)
+declare i32 @pthread_cond_wait(i8*, i8*)
+declare i32 @pthread_cond_signal(i8*)
+declare i32 @pthread_cond_broadcast(i8*)
+declare i32 @sem_init(i8*, i32, i32)
+declare i32 @sem_wait(i8*)
+declare i32 @sem_post(i8*)
+declare i8* @GC_malloc(i64)
+declare %vibe_value @create_thread_value(i8*)
+declare %vibe_value @create_mutex_value(i8*)
+declare %vibe_value @create_condition_value(i8*)
+declare %vibe_value @create_semaphore_value(i8*)
+declare i8* @get_thread_value(%vibe_value)
+declare i8* @get_mutex_value(%vibe_value)
+declare i8* @get_condition_value(%vibe_value)
+declare i8* @get_semaphore_value(%vibe_value)
+declare %vibe_value @create_boolean(i1)
+declare i32 @get_integer(%vibe_value)
+"))
+
+; High-level Scheme interface
+(define (make-thread func)
+  "Create a new thread that will execute the given function"
+  (thread-create func))
+
+(define (thread-start! thread)
+  "Start a thread"
+  (thread-start thread))
+
+(define (thread-join! thread)
+  "Wait for a thread to complete"
+  (thread-join thread))
+
+(define (thread-detach! thread)
+  "Detach a thread allowing it to run independently"
+  (thread-detach thread))
+
+(define (make-mutex)
+  "Create a new mutex for thread synchronization"
+  (mutex-create))
+
+(define (mutex-lock! mutex)
+  "Lock a mutex"
+  (mutex-lock mutex))
+
+(define (mutex-unlock! mutex)
+  "Unlock a mutex"
+  (mutex-unlock mutex))
+
+(define (mutex-try-lock! mutex)
+  "Try to lock a mutex without blocking"
+  (mutex-try-lock mutex))
+
+(define (make-condition-variable)
+  "Create a new condition variable"
+  (condition-create))
+
+(define (condition-wait! cond mutex)
+  "Wait on a condition variable"
+  (condition-wait cond mutex))
+
+(define (condition-notify! cond)
+  "Notify one thread waiting on a condition variable"
+  (condition-notify cond))
+
+(define (condition-notify-all! cond)
+  "Notify all threads waiting on a condition variable"
+  (condition-notify-all cond))
+
+(define (make-semaphore initial)
+  "Create a new semaphore with an initial value"
+  (semaphore-create initial))
+
+(define (semaphore-wait! sem)
+  "Wait on a semaphore"
+  (semaphore-wait sem))
+
+(define (semaphore-post! sem)
+  "Post to a semaphore"
+  (semaphore-post sem))) 

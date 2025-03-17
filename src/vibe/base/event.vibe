@@ -1,0 +1,422 @@
+;; Event Loop Library
+(define-library-vibe (vibe event)
+  "Event loop for asynchronous I/O operations"
+  (export make-event-loop event-loop-run! event-loop-stop!
+          event-loop-add-socket! event-loop-remove-socket!
+          event-loop-on-read! event-loop-on-write! event-loop-on-error!)
+
+(define-bitcode 'vibe:event "
+; Event handler structure
+%event_handler = type {
+  %vibe_value,  ; callback function
+  i8*           ; user data
+}
+
+; Event loop structure
+%event_loop = type {
+  i32,     ; epoll fd
+  i1,      ; running flag
+  i8*,     ; mutex
+  i8*,     ; handlers map
+  i8*      ; thread
+}
+
+; Event types
+@EVENT_READ = private constant i32 1    ; EPOLLIN
+@EVENT_WRITE = private constant i32 4   ; EPOLLOUT
+@EVENT_ERROR = private constant i32 8   ; EPOLLERR
+@EVENT_HUP = private constant i32 16    ; EPOLLHUP
+
+; Event loop creation
+define %vibe_value @make_event_loop() {
+  %loop = call i8* @GC_malloc(i64 40)  ; sizeof(%event_loop)
+  
+  ; Create epoll instance
+  %epoll_fd = call i32 @epoll_create1(i32 0)
+  %fd_ptr = getelementptr i8, i8* %loop, i64 0
+  %fd_ptr_i32 = bitcast i8* %fd_ptr to i32*
+  store i32 %epoll_fd, i32* %fd_ptr_i32
+  
+  ; Initialize running flag to false
+  %running_ptr = getelementptr i8, i8* %loop, i64 4
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  store i1 false, i1* %running_ptr_i1
+  
+  ; Create mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = call i8* @GC_malloc(i64 40)  ; sizeof(pthread_mutex_t)
+  store i8* %mutex, i8** %mutex_ptr
+  call i32 @pthread_mutex_init(i8* %mutex, i8* null)
+  
+  ; Create handlers map
+  %handlers_ptr = getelementptr i8, i8* %loop, i64 16
+  %handlers = call i8* @create_handlers_map()
+  store i8* %handlers, i8** %handlers_ptr
+  
+  ; Initialize thread pointer to null
+  %thread_ptr = getelementptr i8, i8* %loop, i64 24
+  store i8* null, i8** %thread_ptr
+  
+  %result = call %vibe_value @create_event_loop_value(i8* %loop)
+  ret %vibe_value %result
+}
+
+; Event loop run
+define %vibe_value @event_loop_run(%vibe_value %loop_val) {
+  %loop = call i8* @get_event_loop_value(%vibe_value %loop_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Set running flag
+  %running_ptr = getelementptr i8, i8* %loop, i64 4
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  store i1 true, i1* %running_ptr_i1
+  
+  ; Create event loop thread
+  %thread_ptr = getelementptr i8, i8* %loop, i64 24
+  %thread = call i8* @GC_malloc(i64 8)  ; sizeof(pthread_t)
+  store i8* %thread, i8** %thread_ptr
+  %result = call i32 @pthread_create(i8** %thread_ptr, i8* null, i8* (i8*)* @event_loop_thread, i8* %loop)
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Event loop stop
+define %vibe_value @event_loop_stop(%vibe_value %loop_val) {
+  %loop = call i8* @get_event_loop_value(%vibe_value %loop_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Clear running flag
+  %running_ptr = getelementptr i8, i8* %loop, i64 4
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  store i1 false, i1* %running_ptr_i1
+  
+  ; Wait for thread to finish
+  %thread_ptr = getelementptr i8, i8* %loop, i64 24
+  %thread = load i8*, i8** %thread_ptr
+  %valid_thread = icmp ne i8* %thread, null
+  br i1 %valid_thread, label %join_thread, label %cleanup
+  
+join_thread:
+  call i32 @pthread_join(i8* %thread, i8** null)
+  store i8* null, i8** %thread_ptr
+  br label %cleanup
+  
+cleanup:
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %loop_val
+}
+
+; Add socket to event loop
+define %vibe_value @event_loop_add_socket(%vibe_value %loop_val, %vibe_value %socket_val, i32 %events) {
+  %loop = call i8* @get_event_loop_value(%vibe_value %loop_val)
+  %socket = call i8* @get_socket_value(%vibe_value %socket_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get socket fd
+  %fd_ptr = getelementptr i8, i8* %socket, i64 0
+  %fd_ptr_i32 = bitcast i8* %fd_ptr to i32*
+  %fd = load i32, i32* %fd_ptr_i32
+  
+  ; Add to epoll
+  %epoll_fd_ptr = getelementptr i8, i8* %loop, i64 0
+  %epoll_fd_ptr_i32 = bitcast i8* %epoll_fd_ptr to i32*
+  %epoll_fd = load i32, i32* %epoll_fd_ptr_i32
+  
+  %event = alloca { i32, i64 }  ; struct epoll_event
+  %event_events = getelementptr { i32, i64 }, { i32, i64 }* %event, i32 0, i32 0
+  store i32 %events, i32* %event_events
+  %event_data = getelementptr { i32, i64 }, { i32, i64 }* %event, i32 0, i32 1
+  %fd_i64 = zext i32 %fd to i64
+  store i64 %fd_i64, i64* %event_data
+  
+  %result = call i32 @epoll_ctl(i32 %epoll_fd, i32 1, i32 %fd, { i32, i64 }* %event)  ; EPOLL_CTL_ADD
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Remove socket from event loop
+define %vibe_value @event_loop_remove_socket(%vibe_value %loop_val, %vibe_value %socket_val) {
+  %loop = call i8* @get_event_loop_value(%vibe_value %loop_val)
+  %socket = call i8* @get_socket_value(%vibe_value %socket_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get socket fd
+  %fd_ptr = getelementptr i8, i8* %socket, i64 0
+  %fd_ptr_i32 = bitcast i8* %fd_ptr to i32*
+  %fd = load i32, i32* %fd_ptr_i32
+  
+  ; Remove from epoll
+  %epoll_fd_ptr = getelementptr i8, i8* %loop, i64 0
+  %epoll_fd_ptr_i32 = bitcast i8* %epoll_fd_ptr to i32*
+  %epoll_fd = load i32, i32* %epoll_fd_ptr_i32
+  
+  %result = call i32 @epoll_ctl(i32 %epoll_fd, i32 2, i32 %fd, i8* null)  ; EPOLL_CTL_DEL
+  
+  ; Remove handlers
+  %handlers_ptr = getelementptr i8, i8* %loop, i64 16
+  %handlers = load i8*, i8** %handlers_ptr
+  call void @remove_handlers(i8* %handlers, i32 %fd)
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Set event handler
+define %vibe_value @event_loop_set_handler(%vibe_value %loop_val, %vibe_value %socket_val, i32 %event_type, %vibe_value %callback, %vibe_value %user_data) {
+  %loop = call i8* @get_event_loop_value(%vibe_value %loop_val)
+  %socket = call i8* @get_socket_value(%vibe_value %socket_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get socket fd
+  %fd_ptr = getelementptr i8, i8* %socket, i64 0
+  %fd_ptr_i32 = bitcast i8* %fd_ptr to i32*
+  %fd = load i32, i32* %fd_ptr_i32
+  
+  ; Create handler
+  %handler = call i8* @GC_malloc(i64 16)  ; sizeof(%event_handler)
+  %callback_ptr = getelementptr i8, i8* %handler, i64 0
+  %callback_ptr_vibe = bitcast i8* %callback_ptr to %vibe_value*
+  store %vibe_value %callback, %vibe_value* %callback_ptr_vibe
+  %data_ptr = getelementptr i8, i8* %handler, i64 8
+  store i8* %user_data, i8** %data_ptr
+  
+  ; Add handler to map
+  %handlers_ptr = getelementptr i8, i8* %loop, i64 16
+  %handlers = load i8*, i8** %handlers_ptr
+  call void @set_handler(i8* %handlers, i32 %fd, i32 %event_type, i8* %handler)
+  
+  ; Update epoll events
+  %epoll_fd_ptr = getelementptr i8, i8* %loop, i64 0
+  %epoll_fd_ptr_i32 = bitcast i8* %epoll_fd_ptr to i32*
+  %epoll_fd = load i32, i32* %epoll_fd_ptr_i32
+  
+  %events = call i32 @get_handler_events(i8* %handlers, i32 %fd)
+  
+  %event = alloca { i32, i64 }  ; struct epoll_event
+  %event_events = getelementptr { i32, i64 }, { i32, i64 }* %event, i32 0, i32 0
+  store i32 %events, i32* %event_events
+  %event_data = getelementptr { i32, i64 }, { i32, i64 }* %event, i32 0, i32 1
+  %fd_i64 = zext i32 %fd to i64
+  store i64 %fd_i64, i64* %event_data
+  
+  %result = call i32 @epoll_ctl(i32 %epoll_fd, i32 3, i32 %fd, { i32, i64 }* %event)  ; EPOLL_CTL_MOD
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %success = icmp eq i32 %result, 0
+  %bool_val = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %bool_val
+}
+
+; Event loop thread function
+define i8* @event_loop_thread(i8* %arg) {
+  %loop = bitcast i8* %arg to i8*
+  
+  ; Get epoll fd
+  %epoll_fd_ptr = getelementptr i8, i8* %loop, i64 0
+  %epoll_fd_ptr_i32 = bitcast i8* %epoll_fd_ptr to i32*
+  %epoll_fd = load i32, i32* %epoll_fd_ptr_i32
+  
+  ; Allocate events array
+  %events = alloca [32 x { i32, i64 }]  ; struct epoll_event[32]
+  
+  ; Main event loop
+  br label %loop_start
+  
+loop_start:
+  ; Check running flag
+  %running_ptr = getelementptr i8, i8* %loop, i64 4
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  %running = load i1, i1* %running_ptr_i1
+  br i1 %running, label %wait_events, label %cleanup
+  
+wait_events:
+  ; Wait for events
+  %num_events = call i32 @epoll_wait(i32 %epoll_fd, [32 x { i32, i64 }]* %events, i32 32, i32 -1)
+  %has_events = icmp sgt i32 %num_events, 0
+  br i1 %has_events, label %process_events, label %loop_start
+  
+process_events:
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %loop, i64 8
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get handlers map
+  %handlers_ptr = getelementptr i8, i8* %loop, i64 16
+  %handlers = load i8*, i8** %handlers_ptr
+  
+  ; Process each event
+  %i = alloca i32
+  store i32 0, i32* %i
+  br label %event_loop
+  
+event_loop:
+  %idx = load i32, i32* %i
+  %done = icmp eq i32 %idx, %num_events
+  br i1 %done, label %events_done, label %process_event
+  
+process_event:
+  ; Get event
+  %event_ptr = getelementptr [32 x { i32, i64 }], [32 x { i32, i64 }]* %events, i32 0, i32 %idx
+  %event_events = getelementptr { i32, i64 }, { i32, i64 }* %event_ptr, i32 0, i32 0
+  %events_val = load i32, i32* %event_events
+  %event_data = getelementptr { i32, i64 }, { i32, i64 }* %event_ptr, i32 0, i32 1
+  %fd_i64 = load i64, i64* %event_data
+  %fd = trunc i64 %fd_i64 to i32
+  
+  ; Check for read events
+  %read_events = load i32, i32* @EVENT_READ
+  %has_read = and i32 %events_val, %read_events
+  %read_handler = call i8* @get_handler(i8* %handlers, i32 %fd, i32 %read_events)
+  %valid_read = icmp ne i8* %read_handler, null
+  br i1 %valid_read, label %call_read, label %check_write
+  
+call_read:
+  %read_callback_ptr = getelementptr i8, i8* %read_handler, i64 0
+  %read_callback_ptr_vibe = bitcast i8* %read_callback_ptr to %vibe_value*
+  %read_callback = load %vibe_value, %vibe_value* %read_callback_ptr_vibe
+  %read_data_ptr = getelementptr i8, i8* %read_handler, i64 8
+  %read_data = load i8*, i8** %read_data_ptr
+  call void @call_handler(%vibe_value %read_callback, i8* %read_data)
+  br label %check_write
+  
+check_write:
+  ; Check for write events
+  %write_events = load i32, i32* @EVENT_WRITE
+  %has_write = and i32 %events_val, %write_events
+  %write_handler = call i8* @get_handler(i8* %handlers, i32 %fd, i32 %write_events)
+  %valid_write = icmp ne i8* %write_handler, null
+  br i1 %valid_write, label %call_write, label %check_error
+  
+call_write:
+  %write_callback_ptr = getelementptr i8, i8* %write_handler, i64 0
+  %write_callback_ptr_vibe = bitcast i8* %write_callback_ptr to %vibe_value*
+  %write_callback = load %vibe_value, %vibe_value* %write_callback_ptr_vibe
+  %write_data_ptr = getelementptr i8, i8* %write_handler, i64 8
+  %write_data = load i8*, i8** %write_data_ptr
+  call void @call_handler(%vibe_value %write_callback, i8* %write_data)
+  br label %check_error
+  
+check_error:
+  ; Check for error events
+  %error_events = load i32, i32* @EVENT_ERROR
+  %has_error = and i32 %events_val, %error_events
+  %error_handler = call i8* @get_handler(i8* %handlers, i32 %fd, i32 %error_events)
+  %valid_error = icmp ne i8* %error_handler, null
+  br i1 %valid_error, label %call_error, label %next_event
+  
+call_error:
+  %error_callback_ptr = getelementptr i8, i8* %error_handler, i64 0
+  %error_callback_ptr_vibe = bitcast i8* %error_callback_ptr to %vibe_value*
+  %error_callback = load %vibe_value, %vibe_value* %error_callback_ptr_vibe
+  %error_data_ptr = getelementptr i8, i8* %error_handler, i64 8
+  %error_data = load i8*, i8** %error_data_ptr
+  call void @call_handler(%vibe_value %error_callback, i8* %error_data)
+  br label %next_event
+  
+next_event:
+  %next_idx = add i32 %idx, 1
+  store i32 %next_idx, i32* %i
+  br label %event_loop
+  
+events_done:
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  br label %loop_start
+  
+cleanup:
+  ret i8* null
+}
+
+; External function declarations
+declare i32 @epoll_create1(i32)
+declare i32 @epoll_ctl(i32, i32, i32, { i32, i64 }*)
+declare i32 @epoll_wait(i32, [32 x { i32, i64 }]*, i32, i32)
+declare i8* @GC_malloc(i64)
+declare i32 @pthread_mutex_init(i8*, i8*)
+declare i32 @pthread_mutex_lock(i8*)
+declare i32 @pthread_mutex_unlock(i8*)
+declare i32 @pthread_create(i8**, i8*, i8* (i8*)*, i8*)
+declare i32 @pthread_join(i8*, i8**)
+declare i8* @create_handlers_map()
+declare void @set_handler(i8*, i32, i32, i8*)
+declare i8* @get_handler(i8*, i32, i32)
+declare void @remove_handlers(i8*, i32)
+declare i32 @get_handler_events(i8*, i32)
+declare void @call_handler(%vibe_value, i8*)
+declare %vibe_value @create_event_loop_value(i8*)
+declare %vibe_value @create_boolean(i1)
+declare i8* @get_event_loop_value(%vibe_value)
+declare i8* @get_socket_value(%vibe_value)
+")
+
+; High-level Scheme interface
+(define (make-event-loop)
+  "Create a new event loop"
+  (event-loop-create))
+
+(define (event-loop-run! loop)
+  "Start running the event loop"
+  (event-loop-run loop))
+
+(define (event-loop-stop! loop)
+  "Stop the event loop"
+  (event-loop-stop loop))
+
+(define (event-loop-add-socket! loop socket events)
+  "Add a socket to the event loop with the specified events"
+  (event-loop-add-socket loop socket events))
+
+(define (event-loop-remove-socket! loop socket)
+  "Remove a socket from the event loop"
+  (event-loop-remove-socket loop socket))
+
+(define (event-loop-on-read! loop socket callback user-data)
+  "Set the read event handler for a socket"
+  (event-loop-set-handler loop socket 1 callback user-data))  ; EPOLLIN
+
+(define (event-loop-on-write! loop socket callback user-data)
+  "Set the write event handler for a socket"
+  (event-loop-set-handler loop socket 4 callback user-data))  ; EPOLLOUT
+
+(define (event-loop-on-error! loop socket callback user-data)
+  "Set the error event handler for a socket"
+  (event-loop-set-handler loop socket 8 callback user-data))) 

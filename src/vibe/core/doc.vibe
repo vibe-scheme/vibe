@@ -1,0 +1,104 @@
+;; Vibe documentation registry
+(define-library-vibe (vibe doc)
+  "Documentation registry for storing and retrieving documentation strings"
+  (export register-doc lookup-doc make-doc-iterator
+          doc-entry? doc-entry-symbol doc-entry-doc doc-entry-version make-doc-entry
+          clear-doc-registry! merge-doc-registry!
+          lookup-doc-versioned lookup-latest-doc)
+  
+  (import (vibe core types)
+          (vibe base serialize)
+          (vibe base serialize-runtime))
+
+;; Documentation entry record type
+(define-record-type doc-entry
+  (make-doc-entry symbol doc version)
+  doc-entry?
+  (symbol doc-entry-symbol)
+  (doc doc-entry-doc)
+  (version doc-entry-version))
+
+;; Global documentation registry - maps symbols to alist of (version . entry)
+(define doc-registry (make-hash-table))
+
+(define-vibe (register-doc symbol doc version)
+  "Register documentation for a symbol with version"
+  (let* ((entry (make-doc-entry symbol doc version))
+         (existing (hash-table-ref doc-registry symbol '()))
+         (without-version (filter (lambda (pair)
+                                  (not (equal? (version-label->string (car pair))
+                                             (version-label->string version))))
+                                existing)))
+    (hash-table-set! doc-registry symbol
+                     (cons (cons version entry) without-version))))
+
+(define-vibe (lookup-doc symbol)
+  "Look up latest documentation for a symbol"
+  (lookup-latest-doc symbol))
+
+(define-vibe (lookup-doc-versioned symbol version)
+  "Look up documentation for a symbol with specific version"
+  (let* ((entries (hash-table-ref doc-registry symbol '()))
+         (version-entry (assoc version entries version-label=?)))
+    (and version-entry (cdr version-entry))))
+
+(define-vibe (lookup-latest-doc symbol)
+  "Look up latest version of documentation for a symbol"
+  (let ((entries (hash-table-ref doc-registry symbol '())))
+    (and (not (null? entries))
+         (cdr (car (sort entries
+                         (lambda (a b)
+                           (version>? (car a) (car b)))))))))
+
+(define-vibe (make-doc-iterator)
+  "Create an iterator over documentation entries"
+  (append-map (lambda (sym)
+                (map cdr (hash-table-ref doc-registry sym '())))
+             (hash-table-keys doc-registry)))
+
+(define-vibe (clear-doc-registry!)
+  "Clear all entries from the documentation registry"
+  (hash-table-clear! doc-registry))
+
+(define-vibe (merge-doc-registry! entries)
+  "Merge a list of documentation entries into the registry"
+  (for-each (lambda (entry)
+              (register-doc (doc-entry-symbol entry)
+                          (doc-entry-doc entry)
+                          (doc-entry-version entry)))
+            entries))
+
+;; Version comparison helpers
+(define-vibe (version>? v1 v2)
+  "Compare version labels"
+  (or (> (version-label-major v1) (version-label-major v2))
+      (and (= (version-label-major v1) (version-label-major v2))
+           (> (version-label-minor v1) (version-label-minor v2)))
+      (and (= (version-label-major v1) (version-label-major v2))
+           (= (version-label-minor v1) (version-label-minor v2))
+           (> (version-label-patch v1) (version-label-patch v2)))))
+
+(define-vibe (version-label=? v1 v2)
+  "Check if version labels are equal"
+  (and (= (version-label-major v1) (version-label-major v2))
+       (= (version-label-minor v1) (version-label-minor v2))
+       (= (version-label-patch v1) (version-label-patch v2))))
+
+;; Serialization support
+(begin
+  ;; Doc entry serialization
+  (register-serializer 'doc-entry
+    (lambda (val port)
+      (let ((symbol (doc-entry-symbol val))
+            (doc (doc-entry-doc val))
+            (version (doc-entry-version val)))
+        (serialize-value symbol port)
+        (serialize-value doc port)
+        (serialize-value version port))))
+  
+  (register-deserializer 'doc-entry
+    (lambda (port)
+      (let ((symbol (deserialize-value port))
+            (doc (deserialize-value port))
+            (version (deserialize-value port)))
+        (make-doc-entry symbol doc version))))) 

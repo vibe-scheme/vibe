@@ -1,0 +1,341 @@
+;; REPL Server Library
+(define-library-vibe (vibe repl)
+  "REPL server for remote code evaluation"
+  (export start-repl! stop-repl! repl-running? repl-port
+          repl-eval-handler repl-result-handler repl-error-handler)
+
+(define-bitcode 'vibe:repl "
+; REPL server state
+%repl_server = type {
+  i8*,     ; server socket
+  i8*,     ; event loop
+  i8*,     ; eval queue
+  i8*,     ; mutex
+  i1,      ; running flag
+  i16      ; port
+}
+
+; Message types
+@MSG_TYPE_EVAL = private constant i32 1
+@MSG_TYPE_RESULT = private constant i32 2
+@MSG_TYPE_ERROR = private constant i32 3
+
+; Message header (16 bytes)
+%msg_header = type {
+  i32,     ; type
+  i32,     ; length
+  i64      ; request id
+}
+
+; Global REPL server instance
+@repl = global i8* null
+
+; Create REPL server
+define %vibe_value @create_repl_server(i16 %port) {
+  %server = call i8* @GC_malloc(i64 32)  ; sizeof(%repl_server)
+  
+  ; Create server socket
+  %sock = call %vibe_value @make_server_socket()
+  %sock_ptr = getelementptr i8, i8* %server, i64 0
+  store i8* %sock, i8** %sock_ptr
+  
+  ; Create event loop
+  %loop = call %vibe_value @make_event_loop()
+  %loop_ptr = getelementptr i8, i8* %server, i64 8
+  store i8* %loop, i8** %loop_ptr
+  
+  ; Create eval queue
+  %queue = call %vibe_value @make_queue()
+  %queue_ptr = getelementptr i8, i8* %server, i64 16
+  store i8* %queue, i8** %queue_ptr
+  
+  ; Create mutex
+  %mutex = call i8* @GC_malloc(i64 40)  ; sizeof(pthread_mutex_t)
+  %mutex_ptr = getelementptr i8, i8* %server, i64 24
+  store i8* %mutex, i8** %mutex_ptr
+  call i32 @pthread_mutex_init(i8* %mutex, i8* null)
+  
+  ; Set running flag to false
+  %running_ptr = getelementptr i8, i8* %server, i64 28
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  store i1 false, i1* %running_ptr_i1
+  
+  ; Set port
+  %port_ptr = getelementptr i8, i8* %server, i64 30
+  %port_ptr_i16 = bitcast i8* %port_ptr to i16*
+  store i16 %port, i16* %port_ptr_i16
+  
+  %result = call %vibe_value @create_repl_server_value(i8* %server)
+  ret %vibe_value %result
+}
+
+; Start REPL server
+define %vibe_value @start_repl(%vibe_value %server_val) {
+  %server = call i8* @get_repl_server_value(%vibe_value %server_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %server, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Check if already running
+  %running_ptr = getelementptr i8, i8* %server, i64 28
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  %running = load i1, i1* %running_ptr_i1
+  br i1 %running, label %already_running, label %start_server
+  
+already_running:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %error = call %vibe_value @create_error(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @already_running_error, i32 0, i32 0))
+  ret %vibe_value %error
+  
+start_server:
+  ; Get server socket and port
+  %sock_ptr = getelementptr i8, i8* %server, i64 0
+  %sock = load i8*, i8** %sock_ptr
+  %port_ptr = getelementptr i8, i8* %server, i64 30
+  %port_ptr_i16 = bitcast i8* %port_ptr to i16*
+  %port = load i16, i16* %port_ptr_i16
+  
+  ; Bind and listen
+  %bind_result = call %vibe_value @server_socket_bind!(i8* %sock, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @localhost, i32 0, i32 0), i16 %port)
+  %bind_success = call i1 @get_boolean(%vibe_value %bind_result)
+  br i1 %bind_success, label %do_listen, label %bind_failed
+  
+bind_failed:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %bind_error = call %vibe_value @create_error(i8* getelementptr inbounds ([22 x i8], [22 x i8]* @bind_error, i32 0, i32 0))
+  ret %vibe_value %bind_error
+  
+do_listen:
+  %listen_result = call %vibe_value @server_socket_listen!(i8* %sock, i32 5)
+  %listen_success = call i1 @get_boolean(%vibe_value %listen_result)
+  br i1 %listen_success, label %setup_event_loop, label %listen_failed
+  
+listen_failed:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %listen_error = call %vibe_value @create_error(i8* getelementptr inbounds ([23 x i8], [23 x i8]* @listen_error, i32 0, i32 0))
+  ret %vibe_value %listen_error
+  
+setup_event_loop:
+  ; Get event loop
+  %loop_ptr = getelementptr i8, i8* %server, i64 8
+  %loop = load i8*, i8** %loop_ptr
+  
+  ; Add server socket to event loop
+  call %vibe_value @event_loop_add_socket!(i8* %loop, i8* %sock, i32 1)  ; EPOLLIN
+  call %vibe_value @event_loop_on_read!(i8* %loop, i8* %sock, void (i8*)* @handle_client_connect, i8* %server)
+  
+  ; Start event loop
+  call %vibe_value @event_loop_run!(i8* %loop)
+  
+  ; Set running flag
+  store i1 true, i1* %running_ptr_i1
+  
+  ; Store global instance
+  store i8* %server, i8** @repl
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %server_val
+}
+
+; Stop REPL server
+define %vibe_value @stop_repl(%vibe_value %server_val) {
+  %server = call i8* @get_repl_server_value(%vibe_value %server_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %server, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Check if running
+  %running_ptr = getelementptr i8, i8* %server, i64 28
+  %running_ptr_i1 = bitcast i8* %running_ptr to i1*
+  %running = load i1, i1* %running_ptr_i1
+  br i1 %running, label %stop_server, label %not_running
+  
+not_running:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %error = call %vibe_value @create_error(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @not_running_error, i32 0, i32 0))
+  ret %vibe_value %error
+  
+stop_server:
+  ; Stop event loop
+  %loop_ptr = getelementptr i8, i8* %server, i64 8
+  %loop = load i8*, i8** %loop_ptr
+  call %vibe_value @event_loop_stop!(i8* %loop)
+  
+  ; Close server socket
+  %sock_ptr = getelementptr i8, i8* %server, i64 0
+  %sock = load i8*, i8** %sock_ptr
+  call %vibe_value @socket_close!(i8* %sock)
+  
+  ; Clear running flag
+  store i1 false, i1* %running_ptr_i1
+  
+  ; Clear global instance
+  store i8* null, i8** @repl
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %server_val
+}
+
+; Handle client connection
+define void @handle_client_connect(i8* %server_ptr) {
+  %server = bitcast i8* %server_ptr to i8*
+  
+  ; Get server socket
+  %sock_ptr = getelementptr i8, i8* %server, i64 0
+  %sock = load i8*, i8** %sock_ptr
+  
+  ; Accept client connection
+  %client = call %vibe_value @server_socket-accept!(i8* %sock)
+  %valid_client = call i1 @is_socket(%vibe_value %client)
+  br i1 %valid_client, label %setup_client, label %accept_failed
+  
+accept_failed:
+  ret void
+  
+setup_client:
+  ; Get event loop
+  %loop_ptr = getelementptr i8, i8* %server, i64 8
+  %loop = load i8*, i8** %loop_ptr
+  
+  ; Add client to event loop
+  call %vibe_value @event_loop_add_socket!(i8* %loop, i8* %client, i32 1)  ; EPOLLIN
+  call %vibe_value @event_loop_on_read!(i8* %loop, i8* %client, void (i8*)* @handle_client_message, i8* %server)
+  call %vibe_value @event_loop_on_error!(i8* %loop, i8* %client, void (i8*)* @handle_client_error, i8* %server)
+  
+  ret void
+}
+
+; Handle client message
+define void @handle_client_message(i8* %server_ptr) {
+  %server = bitcast i8* %server_ptr to i8*
+  
+  ; Read message header
+  %header = alloca %msg_header
+  %header_size = ptrtoint %msg_header* getelementptr (%msg_header, %msg_header* null, i32 1) to i64
+  %header_read = call i64 @socket_receive!(i8* %client, i8* %header, i64 0, i64 %header_size)
+  %header_complete = icmp eq i64 %header_read, %header_size
+  br i1 %header_complete, label %read_body, label %read_failed
+  
+read_failed:
+  ret void
+  
+read_body:
+  ; Get message type and length
+  %type_ptr = getelementptr %msg_header, %msg_header* %header, i32 0, i32 0
+  %length_ptr = getelementptr %msg_header, %msg_header* %header, i32 0, i32 1
+  %reqid_ptr = getelementptr %msg_header, %msg_header* %header, i32 0, i32 2
+  %type = load i32, i32* %type_ptr
+  %length = load i32, i32* %length_ptr
+  %reqid = load i64, i64* %reqid_ptr
+  
+  ; Read message body
+  %body = call i8* @GC_malloc(i64 %length)
+  %body_read = call i64 @socket_receive!(i8* %client, i8* %body, i64 0, i64 %length)
+  %body_complete = icmp eq i64 %body_read, i64 %length
+  br i1 %body_complete, label %process_message, label %cleanup
+  
+process_message:
+  ; Handle message based on type
+  switch i32 %type, label %cleanup [
+    i32 1 label %handle_eval     ; MSG_TYPE_EVAL
+    i32 2 label %handle_result   ; MSG_TYPE_RESULT
+    i32 3 label %handle_error    ; MSG_TYPE_ERROR
+  ]
+  
+handle_eval:
+  ; Queue evaluation request
+  %queue_ptr = getelementptr i8, i8* %server, i64 16
+  %queue = load i8*, i8** %queue_ptr
+  %eval_req = call %vibe_value @create_eval_request(i8* %body, i64 %length, i64 %reqid, i8* %client)
+  call void @queue_push!(i8* %queue, %vibe_value %eval_req)
+  br label %cleanup
+  
+handle_result:
+  call void @handle_eval_result(i8* %body, i64 %length, i64 %reqid)
+  br label %cleanup
+  
+handle_error:
+  call void @handle_eval_error(i8* %body, i64 %length, i64 %reqid)
+  br label %cleanup
+  
+cleanup:
+  ret void
+}
+
+; Handle client error/disconnect
+define void @handle_client_error(i8* %server_ptr) {
+  %server = bitcast i8* %server_ptr to i8*
+  
+  ; Get event loop
+  %loop_ptr = getelementptr i8, i8* %server, i64 8
+  %loop = load i8*, i8** %loop_ptr
+  
+  ; Remove client from event loop
+  call %vibe_value @event_loop_remove_socket!(i8* %loop, i8* %client)
+  
+  ; Close client socket
+  call %vibe_value @socket_close!(i8* %client)
+  
+  ret void
+}
+
+; String constants
+@already_running_error = private constant [26 x i8] c\"REPL server already running\00\"
+@not_running_error = private constant [25 x i8] c\"REPL server not running\00\"
+@bind_error = private constant [22 x i8] c\"Failed to bind socket\00\"
+@listen_error = private constant [23 x i8] c\"Failed to listen socket\00\"
+@localhost = private constant [10 x i8] c\"127.0.0.1\00\"
+
+; External function declarations
+declare i8* @GC_malloc(i64)
+declare i32 @pthread_mutex_init(i8*, i8*)
+declare i32 @pthread_mutex_lock(i8*)
+declare i32 @pthread_mutex_unlock(i8*)
+declare %vibe_value @create_repl_server_value(i8*)
+declare %vibe_value @create_error(i8*)
+declare %vibe_value @create_eval_request(i8*, i64, i64, i8*)
+declare i8* @get_repl_server_value(%vibe_value)
+declare i1 @get_boolean(%vibe_value)
+declare i1 @is_socket(%vibe_value)
+")
+
+; High-level Scheme interface
+(define (start-repl! port)
+  "Start the REPL server on the given port"
+  (let ((server (create-repl-server port)))
+    (start-repl server)))
+
+(define (stop-repl!)
+  "Stop the REPL server"
+  (let ((server (get-current-repl)))
+    (stop-repl server)))
+
+(define (repl-running?)
+  "Check if the REPL server is running"
+  (let ((server (get-current-repl)))
+    (and server (get-repl-running server))))
+
+(define (repl-port)
+  "Get the port the REPL server is running on"
+  (let ((server (get-current-repl)))
+    (and server (get-repl-port server))))
+
+(define (repl-eval-handler handler)
+  "Set the evaluation handler function"
+  (set-eval-handler handler))
+
+(define (repl-result-handler handler)
+  "Set the result handler function"
+  (set-result-handler handler))
+
+(define (repl-error-handler handler)
+  "Set the error handler function"
+  (set-error-handler handler))) 

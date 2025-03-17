@@ -1,0 +1,185 @@
+;; Core Vibe types and helper functions
+(define-library-vibe (vibe types)
+  "Core type definitions and helper functions"
+  (export TYPE_NIL TYPE_BOOL TYPE_INT TYPE_FLOAT TYPE_STRING TYPE_SYMBOL TYPE_LIST TYPE_FUNCTION
+          create-value get-value get-type create-list-node list-next
+          make-string string-length string-ref string-set!
+          make-symbol symbol-name symbol=?
+          list? null? pair? car cdr cons set-car! set-cdr!)
+
+;; Core type definitions in LLVM IR
+(define-bitcode 'vibe:types "
+; Type definitions
+%vibe_value = type {
+  i32,  ; type tag
+  i8*   ; value pointer
+}
+
+%vibe_list = type {
+  %vibe_value,     ; head (car)
+  %vibe_list*      ; tail (cdr)
+}
+
+%vibe_string = type {
+  i64,  ; length
+  i8*   ; data
+}
+
+%vibe_symbol = type {
+  i64,  ; length
+  i8*   ; name
+}
+
+; Type tags
+@TYPE_NIL = constant i32 0
+@TYPE_BOOL = constant i32 1
+@TYPE_INT = constant i32 2
+@TYPE_FLOAT = constant i32 3
+@TYPE_STRING = constant i32 4
+@TYPE_SYMBOL = constant i32 5
+@TYPE_LIST = constant i32 6
+@TYPE_FUNCTION = constant i32 7
+
+; Core value creation function
+define %vibe_value @create_value(i32 %tag, i8* %ptr) {
+  %val = insertvalue %vibe_value undef, i32 %tag, 0
+  %result = insertvalue %vibe_value %val, i8* %ptr, 1
+  ret %vibe_value %result
+}
+
+; Core value access functions
+define i8* @get_value(%vibe_value %val) {
+  %ptr = extractvalue %vibe_value %val, 1
+  ret i8* %ptr
+}
+
+define i32 @get_type(%vibe_value %val) {
+  %tag = extractvalue %vibe_value %val, 0
+  ret i32 %tag
+}
+
+; Create a new list node
+define %vibe_list* @create_list_node(%vibe_value %head, %vibe_list* %tail) {
+  %size = call i64 @GC_malloc(i64 ptrtoint (%vibe_list* getelementptr (%vibe_list, %vibe_list* null, i32 1) to i64))
+  %node = bitcast i8* %size to %vibe_list*
+  %head_ptr = getelementptr %vibe_list, %vibe_list* %node, i32 0, i32 0
+  store %vibe_value %head, %vibe_value* %head_ptr
+  %tail_ptr = getelementptr %vibe_list, %vibe_list* %node, i32 0, i32 1
+  store %vibe_list* %tail, %vibe_list** %tail_ptr
+  ret %vibe_list* %node
+}
+
+; Get next element from list
+define { %vibe_value, %vibe_list* } @list_next(%vibe_list* %list) {
+  %is_null = icmp eq %vibe_list* %list, null
+  br i1 %is_null, label %return_nil, label %get_elements
+
+return_nil:
+  %nil = call %vibe_value @create_value(i32 0, i8* null)
+  %nil_result = insertvalue { %vibe_value, %vibe_list* } undef, %vibe_value %nil, 0
+  %final_nil = insertvalue { %vibe_value, %vibe_list* } %nil_result, %vibe_list* null, 1
+  ret { %vibe_value, %vibe_list* } %final_nil
+
+get_elements:
+  %head_ptr = getelementptr %vibe_list, %vibe_list* %list, i32 0, i32 0
+  %head = load %vibe_value, %vibe_value* %head_ptr
+  %tail_ptr = getelementptr %vibe_list, %vibe_list* %list, i32 0, i32 1
+  %tail = load %vibe_list*, %vibe_list** %tail_ptr
+  %result = insertvalue { %vibe_value, %vibe_list* } undef, %vibe_value %head, 0
+  %result = insertvalue { %vibe_value, %vibe_list* } %result, %vibe_list* %tail, 1
+  ret { %vibe_value, %vibe_list* } %result
+}
+")
+
+;; Type tag constants
+(define TYPE_NIL 0)
+(define TYPE_BOOL 1)
+(define TYPE_INT 2)
+(define TYPE_FLOAT 3)
+(define TYPE_STRING 4)
+(define TYPE_SYMBOL 5)
+(define TYPE_LIST 6)
+(define TYPE_FUNCTION 7)
+
+;; List functions
+(define-vibe (create-list-node head tail)
+  "Create a new list node with head and tail"
+  (let ((node (make-list)))
+    (set-car! node head)
+    (set-cdr! node tail)
+    node))
+
+(define-vibe (list? obj)
+  "Check if object is a list"
+  (or (null? obj)
+      (= (get-type obj) TYPE_LIST)))
+
+(define-vibe (null? obj)
+  "Check if object is null"
+  (and (= (get-type obj) TYPE_NIL)
+       (not (get-value obj))))
+
+(define-vibe (pair? obj)
+  "Check if object is a pair"
+  (= (get-type obj) TYPE_LIST))
+
+(define-vibe (car lst)
+  "Get first element of list"
+  (if (null? lst)
+      '()
+      (let ((node (get-value lst)))
+        (car node))))
+
+(define-vibe (cdr lst)
+  "Get rest of list"
+  (if (null? lst)
+      '()
+      (let ((node (get-value lst)))
+        (cdr node))))
+
+(define-vibe (cons head tail)
+  "Create a new cons cell"
+  (create-list-node head tail))
+
+(define-vibe (set-car! lst val)
+  "Set first element of list"
+  (let ((node (get-value lst)))
+    (set-car! node val)))
+
+(define-vibe (set-cdr! lst val)
+  "Set rest of list"
+  (let ((node (get-value lst)))
+    (set-cdr! node val)))
+
+;; String functions
+(define-vibe (make-string len)
+  "Create a new string of given length"
+  (let ((str (make-bytes len)))
+    (create-value TYPE_STRING str)))
+
+(define-vibe (string-length str)
+  "Get string length"
+  (bytes-length (get-value str)))
+
+(define-vibe (string-ref str idx)
+  "Get character at index"
+  (integer->char (bytes-ref (get-value str) idx)))
+
+(define-vibe (string-set! str idx chr)
+  "Set character at index"
+  (bytes-set! (get-value str) idx (char->integer chr)))
+
+;; Symbol functions
+(define-vibe (make-symbol name)
+  "Create a new symbol"
+  (let* ((len (string-length name))
+         (bytes (string->bytes name)))
+    (create-value TYPE_SYMBOL bytes)))
+
+(define-vibe (symbol-name sym)
+  "Get symbol name"
+  (bytes->string (get-value sym)))
+
+(define-vibe (symbol=? sym1 sym2)
+  "Compare symbols for equality"
+  (string=? (symbol-name sym1) (symbol-name sym2))) 

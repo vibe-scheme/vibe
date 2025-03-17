@@ -1,0 +1,71 @@
+{
+  "name": "vibe-vscode",
+  "displayName": "Vibe Language Support",
+  "description": "Language support for the Vibe programming language",
+  "version": "0.1.0",
+  "publisher": "vibe-lang",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onLanguage:vibe"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [{
+      "id": "vibe",
+      "aliases": ["Vibe", "vibe"],
+      "extensions": [".vibe"],
+      "configuration": "./language-configuration.json"
+    }],
+    "commands": [
+      {
+        "command": "vibe.startRepl",
+        "title": "Start Vibe REPL"
+      },
+      {
+        "command": "vibe.connectRepl",
+        "title": "Connect to Vibe REPL"
+      },
+      {
+        "command": "vibe.evalBuffer",
+        "title": "Evaluate Buffer in Vibe REPL"
+      },
+      {
+        "command": "vibe.evalSelection",
+        "title": "Evaluate Selection in Vibe REPL"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "vibe.evalBuffer",
+        "key": "ctrl+alt+b",
+        "mac": "cmd+alt+b",
+        "when": "editorLangId == vibe"
+      },
+      {
+        "command": "vibe.evalSelection",
+        "key": "ctrl+alt+e",
+        "mac": "cmd+alt+e",
+        "when": "editorLangId == vibe"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^14.14.37",
+    "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^4.22.0",
+    "@typescript-eslint/parser": "^4.22.0",
+    "eslint": "^7.24.0",
+    "typescript": "^4.2.4"
+  }
+} 

@@ -1,0 +1,293 @@
+;; Thread-safe Queue Library
+(define-library-vibe (vibe queue)
+  "Thread-safe queue implementation for concurrent programming"
+  (export make-queue queue-push! queue-pop! queue-peek queue-empty? queue-length)
+
+(define-bitcode 'vibe:queue "
+; Queue node structure
+%queue_node = type {
+  %vibe_value,  ; value
+  i8*           ; next pointer
+}
+
+; Queue structure
+%queue = type {
+  i8*,     ; head pointer
+  i8*,     ; tail pointer
+  i64,     ; length
+  i8*,     ; mutex
+  i8*      ; condition variable
+}
+
+; Queue creation
+define %vibe_value @make_queue() {
+  %queue = call i8* @GC_malloc(i64 40)  ; sizeof(%queue)
+  
+  ; Initialize head and tail to null
+  %head_ptr = getelementptr i8, i8* %queue, i64 0
+  store i8* null, i8** %head_ptr
+  %tail_ptr = getelementptr i8, i8* %queue, i64 8
+  store i8* null, i8** %tail_ptr
+  
+  ; Initialize length to 0
+  %len_ptr = getelementptr i8, i8* %queue, i64 16
+  %len_ptr_i64 = bitcast i8* %len_ptr to i64*
+  store i64 0, i64* %len_ptr_i64
+  
+  ; Create mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = call i8* @GC_malloc(i64 40)  ; sizeof(pthread_mutex_t)
+  store i8* %mutex, i8** %mutex_ptr
+  call i32 @pthread_mutex_init(i8* %mutex, i8* null)
+  
+  ; Create condition variable
+  %cond_ptr = getelementptr i8, i8* %queue, i64 32
+  %cond = call i8* @GC_malloc(i64 48)  ; sizeof(pthread_cond_t)
+  store i8* %cond, i8** %cond_ptr
+  call i32 @pthread_cond_init(i8* %cond, i8* null)
+  
+  %result = call %vibe_value @create_queue_value(i8* %queue)
+  ret %vibe_value %result
+}
+
+; Queue push
+define %vibe_value @queue_push(%vibe_value %queue_val, %vibe_value %value) {
+  %queue = call i8* @get_queue_value(%vibe_value %queue_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Create new node
+  %node = call i8* @GC_malloc(i64 16)  ; sizeof(%queue_node)
+  %value_ptr = getelementptr i8, i8* %node, i64 0
+  %value_ptr_vibe = bitcast i8* %value_ptr to %vibe_value*
+  store %vibe_value %value, %vibe_value* %value_ptr_vibe
+  %next_ptr = getelementptr i8, i8* %node, i64 8
+  store i8* null, i8** %next_ptr
+  
+  ; Get queue head and tail
+  %head_ptr = getelementptr i8, i8* %queue, i64 0
+  %tail_ptr = getelementptr i8, i8* %queue, i64 8
+  %head = load i8*, i8** %head_ptr
+  %tail = load i8*, i8** %tail_ptr
+  
+  ; If queue is empty, set head and tail to new node
+  %empty = icmp eq i8* %head, null
+  br i1 %empty, label %empty_queue, label %nonempty_queue
+  
+empty_queue:
+  store i8* %node, i8** %head_ptr
+  store i8* %node, i8** %tail_ptr
+  br label %update_length
+  
+nonempty_queue:
+  %tail_next_ptr = getelementptr i8, i8* %tail, i64 8
+  store i8* %node, i8** %tail_next_ptr
+  store i8* %node, i8** %tail_ptr
+  br label %update_length
+  
+update_length:
+  ; Increment length
+  %len_ptr = getelementptr i8, i8* %queue, i64 16
+  %len_ptr_i64 = bitcast i8* %len_ptr to i64*
+  %len = load i64, i64* %len_ptr_i64
+  %new_len = add i64 %len, 1
+  store i64 %new_len, i64* %len_ptr_i64
+  
+  ; Signal condition variable
+  %cond_ptr = getelementptr i8, i8* %queue, i64 32
+  %cond = load i8*, i8** %cond_ptr
+  call i32 @pthread_cond_signal(i8* %cond)
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %queue_val
+}
+
+; Queue pop
+define %vibe_value @queue_pop(%vibe_value %queue_val) {
+  %queue = call i8* @get_queue_value(%vibe_value %queue_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get queue head
+  %head_ptr = getelementptr i8, i8* %queue, i64 0
+  %head = load i8*, i8** %head_ptr
+  
+  ; If queue is empty, wait on condition variable
+  %empty = icmp eq i8* %head, null
+  br i1 %empty, label %wait_for_item, label %pop_item
+  
+wait_for_item:
+  %cond_ptr = getelementptr i8, i8* %queue, i64 32
+  %cond = load i8*, i8** %cond_ptr
+  call i32 @pthread_cond_wait(i8* %cond, i8* %mutex)
+  %head_after_wait = load i8*, i8** %head_ptr
+  %still_empty = icmp eq i8* %head_after_wait, null
+  br i1 %still_empty, label %return_error, label %pop_item
+  
+pop_item:
+  ; Get value from head node
+  %value_ptr = getelementptr i8, i8* %head, i64 0
+  %value_ptr_vibe = bitcast i8* %value_ptr to %vibe_value*
+  %value = load %vibe_value, %vibe_value* %value_ptr_vibe
+  
+  ; Update head to next node
+  %next_ptr = getelementptr i8, i8* %head, i64 8
+  %next = load i8*, i8** %next_ptr
+  store i8* %next, i8** %head_ptr
+  
+  ; If queue is now empty, set tail to null
+  %now_empty = icmp eq i8* %next, null
+  br i1 %now_empty, label %update_tail, label %update_length
+  
+update_tail:
+  %tail_ptr = getelementptr i8, i8* %queue, i64 8
+  store i8* null, i8** %tail_ptr
+  br label %update_length
+  
+update_length:
+  ; Decrement length
+  %len_ptr = getelementptr i8, i8* %queue, i64 16
+  %len_ptr_i64 = bitcast i8* %len_ptr to i64*
+  %len = load i64, i64* %len_ptr_i64
+  %new_len = sub i64 %len, 1
+  store i64 %new_len, i64* %len_ptr_i64
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %value
+  
+return_error:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %error = call %vibe_value @create_error(i8* getelementptr inbounds ([21 x i8], [21 x i8]* @queue_empty_error, i32 0, i32 0))
+  ret %vibe_value %error
+}
+
+; Queue peek
+define %vibe_value @queue_peek(%vibe_value %queue_val) {
+  %queue = call i8* @get_queue_value(%vibe_value %queue_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get queue head
+  %head_ptr = getelementptr i8, i8* %queue, i64 0
+  %head = load i8*, i8** %head_ptr
+  
+  ; If queue is empty, return error
+  %empty = icmp eq i8* %head, null
+  br i1 %empty, label %return_error, label %return_value
+  
+return_value:
+  ; Get value from head node
+  %value_ptr = getelementptr i8, i8* %head, i64 0
+  %value_ptr_vibe = bitcast i8* %value_ptr to %vibe_value*
+  %value = load %vibe_value, %vibe_value* %value_ptr_vibe
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  ret %vibe_value %value
+  
+return_error:
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  %error = call %vibe_value @create_error(i8* getelementptr inbounds ([21 x i8], [21 x i8]* @queue_empty_error, i32 0, i32 0))
+  ret %vibe_value %error
+}
+
+; Queue empty check
+define %vibe_value @queue_empty(%vibe_value %queue_val) {
+  %queue = call i8* @get_queue_value(%vibe_value %queue_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get queue head
+  %head_ptr = getelementptr i8, i8* %queue, i64 0
+  %head = load i8*, i8** %head_ptr
+  
+  ; Check if head is null
+  %empty = icmp eq i8* %head, null
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %result = call %vibe_value @create_boolean(i1 %empty)
+  ret %vibe_value %result
+}
+
+; Queue length
+define %vibe_value @queue_length(%vibe_value %queue_val) {
+  %queue = call i8* @get_queue_value(%vibe_value %queue_val)
+  
+  ; Lock mutex
+  %mutex_ptr = getelementptr i8, i8* %queue, i64 24
+  %mutex = load i8*, i8** %mutex_ptr
+  call i32 @pthread_mutex_lock(i8* %mutex)
+  
+  ; Get length
+  %len_ptr = getelementptr i8, i8* %queue, i64 16
+  %len_ptr_i64 = bitcast i8* %len_ptr to i64*
+  %len = load i64, i64* %len_ptr_i64
+  
+  ; Unlock mutex
+  call i32 @pthread_mutex_unlock(i8* %mutex)
+  
+  %result = call %vibe_value @create_integer(i64 %len)
+  ret %vibe_value %result
+}
+
+; String constants
+@queue_empty_error = private constant [21 x i8] c"Queue is empty\00"
+
+; External function declarations
+declare i8* @GC_malloc(i64)
+declare i32 @pthread_mutex_init(i8*, i8*)
+declare i32 @pthread_mutex_lock(i8*)
+declare i32 @pthread_mutex_unlock(i8*)
+declare i32 @pthread_cond_init(i8*, i8*)
+declare i32 @pthread_cond_wait(i8*, i8*)
+declare i32 @pthread_cond_signal(i8*)
+declare %vibe_value @create_queue_value(i8*)
+declare %vibe_value @create_boolean(i1)
+declare %vibe_value @create_integer(i64)
+declare %vibe_value @create_error(i8*)
+declare i8* @get_queue_value(%vibe_value)
+")
+
+; High-level Scheme interface
+(define (make-queue)
+  "Create a new thread-safe queue"
+  (queue-create))
+
+(define (queue-push! queue value)
+  "Push a value onto the queue"
+  (queue-push queue value))
+
+(define (queue-pop! queue)
+  "Pop a value from the queue, blocking if empty"
+  (queue-pop queue))
+
+(define (queue-peek queue)
+  "Get the next value from the queue without removing it"
+  (queue-peek queue))
+
+(define (queue-empty? queue)
+  "Check if the queue is empty"
+  (queue-empty queue))
+
+(define (queue-length queue)
+  "Get the number of items in the queue"
+  (queue-length queue))) 

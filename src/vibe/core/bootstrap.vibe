@@ -1,0 +1,144 @@
+;; Vibe define-bitcode primitive
+(define-bitcode 'vibe:define-bitcode "
+; Import types from vibe:types
+%vibe_value = type {
+  i32,  ; type tag
+  i8*   ; value pointer
+}
+
+%vibe_list = type {
+  %vibe_value,     ; head (car)
+  %vibe_list*      ; tail (cdr)
+}
+
+; LLVM types needed for JIT compilation
+%LLVMOpaqueContext = type opaque
+%LLVMOpaqueModule = type opaque
+%LLVMOpaqueExecutionEngine = type opaque
+%LLVMOpaqueMemoryBuffer = type opaque
+
+; Function type for compiled functions
+%vibe_function_t = type %vibe_value (%vibe_value)*
+
+; Function to compile LLVM bitcode
+define private %vibe_function_t @compile_bitcode(i8* %bitcode) {
+entry:
+  ; Create LLVM context
+  %context = call %LLVMOpaqueContext* @LLVMContextCreate()
+  
+  ; Create memory buffer
+  %buffer = call %LLVMOpaqueMemoryBuffer* @LLVMCreateMemoryBufferWithString(i8* %bitcode, i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.module, i64 0, i64 0))
+  
+  ; Parse IR
+  %error_ptr = alloca i8*
+  %module = call %LLVMOpaqueModule* @LLVMParseIRInContext(%LLVMOpaqueContext* %context, %LLVMOpaqueMemoryBuffer* %buffer, i8** %error_ptr)
+  
+  ; Check for parsing errors
+  %error_msg = load i8*, i8** %error_ptr
+  %has_error = icmp ne i8* %error_msg, null
+  br i1 %has_error, label %handle_error, label %create_engine
+
+handle_error:
+  call void @LLVMDisposeMessage(i8* %error_msg)
+  call void @LLVMDisposeMemoryBuffer(%LLVMOpaqueMemoryBuffer* %buffer)
+  call void @LLVMContextDispose(%LLVMOpaqueContext* %context)
+  ret %vibe_function_t null
+
+create_engine:
+  ; Create execution engine
+  %engine_ptr = alloca %LLVMOpaqueExecutionEngine*
+  %engine_error = alloca i8*
+  %engine_result = call i32 @LLVMCreateExecutionEngineForModule(%LLVMOpaqueExecutionEngine** %engine_ptr, %LLVMOpaqueModule* %module, i8** %engine_error)
+  
+  ; Check for engine creation errors
+  %engine_error_msg = load i8*, i8** %engine_error
+  %engine_has_error = icmp ne i8* %engine_error_msg, null
+  br i1 %engine_has_error, label %handle_engine_error, label %get_function
+
+handle_engine_error:
+  call void @LLVMDisposeMessage(i8* %engine_error_msg)
+  call void @LLVMDisposeModule(%LLVMOpaqueModule* %module)
+  call void @LLVMDisposeMemoryBuffer(%LLVMOpaqueMemoryBuffer* %buffer)
+  call void @LLVMContextDispose(%LLVMOpaqueContext* %context)
+  ret %vibe_function_t null
+
+get_function:
+  %engine = load %LLVMOpaqueExecutionEngine*, %LLVMOpaqueExecutionEngine** %engine_ptr
+  %func_ptr = call i8* @LLVMGetFunctionAddress(%LLVMOpaqueExecutionEngine* %engine, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.func, i64 0, i64 0))
+  %typed_func = bitcast i8* %func_ptr to %vibe_function_t
+  
+  ; Clean up
+  call void @LLVMDisposeExecutionEngine(%LLVMOpaqueExecutionEngine* %engine)
+  call void @LLVMDisposeMemoryBuffer(%LLVMOpaqueMemoryBuffer* %buffer)
+  call void @LLVMContextDispose(%LLVMOpaqueContext* %context)
+  
+  ret %vibe_function_t %typed_func
+}
+
+; define-bitcode primitive function
+define %vibe_value @define_bitcode(%vibe_value %args) {
+entry:
+  ; Convert args to list
+  %args_list = bitcast i8* %args to %vibe_list*
+  
+  ; Get symbol (first argument)
+  %symbol_result = call { %vibe_value, %vibe_list* } @list_next(%vibe_list* %args_list)
+  %symbol = extractvalue { %vibe_value, %vibe_list* } %symbol_result, 0
+  %rest = extractvalue { %vibe_value, %vibe_list* } %symbol_result, 1
+  
+  ; Get bitcode string (second argument)
+  %bitcode_result = call { %vibe_value, %vibe_list* } @list_next(%vibe_list* %rest)
+  %bitcode_val = extractvalue { %vibe_value, %vibe_list* } %bitcode_result, 0
+  
+  ; Extract symbol name and bitcode string
+  %sym_ptr = call i8* @get_value(%vibe_value %symbol)
+  %sym_len = call i64 @get_string_length(i8* %sym_ptr)
+  %bitcode_ptr = call i8* @get_value(%vibe_value %bitcode_val)
+  
+  ; Compile bitcode
+  %func = call %vibe_function_t @compile_bitcode(i8* %bitcode_ptr)
+  
+  ; Check if compilation succeeded
+  %is_null = icmp eq %vibe_function_t %func, null
+  br i1 %is_null, label %compile_error, label %register_func
+  
+compile_error:
+  ; Return nil on error
+  %nil = call %vibe_value @create_value(i32 0, i8* null)
+  ret %vibe_value %nil
+  
+register_func:
+  ; Create function value
+  %func_val = call %vibe_value @create_function(%vibe_function_t %func)
+  
+  ; Register function with symbol
+  call void @register_global(i8* %sym_ptr, i64 %sym_len, %vibe_value %func_val)
+  
+  ; Return the symbol
+  ret %vibe_value %symbol
+}
+
+; Helper functions
+declare { %vibe_value, %vibe_list* } @list_next(%vibe_list*)
+declare i8* @get_value(%vibe_value)
+declare i64 @get_string_length(i8*)
+declare %vibe_value @create_value(i32, i8*)
+declare %vibe_value @create_function(%vibe_function_t)
+declare void @register_global(i8*, i64, %vibe_value)
+
+; External LLVM functions
+declare %LLVMOpaqueContext* @LLVMContextCreate()
+declare void @LLVMContextDispose(%LLVMOpaqueContext*)
+declare %LLVMOpaqueMemoryBuffer* @LLVMCreateMemoryBufferWithString(i8*, i8*)
+declare %LLVMOpaqueModule* @LLVMParseIRInContext(%LLVMOpaqueContext*, %LLVMOpaqueMemoryBuffer*, i8**)
+declare i32 @LLVMCreateExecutionEngineForModule(%LLVMOpaqueExecutionEngine**, %LLVMOpaqueModule*, i8**)
+declare i8* @LLVMGetFunctionAddress(%LLVMOpaqueExecutionEngine*, i8*)
+declare void @LLVMDisposeMessage(i8*)
+declare void @LLVMDisposeMemoryBuffer(%LLVMOpaqueMemoryBuffer*)
+declare void @LLVMDisposeModule(%LLVMOpaqueModule*)
+declare void @LLVMDisposeExecutionEngine(%LLVMOpaqueExecutionEngine*)
+
+; String constants
+@.str.module = private unnamed_addr constant [7 x i8] c\"module\00\"
+@.str.func = private unnamed_addr constant [5 x i8] c\"func\00\"
+") 

@@ -1,0 +1,126 @@
+;; Main entrypoint for Vibe compiler
+(define-library-vibe vibe-main
+  (import core-types)
+  (import core-ffi)
+  (import core-runtime)
+  (import base-repl)
+
+  (export main)
+
+  ;; String constants
+  (define-bitcode repl-flag "--repl\0")
+  (define-bitcode image-flag "--image\0")
+  (define-bitcode compile-flag "--compile-vibe\0")
+  (define-bitcode output-flag "-o\0")
+  (define-bitcode missing-image-path "Error: --image requires a path\n\0")
+  (define-bitcode missing-output-path "Error: -o requires a path\n\0")
+  (define-bitcode image-load-failed "Error: Failed to load image\n\0")
+  (define-bitcode compile-failed "Error: Failed to compile Vibe sources\n\0")
+
+  ;; Main function
+  (define-bitcode main
+    (lambda ((argc : int32) (argv : (* (* i8)))) : int32
+      (let ((i : (* int32) (alloca int32))
+            (repl-mode : (* bool) (alloca bool))
+            (image-mode : (* bool) (alloca bool))
+            (compile-mode : (* bool) (alloca bool))
+            (image-path : (* (* i8)) (alloca (* i8)))
+            (output-path : (* (* i8)) (alloca (* i8)))
+            (source-files : (* (* (* i8))) (alloca (* (* i8))))
+            (num-sources : (* int32) (alloca int32)))
+        
+        ;; Initialize runtime
+        (init-runtime)
+        
+        ;; Initialize variables
+        (store int32 1 i)
+        (store bool false repl-mode)
+        (store bool false image-mode)
+        (store bool false compile-mode)
+        (store (* i8) null image-path)
+        (store (* i8) null output-path)
+        (store (* (* i8)) null source-files)
+        (store int32 0 num-sources)
+        
+        ;; Process arguments
+        (let process-args ((idx (load int32 i)))
+          (when (< idx argc)
+            (let* ((arg-ptr (gep (* i8) argv idx))
+                   (arg (load (* i8) arg-ptr)))
+              
+              (cond
+                ;; Check --repl flag
+                ((string-equal arg repl-flag)
+                 (store bool true repl-mode)
+                 (process-args (+ idx 1)))
+                
+                ;; Check --image flag
+                ((string-equal arg image-flag)
+                 (store bool true image-mode)
+                 (let ((next-idx (+ idx 1)))
+                   (if (< next-idx argc)
+                       (let ((path-ptr (gep (* i8) argv next-idx))
+                             (path (load (* i8) path-ptr)))
+                         (store (* i8) path image-path)
+                         (process-args (+ idx 2)))
+                       (begin
+                         (print-string missing-image-path)
+                         (return 1)))))
+                
+                ;; Check --compile-vibe flag
+                ((string-equal arg compile-flag)
+                 (store bool true compile-mode)
+                 (process-args (+ idx 1)))
+                
+                ;; Check -o flag
+                ((string-equal arg output-flag)
+                 (let ((next-idx (+ idx 1)))
+                   (if (< next-idx argc)
+                       (let ((path-ptr (gep (* i8) argv next-idx))
+                             (path (load (* i8) path-ptr)))
+                         (store (* i8) path output-path)
+                         (process-args (+ idx 2)))
+                       (begin
+                         (print-string missing-output-path)
+                         (return 1)))))
+                
+                ;; Collect source files in compile mode
+                ((and (load bool compile-mode)
+                      (not (string-equal arg "-")))
+                 (let ((sources (load (* (* i8)) source-files))
+                       (count (load int32 num-sources)))
+                   (store (* i8) arg (gep (* i8) sources count))
+                   (store int32 (+ count 1) num-sources)
+                   (process-args (+ idx 1))))
+                
+                ;; Continue to next arg
+                (else
+                  (process-args (+ idx 1))))))
+        
+        ;; Load image if specified
+        (when (load bool image-mode)
+          (let ((path (load (* i8) image-path)))
+            (unless (read-image path)
+              (print-string image-load-failed)
+              (return 1))))
+        
+        ;; Handle different modes
+        (cond
+          ;; Compile mode
+          ((load bool compile-mode)
+           (let ((output (load (* i8) output-path))
+                 (sources (load (* (* i8)) source-files))
+                 (count (load int32 num-sources)))
+             (if (compile-vibe-sources sources count output)
+                 0
+                 (begin
+                   (print-string compile-failed)
+                   1))))
+          
+          ;; REPL mode
+          ((load bool repl-mode)
+           (start-repl-server 7654)
+           0)
+          
+          ;; Normal mode
+          (else 0))))))) 

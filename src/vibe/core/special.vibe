@@ -1,0 +1,408 @@
+;; Vibe special forms
+(define-bitcode 'vibe:special "
+; Special form types
+@SPECIAL_DEFINE = constant i32 0
+@SPECIAL_LAMBDA = constant i32 1
+@SPECIAL_IF = constant i32 2
+@SPECIAL_QUOTE = constant i32 3
+@SPECIAL_BEGIN = constant i32 4
+@SPECIAL_SET = constant i32 5
+@SPECIAL_DEFINE_VIBE = constant i32 6
+@SPECIAL_DEFINE_SYNTAX_VIBE = constant i32 7
+@SPECIAL_SAVE_IMAGE = constant i32 8
+@SPECIAL_LOAD_IMAGE = constant i32 9
+@SPECIAL_DEFINE_FOREIGN_TYPE_VIBE = constant i32 10
+@SPECIAL_DEFINE_FOREIGN_FUNCTION_VIBE = constant i32 11
+
+; Check if a symbol is a special form
+define i1 @is_special_form(%vibe_value %symbol) {
+  %sym_val = call i8* @get_value(%vibe_value %symbol)
+  %sym_str = bitcast i8* %sym_val to i8*
+  
+  ; Compare with known special forms
+  %is_define = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.define, i64 0, i64 0))
+  %is_lambda = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.lambda, i64 0, i64 0))
+  %is_if = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.if, i64 0, i64 0))
+  %is_quote = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.quote, i64 0, i64 0))
+  %is_begin = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.begin, i64 0, i64 0))
+  %is_set = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.set, i64 0, i64 0))
+  %is_define_vibe = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.define_vibe, i64 0, i64 0))
+  %is_define_syntax_vibe = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.define_syntax_vibe, i64 0, i64 0))
+  %is_save_image = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.save_image, i64 0, i64 0))
+  %is_load_image = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.load_image, i64 0, i64 0))
+  
+  %or1 = or i1 %is_define, %is_lambda
+  %or2 = or i1 %or1, %is_if
+  %or3 = or i1 %or2, %is_quote
+  %or4 = or i1 %or3, %is_begin
+  %or5 = or i1 %or4, %is_set
+  %or6 = or i1 %or5, %is_define_vibe
+  %or7 = or i1 %or6, %is_define_syntax_vibe
+  %or8 = or i1 %or7, %is_save_image
+  %or9 = or i1 %or8, %is_load_image
+  
+  ret i1 %or9
+}
+
+; Evaluate a special form
+define %vibe_value @eval_special_form(%vibe_value %symbol, %vibe_list* %args, %env* %env) {
+  %sym_val = call i8* @get_value(%vibe_value %symbol)
+  %sym_str = bitcast i8* %sym_val to i8*
+  
+  ; Dispatch to appropriate handler
+  %is_define = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.define, i64 0, i64 0))
+  br i1 %is_define, label %handle_define, label %check_lambda
+  
+check_lambda:
+  %is_lambda = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.lambda, i64 0, i64 0))
+  br i1 %is_lambda, label %handle_lambda, label %check_if
+  
+check_if:
+  %is_if = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.if, i64 0, i64 0))
+  br i1 %is_if, label %handle_if, label %check_quote
+  
+check_quote:
+  %is_quote = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.quote, i64 0, i64 0))
+  br i1 %is_quote, label %handle_quote, label %check_begin
+  
+check_begin:
+  %is_begin = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.begin, i64 0, i64 0))
+  br i1 %is_begin, label %handle_begin, label %check_set
+  
+check_set:
+  %is_set = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.set, i64 0, i64 0))
+  br i1 %is_set, label %handle_set, label %check_define_vibe
+  
+check_define_vibe:
+  %is_define_vibe = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.define_vibe, i64 0, i64 0))
+  br i1 %is_define_vibe, label %handle_define_vibe, label %check_define_syntax_vibe
+  
+check_define_syntax_vibe:
+  %is_define_syntax_vibe = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.define_syntax_vibe, i64 0, i64 0))
+  br i1 %is_define_syntax_vibe, label %handle_define_syntax_vibe, label %check_save_image
+  
+check_save_image:
+  %is_save_image = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.save_image, i64 0, i64 0))
+  br i1 %is_save_image, label %handle_save_image, label %check_load_image
+  
+check_load_image:
+  %is_load_image = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.load_image, i64 0, i64 0))
+  br i1 %is_load_image, label %handle_load_image, label %check_define_foreign_type_vibe
+  
+check_define_foreign_type_vibe:
+  %is_define_foreign_type = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.define_foreign_type_vibe, i64 0, i64 0))
+  br i1 %is_define_foreign_type, label %handle_define_foreign_type_vibe, label %check_define_foreign_function_vibe
+  
+check_define_foreign_function_vibe:
+  %is_define_foreign_function = call i1 @string_equal(i8* %sym_str, i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.define_foreign_function_vibe, i64 0, i64 0))
+  br i1 %is_define_foreign_function, label %handle_define_foreign_function_vibe, label %error
+  
+handle_define:
+  %def_result = call %vibe_value @eval_define(%vibe_list* %args, %env* %env)
+  ret %vibe_value %def_result
+  
+handle_lambda:
+  %lambda_result = call %vibe_value @eval_lambda(%vibe_list* %args, %env* %env)
+  ret %vibe_value %lambda_result
+  
+handle_if:
+  %if_result = call %vibe_value @eval_if(%vibe_list* %args, %env* %env)
+  ret %vibe_value %if_result
+  
+handle_quote:
+  %quote_result = call %vibe_value @eval_quote(%vibe_list* %args)
+  ret %vibe_value %quote_result
+  
+handle_begin:
+  %begin_result = call %vibe_value @eval_begin(%vibe_list* %args, %env* %env)
+  ret %vibe_value %begin_result
+  
+handle_set:
+  %set_result = call %vibe_value @eval_set(%vibe_list* %args, %env* %env)
+  ret %vibe_value %set_result
+  
+handle_define_vibe:
+  %define_vibe_result = call %vibe_value @eval_define_vibe(%vibe_list* %args, %env* %env)
+  ret %vibe_value %define_vibe_result
+  
+handle_define_syntax_vibe:
+  %define_syntax_vibe_result = call %vibe_value @eval_define_syntax_vibe(%vibe_list* %args, %env* %env)
+  ret %vibe_value %define_syntax_vibe_result
+  
+handle_save_image:
+  %save_image_result = call %vibe_value @eval_save_image(%vibe_list* %args, %env* %env)
+  ret %vibe_value %save_image_result
+  
+handle_load_image:
+  %load_image_result = call %vibe_value @eval_load_image(%vibe_list* %args, %env* %env)
+  ret %vibe_value %load_image_result
+  
+handle_define_foreign_type_vibe:
+  %define_foreign_type_result = call %vibe_value @eval_define_foreign_type_vibe(%vibe_list* %args, %env* %env)
+  ret %vibe_value %define_foreign_type_result
+  
+handle_define_foreign_function_vibe:
+  %define_foreign_function_result = call %vibe_value @eval_define_foreign_function_vibe(%vibe_list* %args, %env* %env)
+  ret %vibe_value %define_foreign_function_result
+  
+error:
+  ; TODO: Error handling
+  ret %vibe_value null
+}
+
+; Handle (define name value)
+define private %vibe_value @eval_define(%vibe_list* %args, %env* %env) {
+  %name = call %vibe_value @car(%vibe_list* %args)
+  %value_form = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  
+  ; Evaluate value
+  %value = call %vibe_value @eval(%vibe_value %value_form, %env* %env)
+  
+  ; Add to environment
+  call void @env_define(%env* %env, %vibe_value %name, %vibe_value %value)
+  
+  ; Return name
+  ret %vibe_value %name
+}
+
+; Handle (lambda (params) body)
+define private %vibe_value @eval_lambda(%vibe_list* %args, %env* %env) {
+  %params = call %vibe_value @car(%vibe_list* %args)
+  %body = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  
+  ; Create closure
+  %closure = call %vibe_value @create_closure(%vibe_value %params, %vibe_value %body, %env* %env)
+  ret %vibe_value %closure
+}
+
+; Handle (if cond then else)
+define private %vibe_value @eval_if(%vibe_list* %args, %env* %env) {
+  %cond_form = call %vibe_value @car(%vibe_list* %args)
+  %then_form = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %else_args = call %vibe_list* @cdr(%vibe_list* @cdr(%vibe_list* %args))
+  %has_else = icmp ne %vibe_list* %else_args, null
+  
+  ; Evaluate condition
+  %cond = call %vibe_value @eval(%vibe_value %cond_form, %env* %env)
+  %is_true = call i1 @is_true(%vibe_value %cond)
+  
+  br i1 %is_true, label %eval_then, label %check_else
+  
+eval_then:
+  %then_val = call %vibe_value @eval(%vibe_value %then_form, %env* %env)
+  ret %vibe_value %then_val
+  
+check_else:
+  br i1 %has_else, label %eval_else, label %return_nil
+  
+eval_else:
+  %else_form = call %vibe_value @car(%vibe_list* %else_args)
+  %else_val = call %vibe_value @eval(%vibe_value %else_form, %env* %env)
+  ret %vibe_value %else_val
+  
+return_nil:
+  %nil = call %vibe_value @create_value(i32 0, i8* null)
+  ret %vibe_value %nil
+}
+
+; Handle (quote expr)
+define private %vibe_value @eval_quote(%vibe_list* %args) {
+  %expr = call %vibe_value @car(%vibe_list* %args)
+  ret %vibe_value %expr
+}
+
+; Handle (begin expr...)
+define private %vibe_value @eval_begin(%vibe_list* %args, %env* %env) {
+  br label %eval_next
+  
+eval_next:
+  %cur_args = phi %vibe_list* [ %args, %eval_begin ], [ %next_args, %continue ]
+  %is_null = icmp eq %vibe_list* %cur_args, null
+  br i1 %is_null, label %return_nil, label %eval_expr
+  
+eval_expr:
+  %expr = call %vibe_value @car(%vibe_list* %cur_args)
+  %val = call %vibe_value @eval(%vibe_value %expr, %env* %env)
+  %next_args = call %vibe_list* @cdr(%vibe_list* %cur_args)
+  %is_last = icmp eq %vibe_list* %next_args, null
+  br i1 %is_last, label %return_val, label %continue
+  
+continue:
+  br label %eval_next
+  
+return_val:
+  ret %vibe_value %val
+  
+return_nil:
+  %nil = call %vibe_value @create_value(i32 0, i8* null)
+  ret %vibe_value %nil
+}
+
+; Handle (set! var value)
+define private %vibe_value @eval_set(%vibe_list* %args, %env* %env) {
+  %var = call %vibe_value @car(%vibe_list* %args)
+  %value_form = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  
+  ; Evaluate value
+  %value = call %vibe_value @eval(%vibe_value %value_form, %env* %env)
+  
+  ; Update environment
+  call void @env_set(%env* %env, %vibe_value %var, %vibe_value %value)
+  
+  ret %vibe_value %value
+}
+
+; Handle (define-vibe name doc value)
+define private %vibe_value @eval_define_vibe(%vibe_list* %args, %env* %env) {
+  %name = call %vibe_value @car(%vibe_list* %args)
+  %doc = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %value_form = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* @cdr(%vibe_list* %args)))
+  
+  ; Evaluate value
+  %value = call %vibe_value @eval(%vibe_value %value_form, %env* %env)
+  
+  ; Add to environment
+  call void @env_define(%env* %env, %vibe_value %name, %vibe_value %value)
+  
+  ; Register documentation
+  call void @register-doc(%vibe_value %name, %vibe_value %doc)
+  
+  ; Return name
+  ret %vibe_value %name
+}
+
+; Handle (define-syntax-vibe name doc transformer)
+define private %vibe_value @eval_define_syntax_vibe(%vibe_list* %args, %env* %env) {
+  %name = call %vibe_value @car(%vibe_list* %args)
+  %doc = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %transformer_form = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* @cdr(%vibe_list* %args)))
+  
+  ; Evaluate transformer
+  %transformer = call %vibe_value @eval(%vibe_value %transformer_form, %env* %env)
+  
+  ; Add to syntax environment
+  call void @env_define_syntax(%env* %env, %vibe_value %name, %vibe_value %transformer)
+  
+  ; Register documentation
+  call void @register-doc(%vibe_value %name, %vibe_value %doc)
+  
+  ; Return name
+  ret %vibe_value %name
+}
+
+; Handle (save-image filename)
+define private %vibe_value @eval_save_image(%vibe_list* %args, %env* %env) {
+  %filename_form = call %vibe_value @car(%vibe_list* %args)
+  
+  ; Evaluate filename
+  %filename = call %vibe_value @eval(%vibe_value %filename_form, %env* %env)
+  %filename_str = call i8* @get_string_value(%vibe_value %filename)
+  
+  ; Write image
+  %success = call i1 @write-image(i8* %filename_str)
+  
+  ; Return true/false based on success
+  %result = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %result
+}
+
+; Handle (load-image filename)
+define private %vibe_value @eval_load_image(%vibe_list* %args, %env* %env) {
+  %filename_form = call %vibe_value @car(%vibe_list* %args)
+  
+  ; Evaluate filename
+  %filename = call %vibe_value @eval(%vibe_value %filename_form, %env* %env)
+  %filename_str = call i8* @get_string_value(%vibe_value %filename)
+  
+  ; Read image
+  %success = call i1 @read-image(i8* %filename_str)
+  
+  ; Return true/false based on success
+  %result = call %vibe_value @create_boolean(i1 %success)
+  ret %vibe_value %result
+}
+
+; Handle (define-foreign-type-vibe name doc llvm-type size)
+define private %vibe_value @eval_define_foreign_type_vibe(%vibe_list* %args, %env* %env) {
+  %name = call %vibe_value @car(%vibe_list* %args)
+  %rest1 = call %vibe_list* @cdr(%vibe_list* %args)
+  %doc = call %vibe_value @car(%vibe_list* %rest1)
+  %rest2 = call %vibe_list* @cdr(%vibe_list* %rest1)
+  %llvm_type = call %vibe_value @car(%vibe_list* %rest2)
+  %rest3 = call %vibe_list* @cdr(%vibe_list* %rest2)
+  %size_form = call %vibe_value @car(%vibe_list* %rest3)
+  
+  ; Evaluate size
+  %size_val = call %vibe_value @eval(%vibe_value %size_form, %env* %env)
+  %size = call i32 @get_integer(%vibe_value %size_val)
+  
+  ; Register type
+  call void @register-foreign-type(%vibe_value %name, %vibe_value %llvm_type, i32 %size)
+  
+  ; Register documentation
+  call void @register-doc(%vibe_value %name, %vibe_value %doc)
+  
+  ret %vibe_value %name
+}
+
+; Handle (define-foreign-function-vibe name doc type-sig bitcode)
+define private %vibe_value @eval_define_foreign_function_vibe(%vibe_list* %args, %env* %env) {
+  %name = call %vibe_value @car(%vibe_list* %args)
+  %rest1 = call %vibe_list* @cdr(%vibe_list* %args)
+  %doc = call %vibe_value @car(%vibe_list* %rest1)
+  %rest2 = call %vibe_list* @cdr(%vibe_list* %rest1)
+  %type_sig = call %vibe_value @car(%vibe_list* %rest2)
+  %rest3 = call %vibe_list* @cdr(%vibe_list* %rest2)
+  %bitcode_form = call %vibe_value @car(%vibe_list* %rest3)
+  
+  ; Get bitcode string
+  %bitcode_val = call %vibe_value @eval(%vibe_value %bitcode_form, %env* %env)
+  %bitcode = call i8* @get_string_value(%vibe_value %bitcode_val)
+  %bitcode_len = call i64 @string_length(i8* %bitcode)
+  
+  ; Register function
+  call void @register-foreign-function(%vibe_value %name, %vibe_value %type_sig, i8* %bitcode, i64 %bitcode_len)
+  
+  ; Register documentation
+  call void @register-doc(%vibe_value %name, %vibe_value %doc)
+  
+  ret %vibe_value %name
+}
+
+; String constants
+@.str.define = private unnamed_addr constant [7 x i8] c\"define\00\"
+@.str.lambda = private unnamed_addr constant [7 x i8] c\"lambda\00\"
+@.str.if = private unnamed_addr constant [3 x i8] c\"if\00\"
+@.str.quote = private unnamed_addr constant [6 x i8] c\"quote\00\"
+@.str.begin = private unnamed_addr constant [6 x i8] c\"begin\00\"
+@.str.set = private unnamed_addr constant [4 x i8] c\"set!\00\"
+@.str.define_vibe = private unnamed_addr constant [12 x i8] c\"define-vibe\00\"
+@.str.define_syntax_vibe = private unnamed_addr constant [18 x i8] c\"define-syntax-vibe\00\"
+@.str.save_image = private unnamed_addr constant [11 x i8] c\"save-image\00\"
+@.str.load_image = private unnamed_addr constant [11 x i8] c\"load-image\00\"
+@.str.define_foreign_type_vibe = private unnamed_addr constant [22 x i8] c\"define-foreign-type-vibe\00\"
+@.str.define_foreign_function_vibe = private unnamed_addr constant [26 x i8] c\"define-foreign-function-vibe\00\"
+
+; External functions
+declare i8* @GC_malloc(i64)
+declare %vibe_value @car(%vibe_list*)
+declare %vibe_list* @cdr(%vibe_list*)
+declare i8* @get_value(%vibe_value)
+declare %vibe_value @create_value(i32, i8*)
+declare i1 @string_equal(i8*, i8*)
+declare %vibe_value @eval(%vibe_value, %env*)
+declare void @env_define(%env*, %vibe_value, %vibe_value)
+declare void @env_set(%env*, %vibe_value, %vibe_value)
+declare void @env_define_syntax(%env*, %vibe_value, %vibe_value)
+declare %vibe_value @create_closure(%vibe_value, %vibe_value, %env*)
+declare i1 @is_true(%vibe_value)
+declare void @register-doc(%vibe_value, %vibe_value)
+declare i1 @write-image(i8*)
+declare i1 @read-image(i8*)
+declare i8* @get_string_value(%vibe_value)
+declare %vibe_value @create_boolean(i1)
+declare void @register-foreign-type(%vibe_value, %vibe_value, i32)
+declare void @register-foreign-function(%vibe_value, %vibe_value, i8*, i64)
+declare i32 @get_integer(%vibe_value)
+declare i64 @string_length(i8*)
+") 

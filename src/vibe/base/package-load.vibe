@@ -1,0 +1,116 @@
+;; Package Loading Library
+(define-library-vibe (vibe package load)
+  "Package loading and merging utilities with version-aware conflict resolution"
+  (export load-runtime-fragment! merge-runtime-fragment!
+          detect-conflicts resolve-conflict
+          STRATEGY-REJECT STRATEGY-NEWER STRATEGY-OLDER
+          STRATEGY-KEEP STRATEGY-REPLACE
+          make-conflict-resolution conflict-resolution?
+          conflict-resolution-strategy conflict-resolution-version)
+  
+  (import (vibe core types)
+          (vibe core doc)
+          (vibe base binary)
+          (vibe base file)
+          (vibe base serialize)
+          (vibe base serialize-runtime)
+          (vibe base package))
+
+;; Conflict resolution strategies
+(define STRATEGY-REJECT 'reject)    ; Reject any conflicts
+(define STRATEGY-NEWER 'newer)      ; Keep newer version
+(define STRATEGY-OLDER 'older)      ; Keep older version
+(define STRATEGY-KEEP 'keep)        ; Keep existing version
+(define STRATEGY-REPLACE 'replace)  ; Replace with new version
+
+;; Conflict resolution record type
+(define-record-type conflict-resolution
+  (make-conflict-resolution strategy version)
+  conflict-resolution?
+  (strategy conflict-resolution-strategy)
+  (version conflict-resolution-version))
+
+;; Default conflict resolution - reject conflicts
+(define *default-conflict-resolution*
+  (make-conflict-resolution STRATEGY-REJECT #f))
+
+(define-vibe (version>? v1 v2)
+  "Compare two version labels, return #t if v1 is newer than v2"
+  (let ((major1 (version-label-major v1))
+        (minor1 (version-label-minor v1))
+        (patch1 (version-label-patch v1))
+        (major2 (version-label-major v2))
+        (minor2 (version-label-minor v2))
+        (patch2 (version-label-patch v2)))
+    (or (> major1 major2)
+        (and (= major1 major2)
+             (> minor1 minor2))
+        (and (= major1 major2)
+             (= minor1 minor2)
+             (> patch1 patch2)))))
+
+(define-vibe (detect-conflicts doc-entries existing-entries)
+  "Detect conflicts between new and existing documentation entries"
+  (let ((conflicts '()))
+    (for-each
+     (lambda (entry)
+       (let* ((sym (doc-entry-symbol entry))
+              (existing (lookup-doc sym)))
+         (when existing
+           (push! conflicts (cons entry existing)))))
+     doc-entries)
+    conflicts))
+
+(define-vibe (resolve-conflict entry existing resolution)
+  "Resolve a conflict between two documentation entries"
+  (case (conflict-resolution-strategy resolution)
+    ((reject) #f)  ; Return #f to indicate conflict rejection
+    ((newer)
+     (if (version>? (doc-entry-version entry)
+                    (doc-entry-version existing))
+         entry
+         existing))
+    ((older)
+     (if (version>? (doc-entry-version entry)
+                    (doc-entry-version existing))
+         existing
+         entry))
+    ((keep) existing)
+    ((replace) entry)
+    (else existing)))  ; Default to keeping existing entry
+
+(define-vibe (merge-runtime-fragment! fragment resolution)
+  "Merge a runtime fragment with conflict resolution"
+  (let* ((doc-entries (if (= (car fragment) COMPONENT-DOCS)
+                         (cddr fragment)  ; Skip type and version
+                         '()))
+         (conflicts (detect-conflicts doc-entries
+                                    (make-doc-iterator))))
+    (if (and conflicts
+             (eq? (conflict-resolution-strategy resolution)
+                  STRATEGY-REJECT))
+        (error "Unresolved conflicts in runtime fragment")
+        (for-each
+         (lambda (entry)
+           (let* ((sym (doc-entry-symbol entry))
+                  (existing (lookup-doc sym))
+                  (resolved (if existing
+                              (resolve-conflict entry existing resolution)
+                              entry)))
+             (when resolved
+               (register-doc (doc-entry-symbol resolved)
+                           (doc-entry-ast resolved)
+                           (doc-entry-bitcode resolved)
+                           (doc-entry-doc resolved)
+                           (doc-entry-version resolved)))))
+         doc-entries))))
+
+(define-vibe (load-runtime-fragment! input-file resolution)
+  "Load and merge a runtime fragment from a file"
+  (let ((port (open-file input-file "rb")))
+    (dynamic-wind
+      (lambda () #t)
+      (lambda ()
+        (let ((fragment (deserialize-runtime-component port)))
+          (merge-runtime-fragment! fragment resolution)))
+      (lambda () (close-file port))))) 

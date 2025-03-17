@@ -1,0 +1,207 @@
+;; Vibe primitive functions
+(define-bitcode 'vibe:primitives "
+; List primitives
+define %vibe_value @prim_cons(%vibe_list* %args) {
+  %car = call %vibe_value @car(%vibe_list* %args)
+  %cdr_list = call %vibe_list* @cdr(%vibe_list* %args)
+  %cdr = call %vibe_value @car(%vibe_list* %cdr_list)
+  
+  %cdr_val = call i8* @get_value(%vibe_value %cdr)
+  %cdr_list_val = bitcast i8* %cdr_val to %vibe_list*
+  %result = call %vibe_list* @create_list_node(%vibe_value %car, %vibe_list* %cdr_list_val)
+  %final = call %vibe_value @create_value(i32 4, i8* %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_car(%vibe_list* %args) {
+  %pair = call %vibe_value @car(%vibe_list* %args)
+  %pair_val = call i8* @get_value(%vibe_value %pair)
+  %list = bitcast i8* %pair_val to %vibe_list*
+  %result = call %vibe_value @car(%vibe_list* %list)
+  ret %vibe_value %result
+}
+
+define %vibe_value @prim_cdr(%vibe_list* %args) {
+  %pair = call %vibe_value @car(%vibe_list* %args)
+  %pair_val = call i8* @get_value(%vibe_value %pair)
+  %list = bitcast i8* %pair_val to %vibe_list*
+  %cdr = call %vibe_list* @cdr(%vibe_list* %list)
+  %result = call %vibe_value @create_value(i32 4, i8* %cdr)
+  ret %vibe_value %result
+}
+
+; Arithmetic primitives
+define %vibe_value @prim_add(%vibe_list* %args) {
+  %result = call i64 @fold_numbers(%vibe_list* %args, i64 0, i1 (i64, i64)* @add_op)
+  %final = call %vibe_value @create_number(i64 %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_sub(%vibe_list* %args) {
+  %first = call %vibe_value @car(%vibe_list* %args)
+  %first_val = call i64 @get_number(%vibe_value %first)
+  %rest = call %vibe_list* @cdr(%vibe_list* %args)
+  %result = call i64 @fold_numbers(%vibe_list* %rest, i64 %first_val, i1 (i64, i64)* @sub_op)
+  %final = call %vibe_value @create_number(i64 %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_mul(%vibe_list* %args) {
+  %result = call i64 @fold_numbers(%vibe_list* %args, i64 1, i1 (i64, i64)* @mul_op)
+  %final = call %vibe_value @create_number(i64 %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_div(%vibe_list* %args) {
+  %first = call %vibe_value @car(%vibe_list* %args)
+  %first_val = call i64 @get_number(%vibe_value %first)
+  %rest = call %vibe_list* @cdr(%vibe_list* %args)
+  %result = call i64 @fold_numbers(%vibe_list* %rest, i64 %first_val, i1 (i64, i64)* @div_op)
+  %final = call %vibe_value @create_number(i64 %result)
+  ret %vibe_value %final
+}
+
+; Comparison primitives
+define %vibe_value @prim_eq(%vibe_list* %args) {
+  %first = call %vibe_value @car(%vibe_list* %args)
+  %second = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %result = call i1 @values_equal(%vibe_value %first, %vibe_value %second)
+  %final = call %vibe_value @create_boolean(i1 %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_lt(%vibe_list* %args) {
+  %first = call %vibe_value @car(%vibe_list* %args)
+  %second = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %n1 = call i64 @get_number(%vibe_value %first)
+  %n2 = call i64 @get_number(%vibe_value %second)
+  %result = icmp slt i64 %n1, %n2
+  %final = call %vibe_value @create_boolean(i1 %result)
+  ret %vibe_value %final
+}
+
+define %vibe_value @prim_gt(%vibe_list* %args) {
+  %first = call %vibe_value @car(%vibe_list* %args)
+  %second = call %vibe_value @car(%vibe_list* @cdr(%vibe_list* %args))
+  %n1 = call i64 @get_number(%vibe_value %first)
+  %n2 = call i64 @get_number(%vibe_value %second)
+  %result = icmp sgt i64 %n1, %n2
+  %final = call %vibe_value @create_boolean(i1 %result)
+  ret %vibe_value %final
+}
+
+; Type predicates
+define %vibe_value @prim_null(%vibe_list* %args) {
+  %val = call %vibe_value @car(%vibe_list* %args)
+  %type = call i32 @get_type(%vibe_value %val)
+  %is_null = icmp eq i32 %type, 0
+  %result = call %vibe_value @create_boolean(i1 %is_null)
+  ret %vibe_value %result
+}
+
+define %vibe_value @prim_pair(%vibe_list* %args) {
+  %val = call %vibe_value @car(%vibe_list* %args)
+  %type = call i32 @get_type(%vibe_value %val)
+  %is_pair = icmp eq i32 %type, 4
+  %result = call %vibe_value @create_boolean(i1 %is_pair)
+  ret %vibe_value %result
+}
+
+define %vibe_value @prim_symbol(%vibe_list* %args) {
+  %val = call %vibe_value @car(%vibe_list* %args)
+  %type = call i32 @get_type(%vibe_value %val)
+  %is_symbol = icmp eq i32 %type, 1
+  %result = call %vibe_value @create_boolean(i1 %is_symbol)
+  ret %vibe_value %result
+}
+
+; Helper functions for arithmetic
+define private i64 @fold_numbers(%vibe_list* %list, i64 %init, i1 (i64, i64)* %op) {
+  %is_null = icmp eq %vibe_list* %list, null
+  br i1 %is_null, label %done, label %process
+  
+process:
+  %val = call %vibe_value @car(%vibe_list* %list)
+  %num = call i64 @get_number(%vibe_value %val)
+  %result = call i1 %op(i64 %init, i64 %num)
+  %rest = call %vibe_list* @cdr(%vibe_list* %list)
+  %final = call i64 @fold_numbers(%vibe_list* %rest, i64 %result, i1 (i64, i64)* %op)
+  ret i64 %final
+  
+done:
+  ret i64 %init
+}
+
+define private i1 @add_op(i64 %a, i64 %b) {
+  %result = add i64 %a, %b
+  ret i1 %result
+}
+
+define private i1 @sub_op(i64 %a, i64 %b) {
+  %result = sub i64 %a, %b
+  ret i1 %result
+}
+
+define private i1 @mul_op(i64 %a, i64 %b) {
+  %result = mul i64 %a, %b
+  ret i1 %result
+}
+
+define private i1 @div_op(i64 %a, i64 %b) {
+  %result = sdiv i64 %a, %b
+  ret i1 %result
+}
+
+; Initialize primitives in runtime
+define void @init_primitives() {
+  ; List primitives
+  call void @register_primitive(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.cons, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_cons)
+  call void @register_primitive(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.car, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_car)
+  call void @register_primitive(i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.cdr, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_cdr)
+  
+  ; Arithmetic primitives
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.add, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_add)
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.sub, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_sub)
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.mul, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_mul)
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.div, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_div)
+  
+  ; Comparison primitives
+  call void @register_primitive(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.eq, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_eq)
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lt, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_lt)
+  call void @register_primitive(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.gt, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_gt)
+  
+  ; Type predicates
+  call void @register_primitive(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.null, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_null)
+  call void @register_primitive(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.pair, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_pair)
+  call void @register_primitive(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.symbol, i64 0, i64 0), %vibe_value (%vibe_list*)* @prim_symbol)
+}
+
+; String constants
+@.str.cons = private unnamed_addr constant [5 x i8] c\"cons\00\"
+@.str.car = private unnamed_addr constant [4 x i8] c\"car\00\"
+@.str.cdr = private unnamed_addr constant [4 x i8] c\"cdr\00\"
+@.str.add = private unnamed_addr constant [2 x i8] c\"+\00\"
+@.str.sub = private unnamed_addr constant [2 x i8] c\"-\00\"
+@.str.mul = private unnamed_addr constant [2 x i8] c\"*\00\"
+@.str.div = private unnamed_addr constant [2 x i8] c\"/\00\"
+@.str.eq = private unnamed_addr constant [3 x i8] c\"eq\00\"
+@.str.lt = private unnamed_addr constant [2 x i8] c\"<\00\"
+@.str.gt = private unnamed_addr constant [2 x i8] c\">\00\"
+@.str.null = private unnamed_addr constant [5 x i8] c\"null\00\"
+@.str.pair = private unnamed_addr constant [5 x i8] c\"pair\00\"
+@.str.symbol = private unnamed_addr constant [7 x i8] c\"symbol\00\"
+
+; External functions
+declare i8* @GC_malloc(i64)
+declare %vibe_value @car(%vibe_list*)
+declare %vibe_list* @cdr(%vibe_list*)
+declare i8* @get_value(%vibe_value)
+declare %vibe_list* @create_list_node(%vibe_value, %vibe_list*)
+declare %vibe_value @create_value(i32, i8*)
+declare i32 @get_type(%vibe_value)
+declare i64 @get_number(%vibe_value)
+declare %vibe_value @create_number(i64)
+declare %vibe_value @create_boolean(i1)
+declare i1 @values_equal(%vibe_value, %vibe_value)
+declare void @register_primitive(i8*, %vibe_value (%vibe_list*)*)
+") 

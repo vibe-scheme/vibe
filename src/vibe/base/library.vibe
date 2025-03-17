@@ -1,0 +1,142 @@
+;; Library System
+(define-library-vibe (vibe library)
+  "Library management system"
+  (export create-library register-library lookup-library
+          library-name library-exports library-imports library-dependencies
+          add-export add-import add-dependency
+          serialize-library deserialize-library)
+  
+  (import (vibe core types)
+          (vibe core ffi)
+          (vibe base binary)
+          (vibe base file)
+          (vibe base serialize))
+
+;; Library record type
+(define-record-type library
+  (make-library name exports imports dependencies)
+  library?
+  (name library-name)
+  (exports library-exports)
+  (imports library-imports)
+  (dependencies library-dependencies))
+
+;; Global library registry
+(define library-registry (make-hash-table))
+
+(define-vibe (create-library name)
+  "Create a new library"
+  (make-library name
+                (make-hash-table)  ; exports
+                (make-hash-table)  ; imports
+                '()))             ; dependencies
+
+(define-vibe (register-library lib)
+  "Register a library"
+  (hash-table-set! library-registry (library-name lib) lib))
+
+(define-vibe (lookup-library name)
+  "Look up a library by name"
+  (hash-table-ref library-registry name #f))
+
+(define-vibe (add-export lib symbol value)
+  "Add an export to a library"
+  (hash-table-set! (library-exports lib) symbol value))
+
+(define-vibe (add-import lib symbol library)
+  "Add an import to a library"
+  (hash-table-set! (library-imports lib) symbol library))
+
+(define-vibe (add-dependency lib dep)
+  "Add a dependency to a library"
+  (let ((deps (library-dependencies lib)))
+    (if (member dep deps)
+        deps
+        (set-library-dependencies! lib (cons dep deps)))))
+
+;; Serialization support
+(begin
+  ;; Library serialization
+  (register-serializer 'library
+    (lambda (val port)
+      (let ((name (library-name val))
+            (exports (library-exports val))
+            (imports (library-imports val))
+            (deps (library-dependencies val)))
+        (serialize-value name port)
+        (serialize-value (hash-table->alist exports) port)
+        (serialize-value (hash-table->alist imports) port)
+        (serialize-value deps port))))
+  
+  (register-deserializer 'library
+    (lambda (port)
+      (let ((name (deserialize-value port))
+            (exports (deserialize-value port))
+            (imports (deserialize-value port))
+            (deps (deserialize-value port)))
+        (let ((lib (create-library name)))
+          ;; Restore exports
+          (for-each
+           (lambda (entry)
+             (add-export lib (car entry) (cdr entry)))
+           exports)
+          ;; Restore imports
+          (for-each
+           (lambda (entry)
+             (add-import lib (car entry) (cdr entry)))
+           imports)
+          ;; Restore dependencies
+          (for-each
+           (lambda (dep)
+             (add-dependency lib dep))
+           deps)
+          lib)))))
+
+(define-vibe (serialize-library lib filename)
+  "Serialize a library to a file"
+  (let ((port (open-file filename "wb")))
+    (if port
+        (begin
+          (serialize-value lib port)
+          (close-file port)
+          #t)
+        #f)))
+
+(define-vibe (deserialize-library filename)
+  "Deserialize a library from a file"
+  (let ((port (open-file filename "rb")))
+    (if port
+        (let ((lib (deserialize-value port)))
+          (close-file port)
+          lib)
+        #f)))
+
+;; Special form handler for define-library-vibe
+(define-vibe (handle-define-library-vibe name doc forms)
+  "Handle the define-library-vibe special form"
+  (let ((lib (create-library name)))
+    ;; Register documentation
+    (register-doc name doc)
+    
+    ;; Process library forms
+    (for-each
+     (lambda (form)
+       (case (car form)
+         ((export)
+          (for-each
+           (lambda (sym)
+             (add-export lib sym #f))
+           (cdr form)))
+         ((import)
+          (for-each
+           (lambda (spec)
+             (let ((lib-name (if (list? spec)
+                                (car spec)
+                                spec)))
+               (add-dependency lib lib-name)))
+           (cdr form)))))
+     forms)
+    
+    ;; Register library
+    (register-library lib)
+    name))) 

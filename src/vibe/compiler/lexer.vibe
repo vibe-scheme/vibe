@@ -1,0 +1,336 @@
+;; Vibe lexer implementation
+(define-bitcode 'vibe:lexer "
+; Token types
+@TOKEN_EOF = constant i32 0
+@TOKEN_LPAREN = constant i32 1
+@TOKEN_RPAREN = constant i32 2
+@TOKEN_QUOTE = constant i32 3
+@TOKEN_SYMBOL = constant i32 4
+@TOKEN_STRING = constant i32 5
+@TOKEN_NUMBER = constant i32 6
+@TOKEN_DOT = constant i32 7
+
+%token = type {
+  i32,  ; type
+  i8*,  ; value
+  i64   ; length
+}
+
+%lexer = type {
+  i8*,  ; input buffer
+  i64,  ; current position
+  i64   ; input length
+}
+
+; Create a new lexer
+define %lexer* @create_lexer(i8* %input, i64 %len) {
+  %size = call i64 @GC_malloc(i64 ptrtoint (%lexer* getelementptr (%lexer, %lexer* null, i32 1) to i64))
+  %lex = bitcast i8* %size to %lexer*
+  
+  ; Store input buffer
+  %buf_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 0
+  store i8* %input, i8** %buf_ptr
+  
+  ; Initialize position
+  %pos_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 1
+  store i64 0, i64* %pos_ptr
+  
+  ; Store length
+  %len_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 2
+  store i64 %len, i64* %len_ptr
+  
+  ret %lexer* %lex
+}
+
+; Skip whitespace and comments
+define void @skip_whitespace(%lexer* %lex) {
+  %pos_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 1
+  %buf_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 0
+  %len_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 2
+  
+  br label %loop
+
+loop:
+  %pos = load i64, i64* %pos_ptr
+  %len = load i64, i64* %len_ptr
+  %at_end = icmp uge i64 %pos, %len
+  br i1 %at_end, label %done, label %check_char
+  
+check_char:
+  %buf = load i8*, i8** %buf_ptr
+  %char_ptr = getelementptr i8, i8* %buf, i64 %pos
+  %char = load i8, i8* %char_ptr
+  
+  ; Check for whitespace
+  %is_space = call i1 @is_whitespace(i8 %char)
+  br i1 %is_space, label %skip, label %check_comment
+  
+check_comment:
+  %is_semi = icmp eq i8 %char, 59 ; semicolon
+  br i1 %is_semi, label %skip_comment, label %done
+  
+skip_comment:
+  br label %comment_loop
+  
+comment_loop:
+  %comment_pos = load i64, i64* %pos_ptr
+  %next_pos = add i64 %comment_pos, 1
+  store i64 %next_pos, i64* %pos_ptr
+  
+  %at_end_comment = icmp uge i64 %next_pos, %len
+  br i1 %at_end_comment, label %done, label %check_newline
+  
+check_newline:
+  %next_char_ptr = getelementptr i8, i8* %buf, i64 %next_pos
+  %next_char = load i8, i8* %next_char_ptr
+  %is_newline = icmp eq i8 %next_char, 10
+  br i1 %is_newline, label %loop, label %comment_loop
+  
+skip:
+  %new_pos = add i64 %pos, 1
+  store i64 %new_pos, i64* %pos_ptr
+  br label %loop
+  
+done:
+  ret void
+}
+
+; Get next token
+define %token* @next_token(%lexer* %lex) {
+  ; Skip whitespace first
+  call void @skip_whitespace(%lexer* %lex)
+  
+  %pos_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 1
+  %buf_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 0
+  %len_ptr = getelementptr %lexer, %lexer* %lex, i32 0, i32 2
+  
+  %pos = load i64, i64* %pos_ptr
+  %len = load i64, i64* %len_ptr
+  %buf = load i8*, i8** %buf_ptr
+  
+  ; Check if at end
+  %at_end = icmp uge i64 %pos, %len
+  br i1 %at_end, label %return_eof, label %check_char
+  
+return_eof:
+  %eof_token = call %token* @create_token(i32 0, i8* null, i64 0)
+  ret %token* %eof_token
+  
+check_char:
+  %char_ptr = getelementptr i8, i8* %buf, i64 %pos
+  %char = load i8, i8* %char_ptr
+  
+  ; Check for single character tokens
+  %is_lparen = icmp eq i8 %char, 40  ; (
+  br i1 %is_lparen, label %return_lparen, label %check_rparen
+  
+check_rparen:
+  %is_rparen = icmp eq i8 %char, 41  ; )
+  br i1 %is_rparen, label %return_rparen, label %check_quote
+  
+check_quote:
+  %is_quote = icmp eq i8 %char, 39   ; '
+  br i1 %is_quote, label %return_quote, label %check_dot
+  
+check_dot:
+  %is_dot = icmp eq i8 %char, 46     ; .
+  br i1 %is_dot, label %return_dot, label %check_string
+  
+check_string:
+  %is_string = icmp eq i8 %char, 34  ; "
+  br i1 %is_string, label %read_string, label %check_number
+  
+check_number:
+  %is_digit = call i1 @is_digit(i8 %char)
+  %is_minus = icmp eq i8 %char, 45   ; -
+  %is_plus = icmp eq i8 %char, 43    ; +
+  %is_number_start = or i1 %is_digit, %is_minus
+  %is_number = or i1 %is_number_start, %is_plus
+  br i1 %is_number, label %read_number, label %read_symbol
+  
+return_lparen:
+  %lparen_token = call %token* @create_token(i32 1, i8* null, i64 0)
+  %next_pos1 = add i64 %pos, 1
+  store i64 %next_pos1, i64* %pos_ptr
+  ret %token* %lparen_token
+  
+return_rparen:
+  %rparen_token = call %token* @create_token(i32 2, i8* null, i64 0)
+  %next_pos2 = add i64 %pos, 1
+  store i64 %next_pos2, i64* %pos_ptr
+  ret %token* %rparen_token
+  
+return_quote:
+  %quote_token = call %token* @create_token(i32 3, i8* null, i64 0)
+  %next_pos3 = add i64 %pos, 1
+  store i64 %next_pos3, i64* %pos_ptr
+  ret %token* %quote_token
+  
+return_dot:
+  %dot_token = call %token* @create_token(i32 7, i8* null, i64 0)
+  %next_pos4 = add i64 %pos, 1
+  store i64 %next_pos4, i64* %pos_ptr
+  ret %token* %dot_token
+  
+read_string:
+  %str_start = add i64 %pos, 1
+  br label %string_loop
+  
+string_loop:
+  %str_pos = phi i64 [ %str_start, %read_string ], [ %next_str_pos, %string_continue ]
+  %next_str_pos = add i64 %str_pos, 1
+  %at_end_str = icmp uge i64 %str_pos, %len
+  br i1 %at_end_str, label %string_error, label %check_string_end
+  
+check_string_end:
+  %str_char_ptr = getelementptr i8, i8* %buf, i64 %str_pos
+  %str_char = load i8, i8* %str_char_ptr
+  %is_quote_end = icmp eq i8 %str_char, 34
+  br i1 %is_quote_end, label %return_string, label %string_continue
+  
+string_continue:
+  br label %string_loop
+  
+return_string:
+  %str_len = sub i64 %str_pos, %str_start
+  %str_start_ptr = getelementptr i8, i8* %buf, i64 %str_start
+  %string_token = call %token* @create_token(i32 5, i8* %str_start_ptr, i64 %str_len)
+  %next_pos5 = add i64 %str_pos, 1
+  store i64 %next_pos5, i64* %pos_ptr
+  ret %token* %string_token
+  
+string_error:
+  ; Return EOF on unterminated string
+  %str_error_token = call %token* @create_token(i32 0, i8* null, i64 0)
+  ret %token* %str_error_token
+  
+read_number:
+  %num_start = phi i64 [ %pos, %check_number ]
+  br label %number_loop
+  
+number_loop:
+  %num_pos = phi i64 [ %num_start, %read_number ], [ %next_num_pos, %number_continue ]
+  %next_num_pos = add i64 %num_pos, 1
+  %at_end_num = icmp uge i64 %next_num_pos, %len
+  br i1 %at_end_num, label %return_number, label %check_number_end
+  
+check_number_end:
+  %num_char_ptr = getelementptr i8, i8* %buf, i64 %next_num_pos
+  %num_char = load i8, i8* %num_char_ptr
+  %is_num_char = call i1 @is_number_char(i8 %num_char)
+  br i1 %is_num_char, label %number_continue, label %return_number
+  
+number_continue:
+  br label %number_loop
+  
+return_number:
+  %num_len = sub i64 %next_num_pos, %num_start
+  %num_start_ptr = getelementptr i8, i8* %buf, i64 %num_start
+  %number_token = call %token* @create_token(i32 6, i8* %num_start_ptr, i64 %num_len)
+  store i64 %next_num_pos, i64* %pos_ptr
+  ret %token* %number_token
+  
+read_symbol:
+  %sym_start = phi i64 [ %pos, %check_number ]
+  br label %symbol_loop
+  
+symbol_loop:
+  %sym_pos = phi i64 [ %sym_start, %read_symbol ], [ %next_sym_pos, %symbol_continue ]
+  %next_sym_pos = add i64 %sym_pos, 1
+  %at_end_sym = icmp uge i64 %next_sym_pos, %len
+  br i1 %at_end_sym, label %return_symbol, label %check_symbol_end
+  
+check_symbol_end:
+  %sym_char_ptr = getelementptr i8, i8* %buf, i64 %next_sym_pos
+  %sym_char = load i8, i8* %sym_char_ptr
+  %is_sym_char = call i1 @is_symbol_char(i8 %sym_char)
+  br i1 %is_sym_char, label %symbol_continue, label %return_symbol
+  
+symbol_continue:
+  br label %symbol_loop
+  
+return_symbol:
+  %sym_len = sub i64 %next_sym_pos, %sym_start
+  %sym_start_ptr = getelementptr i8, i8* %buf, i64 %sym_start
+  %symbol_token = call %token* @create_token(i32 4, i8* %sym_start_ptr, i64 %sym_len)
+  store i64 %next_sym_pos, i64* %pos_ptr
+  ret %token* %symbol_token
+}
+
+; Helper functions
+define %token* @create_token(i32 %type, i8* %value, i64 %length) {
+  %size = call i64 @GC_malloc(i64 ptrtoint (%token* getelementptr (%token, %token* null, i32 1) to i64))
+  %token = bitcast i8* %size to %token*
+  
+  %type_ptr = getelementptr %token, %token* %token, i32 0, i32 0
+  store i32 %type, i32* %type_ptr
+  
+  %value_ptr = getelementptr %token, %token* %token, i32 0, i32 1
+  store i8* %value, i8** %value_ptr
+  
+  %length_ptr = getelementptr %token, %token* %token, i32 0, i32 2
+  store i64 %length, i64* %length_ptr
+  
+  ret %token* %token
+}
+
+define i1 @is_whitespace(i8 %c) {
+  %is_space = icmp eq i8 %c, 32    ; space
+  %is_tab = icmp eq i8 %c, 9      ; tab
+  %is_newline = icmp eq i8 %c, 10  ; newline
+  %is_return = icmp eq i8 %c, 13   ; return
+  
+  %is_ws1 = or i1 %is_space, %is_tab
+  %is_ws2 = or i1 %is_ws1, %is_newline
+  %is_ws = or i1 %is_ws2, %is_return
+  
+  ret i1 %is_ws
+}
+
+define i1 @is_digit(i8 %c) {
+  %val = sub i8 %c, 48  ; '0'
+  %is_digit = icmp ule i8 %val, 9
+  ret i1 %is_digit
+}
+
+define i1 @is_number_char(i8 %c) {
+  %is_digit = call i1 @is_digit(i8 %c)
+  %is_dot = icmp eq i8 %c, 46      ; .
+  %is_minus = icmp eq i8 %c, 45     ; -
+  %is_plus = icmp eq i8 %c, 43      ; +
+  %is_e = icmp eq i8 %c, 101        ; e
+  %is_E = icmp eq i8 %c, 69         ; E
+  
+  %is_num1 = or i1 %is_digit, %is_dot
+  %is_num2 = or i1 %is_num1, %is_minus
+  %is_num3 = or i1 %is_num2, %is_plus
+  %is_num4 = or i1 %is_num3, %is_e
+  %is_num = or i1 %is_num4, %is_E
+  
+  ret i1 %is_num
+}
+
+define i1 @is_symbol_char(i8 %c) {
+  %is_paren = call i1 @is_delimiter(i8 %c)
+  %is_ws = call i1 @is_whitespace(i8 %c)
+  %is_delim = or i1 %is_paren, %is_ws
+  %is_sym = xor i1 %is_delim, 1
+  ret i1 %is_sym
+}
+
+define i1 @is_delimiter(i8 %c) {
+  %is_lparen = icmp eq i8 %c, 40   ; (
+  %is_rparen = icmp eq i8 %c, 41   ; )
+  %is_quote = icmp eq i8 %c, 39    ; '
+  %is_dot = icmp eq i8 %c, 46      ; .
+  
+  %is_delim1 = or i1 %is_lparen, %is_rparen
+  %is_delim2 = or i1 %is_delim1, %is_quote
+  %is_delim = or i1 %is_delim2, %is_dot
+  
+  ret i1 %is_delim
+}
+
+; External functions
+declare i8* @GC_malloc(i64)
+") 

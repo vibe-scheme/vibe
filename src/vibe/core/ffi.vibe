@@ -1,0 +1,107 @@
+;; FFI System
+(define-library-vibe (vibe ffi)
+  "Foreign Function Interface"
+  (export register-foreign-type lookup-foreign-type
+          register-foreign-function lookup-foreign-function
+          make-foreign-type make-foreign-function)
+  
+  (import (vibe core types)
+          (vibe base binary)
+          (vibe base serialize))
+
+;; FFI types
+(define-record-type foreign-type
+  (make-foreign-type scheme-type llvm-type size)
+  foreign-type?
+  (scheme-type foreign-type-scheme)
+  (llvm-type foreign-type-llvm)
+  (size foreign-type-size))
+
+(define-record-type foreign-function
+  (make-foreign-function symbol type-sig bitcode bitcode-length function)
+  foreign-function?
+  (symbol foreign-function-symbol)
+  (type-sig foreign-function-type-sig)
+  (bitcode foreign-function-bitcode)
+  (bitcode-length foreign-function-bitcode-length)
+  (function foreign-function-ptr set-foreign-function-ptr!))
+
+;; Global registries
+(define type-registry (make-hash-table))
+(define function-registry (make-hash-table))
+
+(define-vibe (register-foreign-type type)
+  "Register a foreign type"
+  (hash-table-set! type-registry
+                   (foreign-type-scheme type)
+                   type))
+
+(define-vibe (lookup-foreign-type scheme-type)
+  "Look up a foreign type"
+  (hash-table-ref type-registry scheme-type #f))
+
+(define-vibe (register-foreign-function func)
+  "Register a foreign function"
+  (hash-table-set! function-registry
+                   (foreign-function-symbol func)
+                   func))
+
+(define-vibe (lookup-foreign-function symbol)
+  "Look up a foreign function"
+  (hash-table-ref function-registry symbol #f))
+
+;; Serialization support
+(begin
+  ;; Foreign type serialization
+  (register-serializer 'foreign-type
+    (lambda (val port)
+      (let ((scheme-type (foreign-type-scheme val))
+            (llvm-type (foreign-type-llvm val))
+            (size (foreign-type-size val)))
+        (serialize-value scheme-type port)
+        (serialize-value llvm-type port)
+        (write-int32 port size))))
+  
+  (register-deserializer 'foreign-type
+    (lambda (port)
+      (let ((scheme-type (deserialize-value port))
+            (llvm-type (deserialize-value port))
+            (size (read-int32 port)))
+        (make-foreign-type scheme-type llvm-type size))))
+  
+  ;; Foreign function serialization
+  (register-serializer 'foreign-function
+    (lambda (val port)
+      (let ((symbol (foreign-function-symbol val))
+            (type-sig (foreign-function-type-sig val))
+            (bitcode (foreign-function-bitcode val))
+            (length (foreign-function-bitcode-length val)))
+        (serialize-value symbol port)
+        (serialize-value type-sig port)
+        (write-int64 port length)
+        (write-bytes port (tell-file port) bitcode))))
+  
+  (register-deserializer 'foreign-function
+    (lambda (port)
+      (let ((symbol (deserialize-value port))
+            (type-sig (deserialize-value port))
+            (length (read-int64 port))
+            (bitcode (read-bytes port (tell-file port) length)))
+        (make-foreign-function symbol type-sig bitcode length #f)))))
+
+;; Register built-in types
+(begin
+  (register-foreign-type
+   (make-foreign-type 'void "void" 0))
+  
+  (register-foreign-type
+   (make-foreign-type 'int8 "i8" 1))
+  
+  (register-foreign-type
+   (make-foreign-type 'int32 "i32" 4))
+  
+  (register-foreign-type
+   (make-foreign-type 'int64 "i64" 8))
+  
+  (register-foreign-type
+   (make-foreign-type 'pointer "i8*" 8)))

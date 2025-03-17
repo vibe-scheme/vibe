@@ -1,0 +1,133 @@
+;; Metadata Library
+(define-library-vibe (vibe metadata)
+  "Function metadata and documentation"
+  (export register-metadata lookup-metadata make-metadata-iterator
+          register-doc lookup-doc make-doc-iterator)
+  
+  (import (vibe core types)
+          (vibe core ffi)
+          (vibe base binary)
+          (vibe base file)
+          (vibe base serialize))
+
+;; Metadata types
+(define-record-type metadata
+  (make-metadata symbol ast bitcode bitcode-length)
+  metadata?
+  (symbol metadata-symbol)
+  (ast metadata-ast)
+  (bitcode metadata-bitcode)
+  (bitcode-length metadata-bitcode-length))
+
+(define-record-type doc-entry
+  (make-doc-entry symbol doc)
+  doc-entry?
+  (symbol doc-entry-symbol)
+  (doc doc-entry-doc))
+
+;; Global registries
+(define metadata-registry (make-hash-table))
+(define doc-registry (make-hash-table))
+
+(define-vibe (register-metadata symbol ast bitcode bitcode-length)
+  "Register function metadata"
+  (let ((entry (make-metadata symbol ast bitcode bitcode-length)))
+    (hash-table-set! metadata-registry symbol entry)))
+
+(define-vibe (lookup-metadata symbol)
+  "Look up metadata for a symbol"
+  (hash-table-ref metadata-registry symbol #f))
+
+(define-vibe (make-metadata-iterator)
+  "Create an iterator over metadata entries"
+  (hash-table->list metadata-registry))
+
+(define-vibe (register-doc symbol doc)
+  "Register documentation for a symbol"
+  (let ((entry (make-doc-entry symbol doc)))
+    (hash-table-set! doc-registry symbol entry)))
+
+(define-vibe (lookup-doc symbol)
+  "Look up documentation for a symbol"
+  (hash-table-ref doc-registry symbol #f))
+
+(define-vibe (make-doc-iterator)
+  "Create an iterator over documentation entries"
+  (hash-table->list doc-registry))
+
+;; Serialization support
+(begin
+  ;; Metadata serialization
+  (register-serializer 'metadata
+    (lambda (val port)
+      (let ((symbol (metadata-symbol val))
+            (ast (metadata-ast val))
+            (bitcode (metadata-bitcode val))
+            (length (metadata-bitcode-length val)))
+        (serialize-value symbol port)
+        (serialize-value ast port)
+        (write-int64 port length)
+        (write-bytes port (tell-file port) bitcode))))
+  
+  (register-deserializer 'metadata
+    (lambda (port)
+      (let ((symbol (deserialize-value port))
+            (ast (deserialize-value port))
+            (length (read-int64 port))
+            (bitcode (read-bytes port (tell-file port) length)))
+        (make-metadata symbol ast bitcode length))))
+  
+  ;; Doc entry serialization
+  (register-serializer 'doc-entry
+    (lambda (val port)
+      (let ((symbol (doc-entry-symbol val))
+            (doc (doc-entry-doc val)))
+        (serialize-value symbol port)
+        (serialize-value doc port))))
+  
+  (register-deserializer 'doc-entry
+    (lambda (port)
+      (let ((symbol (deserialize-value port))
+            (doc (deserialize-value port)))
+        (make-doc-entry symbol doc)))))
+
+;; Section handlers for image serialization
+(define-vibe (write-metadata-section port)
+  "Write metadata section to an image file"
+  (let ((entries (make-metadata-iterator)))
+    (write-int64 port (length entries))
+    (for-each
+     (lambda (entry)
+       (serialize-value entry port))
+     entries)))
+
+(define-vibe (read-metadata-section port)
+  "Read metadata section from an image file"
+  (let ((count (read-int64 port)))
+    (let loop ((i 0))
+      (when (< i count)
+        (let ((entry (deserialize-value port)))
+          (hash-table-set! metadata-registry
+                          (metadata-symbol entry)
+                          entry)
+          (loop (+ i 1)))))))
+
+(define-vibe (write-doc-section port)
+  "Write documentation section to an image file"
+  (let ((entries (make-doc-iterator)))
+    (write-int64 port (length entries))
+    (for-each
+     (lambda (entry)
+       (serialize-value entry port))
+     entries)))
+
+(define-vibe (read-doc-section port)
+  "Read documentation section from an image file"
+  (let ((count (read-int64 port)))
+    (let loop ((i 0))
+      (when (< i count)
+        (let ((entry (deserialize-value port)))
+          (hash-table-set! doc-registry
+                          (doc-entry-symbol entry)
+                          entry)
+          (loop (+ i 1)))))))) 

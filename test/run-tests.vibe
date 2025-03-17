@@ -1,0 +1,29 @@
+;; R7RS Test Runner
+(import (vibe test))
+
+;; Define R7RS test-related bindings
+(define-syntax test
+  (syntax-rules ()
+    ((test name expected expr)
+     (test-equal name expected expr))
+    ((test expected expr)
+     (test-equal (symbol->string 'expr) expected expr))))
+
+(define-syntax test-assert
+  (syntax-rules ()
+    ((test-assert name expr)
+     (test-assert name expr))
+    ((test-assert expr)
+     (test-assert (symbol->string 'expr) expr))))
+
+(define-syntax test-error
+  (syntax-rules ()
+    ((test-error name expr)
+     (test-error name expr))
+    ((test-error expr)
+     (test-error (symbol->string 'expr) expr))))
+
+;; Run the R7RS tests
+(test-begin "R7RS Tests")
+(run-tests! "test/r7rs/r7rs-tests.vibe")
+(test-end) 
