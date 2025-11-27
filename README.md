@@ -1,108 +1,132 @@
-# Vibe Programming Language
+# Vibe Language
 
-Vibe is a Scheme-based programming language implemented in LLVM bitcode. It features a native FFI system and built-in socket communication capabilities.
+Vibe is a R7RS Small Scheme derivative that compiles to LLVM bitcode. The language is designed to be self-hosting, meaning the compiler will eventually be written in Vibe itself.
 
-## Requirements
+## Overview
 
-- CMake 3.13 or higher
-- LLVM 15.0 or higher
-- A C++ compiler supporting C++17
-- pthread library
-- zlib
+Vibe aims to provide:
+- **Self-hosting**: The compiler is written in Vibe itself (after bootstrap)
+- **LLVM Backend**: Compiles to LLVM bitcode for efficient native code generation
+- **R7RS Compatibility**: Based on R7RS Small Scheme standard
+- **Extensibility**: Core language features can be extended using `define-bitcode` primitive
 
-## Building
+## Project Structure
 
-1. Clone the repository
-2. Run the build script:
-   ```bash
-   chmod +x build.sh
-   ./build.sh
-   ```
-
-The build script will create a `build` directory and compile the Vibe compiler. The resulting executable will be located at `build/vibe`.
-
-## Socket API
-
-Vibe provides a high-level socket API for network communication. Here are the available functions:
-
-### Server-side Functions
-
-```scheme
-(create-server-socket port)
 ```
-Creates a TCP server socket listening on the specified port. Returns a socket handle on success, or `#f` on failure.
-
-```scheme
-(accept-connection server-socket)
-```
-Accepts a connection on a server socket. Returns a new socket handle for the client connection on success, or `#f` on failure.
-
-### Client-side Functions
-
-```scheme
-(connect-to-server host port)
-```
-Connects to a TCP server at the specified host and port. Returns a socket handle on success, or `#f` on failure.
-
-### Common Socket Operations
-
-```scheme
-(socket-send socket data)
-```
-Sends data (a string) on the socket. Returns the number of bytes sent on success, or `#f` on failure.
-
-```scheme
-(socket-recv socket max-length)
-```
-Receives up to max-length bytes from the socket. Returns the received data as a string on success, or `#f` on failure.
-
-```scheme
-(socket-close socket)
-```
-Closes a socket. Returns `#t` on success, or `#f` on failure.
-
-## Example Usage
-
-Here's a simple echo server example:
-
-```scheme
-(define server (create-server-socket 8080))
-(if server
-    (let ((client (accept-connection server)))
-      (if client
-          (begin
-            (let ((data (socket-recv client 1024)))
-              (if data
-                  (socket-send client data))
-              (socket-close client)))
-          (display "Failed to accept connection\n")))
-    (display "Failed to create server\n"))
+vibe/
+├── bootstrap/          # Bootstrap compiler (pure LLVM bitcode)
+│   ├── lexer/         # Lexer implementation
+│   ├── parser/        # Parser implementation
+│   ├── runtime/       # Runtime support (FFI, primitives)
+│   └── compiler/      # Compiler driver and main entry point
+├── src/               # Future self-hosted Vibe code
+├── doc/               # Documentation repository
+│   ├── design/        # Design documents and formal plans
+│   ├── chats/         # Recorded development conversations
+│   └── examples/      # Example programs and tutorials
+├── test/              # Test files
+└── build/             # Build output (gitignored)
 ```
 
-And a corresponding client:
+## Prerequisites
 
-```scheme
-(define client (connect-to-server "localhost" 8080))
-(if client
-    (begin
-      (socket-send client "Hello, World!")
-      (let ((response (socket-recv client 1024)))
-        (if response
-            (display response))
-        (socket-close client)))
-    (display "Failed to connect to server\n"))
+- CMake 3.20 or higher
+- LLVM (with development headers and tools)
+- C++ compiler (for linking LLVM libraries)
+
+### Installing LLVM
+
+**macOS** (using Homebrew):
+```bash
+brew install llvm
 ```
 
-## Cross-platform Support
+**Linux** (Ubuntu/Debian):
+```bash
+sudo apt-get install llvm-dev clang
+```
 
-The project uses CMake for its build system, making it easier to build on different platforms. The socket implementation currently supports:
+**Linux** (Fedora):
+```bash
+sudo dnf install llvm-devel clang
+```
 
-- macOS
-- Linux
-- Unix-like systems
+## Build Instructions
 
-Windows support is planned for future releases.
+### Using the Build Script
+
+The easiest way to build is using the provided build script:
+
+```bash
+# Build the project
+./build.sh build
+
+# Clean build directory
+./build.sh clean
+
+# Run tests (when implemented)
+./build.sh test
+
+# Install (when implemented)
+./build.sh install
+```
+
+### Using CMake Directly
+
+```bash
+# Create build directory
+mkdir -p build
+cd build
+
+# Configure
+cmake ..
+
+# Build
+cmake --build .
+
+# The executable will be at: build/bin/bootstrap_compiler
+```
+
+## Quick Start
+
+Once built, the bootstrap compiler can be used to compile Vibe source files:
+
+```bash
+# Compile a Vibe source file
+./build/bin/bootstrap_compiler input.vibe -o output.bc
+```
+
+(Note: The bootstrap compiler is currently under development)
+
+## Documentation
+
+- **[AGENTS.md](AGENTS.md)** - Guide for AI agents working on this project
+- **[doc/design/bootstrap-plan.md](doc/design/bootstrap-plan.md)** - Bootstrap compiler implementation plan
+- **[doc/README.md](doc/README.md)** - Documentation index
+
+## Development Status
+
+The bootstrap compiler is currently under active development. Current status:
+
+- ✅ Phase 1: Project Structure
+- 🔄 Phase 2: Lexer (in progress)
+- ⏳ Phase 3: Parser
+- ⏳ Phase 4: Runtime Foundation
+- ⏳ Phase 5: FFI System
+- ⏳ Phase 6: Compiler Driver
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request. 
+See [AGENTS.md](AGENTS.md) for guidelines on contributing to the project, including:
+- Coding standards and practices
+- Directory structure conventions
+- Documentation requirements
+- Testing strategies
+
+## License
+
+(To be determined)
+
+## Acknowledgments
+
+Vibe is inspired by R7RS Small Scheme and aims to provide a modern, self-hosting implementation that compiles to efficient native code via LLVM.
