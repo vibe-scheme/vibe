@@ -1,0 +1,343 @@
+; Bootstrap Parser for Vibe
+; Parses S-expressions from token stream
+; All functions use snake_case naming convention
+
+target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
+target triple = "x86_64-apple-macosx10.15.0"
+
+; Forward declarations from lexer
+%Token = type { i32, i8*, i64, i32, i32 }
+%Lexer = type { i8*, i64, i64, i32, i32 }
+
+declare %Token* @lex_next(%Lexer*)
+declare %Token* @lex_peek(%Lexer*)
+
+; AST node types enum
+; AST_ATOM = 0
+; AST_LIST = 1
+; AST_QUOTE = 2
+; AST_QUASIQUOTE = 3
+; AST_UNQUOTE = 4
+; AST_UNQUOTE_SPLICING = 5
+
+; AST node structure
+; struct ASTNode {
+;     i32 type;           // Node type
+;     i32 atom_type;      // Atom type (if AST_ATOM): TOKEN_IDENTIFIER, TOKEN_NUMBER, etc.
+;     i8* value;          // Value (for atoms)
+;     i64 value_len;      // Value length
+;     %ASTNode* car;      // First element (for lists)
+;     %ASTNode* cdr;      // Rest of list (for lists)
+;     i32 line;           // Line number
+;     i32 column;         // Column number
+; }
+
+%ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
+
+; Parser state structure
+; struct Parser {
+;     %Lexer* lexer;      // Lexer instance
+;     %Token* current;    // Current token
+; }
+
+%Parser = type { %Lexer*, %Token* }
+
+; Initialize parser with lexer
+; parse_init: Initialize a parser with a lexer
+; Parameters:
+;   lexer: Pointer to Lexer structure
+; Returns: Pointer to initialized Parser structure
+define %Parser* @parse_init(%Lexer* %lexer) {
+entry:
+    %parser = call i8* @malloc(i64 16)
+    %parser_ptr = bitcast i8* %parser to %Parser*
+    
+    ; Store lexer
+    %lexer_ptr = getelementptr %Parser, %Parser* %parser_ptr, i32 0, i32 0
+    store %Lexer* %lexer, %Lexer** %lexer_ptr
+    
+    ; Get first token
+    %first_token = call %Token* @lex_next(%Lexer* %lexer)
+    %token_ptr = getelementptr %Parser, %Parser* %parser_ptr, i32 0, i32 1
+    store %Token* %first_token, %Token** %token_ptr
+    
+    ret %Parser* %parser_ptr
+}
+
+; Advance to next token
+; parse_advance: Advance parser to next token
+; Parameters:
+;   parser: Pointer to Parser structure
+define void @parse_advance(%Parser* %parser) {
+entry:
+    %lexer_ptr = getelementptr %Parser, %Parser* %parser, i32 0, i32 0
+    %lexer = load %Lexer*, %Lexer** %lexer_ptr
+    
+    %next_token = call %Token* @lex_next(%Lexer* %lexer)
+    %token_ptr = getelementptr %Parser, %Parser* %parser, i32 0, i32 1
+    store %Token* %next_token, %Token** %token_ptr
+    
+    ret void
+}
+
+; Get current token
+; parse_current: Get current token
+; Parameters:
+;   parser: Pointer to Parser structure
+; Returns: Pointer to current Token
+define %Token* @parse_current(%Parser* %parser) {
+entry:
+    %token_ptr = getelementptr %Parser, %Parser* %parser, i32 0, i32 1
+    %token = load %Token*, %Token** %token_ptr
+    ret %Token* %token
+}
+
+; Check if current token matches type
+; parse_check: Check if current token matches given type
+; Parameters:
+;   parser: Pointer to Parser structure
+;   token_type: Token type to check
+; Returns: 1 if matches, 0 otherwise
+define i32 @parse_check(%Parser* %parser, i32 %token_type) {
+entry:
+    %token = call %Token* @parse_current(%Parser* %parser)
+    %type_ptr = getelementptr %Token, %Token* %token, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %matches = icmp eq i32 %type, %token_type
+    %result = zext i1 %matches to i32
+    ret i32 %result
+}
+
+; Create atom node
+; parse_create_atom: Create an AST node for an atom
+; Parameters:
+;   token: Pointer to Token structure
+; Returns: Pointer to ASTNode
+define %ASTNode* @parse_create_atom(%Token* %token) {
+entry:
+    %node = call i8* @malloc(i64 48)
+    %node_ptr = bitcast i8* %node to %ASTNode*
+    
+    %type_ptr = getelementptr %Token, %Token* %token, i32 0, i32 0
+    %token_type = load i32, i32* %type_ptr
+    
+    %node_type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 0
+    store i32 0, i32* %node_type_ptr  ; AST_ATOM
+    
+    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 1
+    store i32 %token_type, i32* %atom_type_ptr
+    
+    %val_ptr = getelementptr %Token, %Token* %token, i32 0, i32 1
+    %value = load i8*, i8** %val_ptr
+    %node_val_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
+    store i8* %value, i8** %node_val_ptr
+    
+    %len_ptr = getelementptr %Token, %Token* %token, i32 0, i32 2
+    %len = load i64, i64* %len_ptr
+    %node_len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
+    store i64 %len, i64* %node_len_ptr
+    
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 4
+    store %ASTNode* null, %ASTNode** %car_ptr
+    
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 5
+    store %ASTNode* null, %ASTNode** %cdr_ptr
+    
+    %line_ptr = getelementptr %Token, %Token* %token, i32 0, i32 3
+    %line = load i32, i32* %line_ptr
+    %node_line_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 6
+    store i32 %line, i32* %node_line_ptr
+    
+    %col_ptr = getelementptr %Token, %Token* %token, i32 0, i32 4
+    %col = load i32, i32* %col_ptr
+    %node_col_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 7
+    store i32 %col, i32* %node_col_ptr
+    
+    ret %ASTNode* %node_ptr
+}
+
+; Parse atom
+; parse_atom: Parse an atomic value
+; Parameters:
+;   parser: Pointer to Parser structure
+; Returns: Pointer to ASTNode
+define %ASTNode* @parse_atom(%Parser* %parser) {
+entry:
+    %token = call %Token* @parse_current(%Parser* %parser)
+    %node = call %ASTNode* @parse_create_atom(%Token* %token)
+    call void @parse_advance(%Parser* %parser)
+    ret %ASTNode* %node
+}
+
+; Parse list
+; parse_list: Parse a list structure
+; Parameters:
+;   parser: Pointer to Parser structure
+; Returns: Pointer to ASTNode (list)
+define %ASTNode* @parse_list(%Parser* %parser) {
+entry:
+    ; Check for left parenthesis
+    %is_lparen = call i32 @parse_check(%Parser* %parser, i32 5)  ; TOKEN_LPAREN
+    %lparen_bool = icmp eq i32 %is_lparen, 0
+    br i1 %lparen_bool, label %error, label %parse_start
+
+parse_start:
+    call void @parse_advance(%Parser* %parser)  ; Consume LPAREN
+    
+    ; Create list node
+    %list_node = call i8* @malloc(i64 48)
+    %list_node_ptr = bitcast i8* %list_node to %ASTNode*
+    
+    %node_type_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 0
+    store i32 1, i32* %node_type_ptr  ; AST_LIST
+    
+    ; Check for empty list or dot notation
+    %is_rparen = call i32 @parse_check(%Parser* %parser, i32 6)  ; TOKEN_RPAREN
+    %rparen_bool = icmp ne i32 %is_rparen, 0
+    br i1 %rparen_bool, label %empty_list, label %parse_elements
+
+empty_list:
+    call void @parse_advance(%Parser* %parser)  ; Consume RPAREN
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
+    store %ASTNode* null, %ASTNode** %car_ptr
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* null, %ASTNode** %cdr_ptr
+    ret %ASTNode* %list_node_ptr
+
+parse_elements:
+    ; Parse first element
+    %first = call %ASTNode* @parse_expr(%Parser* %parser)
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
+    store %ASTNode* %first, %ASTNode** %car_ptr
+    
+    ; Check for dot notation (improper list)
+    %is_dot = call i32 @parse_check(%Parser* %parser, i32 11)  ; TOKEN_DOT
+    %dot_bool = icmp ne i32 %is_dot, 0
+    br i1 %dot_bool, label %dot_notation, label %parse_rest
+
+dot_notation:
+    call void @parse_advance(%Parser* %parser)  ; Consume DOT
+    %cdr_expr = call %ASTNode* @parse_expr(%Parser* %parser)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* %cdr_expr, %ASTNode** %cdr_ptr
+    
+    ; Expect right parenthesis
+    %is_rparen2 = call i32 @parse_check(%Parser* %parser, i32 6)  ; TOKEN_RPAREN
+    %rparen_bool2 = icmp eq i32 %is_rparen2, 0
+    br i1 %rparen_bool2, label %error, label %done_dot
+
+done_dot:
+    call void @parse_advance(%Parser* %parser)  ; Consume RPAREN
+    ret %ASTNode* %list_node_ptr
+
+parse_rest:
+    ; Parse rest of list
+    %rest = call %ASTNode* @parse_list_tail(%Parser* %parser)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* %rest, %ASTNode** %cdr_ptr
+    ret %ASTNode* %list_node_ptr
+
+error:
+    ret %ASTNode* null
+}
+
+; Parse list tail (helper for parse_list)
+; parse_list_tail: Parse the tail of a list
+; Parameters:
+;   parser: Pointer to Parser structure
+; Returns: Pointer to ASTNode (rest of list)
+define %ASTNode* @parse_list_tail(%Parser* %parser) {
+entry:
+    %is_rparen = call i32 @parse_check(%Parser* %parser, i32 6)  ; TOKEN_RPAREN
+    %rparen_bool = icmp ne i32 %is_rparen, 0
+    br i1 %rparen_bool, label %empty, label %has_elements
+
+empty:
+    call void @parse_advance(%Parser* %parser)  ; Consume RPAREN
+    ret %ASTNode* null
+
+has_elements:
+    ; Create cons cell
+    %cons_node = call i8* @malloc(i64 48)
+    %cons_node_ptr = bitcast i8* %cons_node to %ASTNode*
+    
+    %node_type_ptr = getelementptr %ASTNode, %ASTNode* %cons_node_ptr, i32 0, i32 0
+    store i32 1, i32* %node_type_ptr  ; AST_LIST
+    
+    ; Parse car
+    %car = call %ASTNode* @parse_expr(%Parser* %parser)
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %cons_node_ptr, i32 0, i32 4
+    store %ASTNode* %car, %ASTNode** %car_ptr
+    
+    ; Parse cdr recursively
+    %cdr = call %ASTNode* @parse_list_tail(%Parser* %parser)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %cons_node_ptr, i32 0, i32 5
+    store %ASTNode* %cdr, %ASTNode** %cdr_ptr
+    
+    ret %ASTNode* %cons_node_ptr
+}
+
+; Parse expression (atom or list)
+; parse_expr: Parse a single expression (atom or list)
+; Parameters:
+;   parser: Pointer to Parser structure
+; Returns: Pointer to ASTNode
+define %ASTNode* @parse_expr(%Parser* %parser) {
+entry:
+    %token = call %Token* @parse_current(%Parser* %parser)
+    %type_ptr = getelementptr %Token, %Token* %token, i32 0, i32 0
+    %token_type = load i32, i32* %type_ptr
+    
+    ; Check for quote
+    %is_quote = icmp eq i32 %token_type, 7  ; TOKEN_QUOTE
+    br i1 %is_quote, label %quote, label %check_quasiquote
+
+quote:
+    call void @parse_advance(%Parser* %parser)  ; Consume quote
+    %quoted = call %ASTNode* @parse_expr(%Parser* %parser)
+    
+    ; Create quote node
+    %quote_node = call i8* @malloc(i64 48)
+    %quote_node_ptr = bitcast i8* %quote_node to %ASTNode*
+    
+    %node_type_ptr = getelementptr %ASTNode, %ASTNode* %quote_node_ptr, i32 0, i32 0
+    store i32 2, i32* %node_type_ptr  ; AST_QUOTE
+    
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %quote_node_ptr, i32 0, i32 4
+    store %ASTNode* %quoted, %ASTNode** %car_ptr
+    
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %quote_node_ptr, i32 0, i32 5
+    store %ASTNode* null, %ASTNode** %cdr_ptr
+    
+    ret %ASTNode* %quote_node_ptr
+
+check_quasiquote:
+    ; Check for left parenthesis (list)
+    %is_lparen = icmp eq i32 %token_type, 5  ; TOKEN_LPAREN
+    br i1 %is_lparen, label %list, label %atom
+
+list:
+    %list_node = call %ASTNode* @parse_list(%Parser* %parser)
+    ret %ASTNode* %list_node
+
+atom:
+    %atom_node = call %ASTNode* @parse_atom(%Parser* %parser)
+    ret %ASTNode* %atom_node
+}
+
+; Report parsing error
+; parse_error: Report a parsing error
+; Parameters:
+;   parser: Pointer to Parser structure
+;   message: Error message string
+; Returns: Null pointer (error indicator)
+define %ASTNode* @parse_error(%Parser* %parser, i8* %message) {
+entry:
+    ; In a real implementation, this would print the error message
+    ; For now, just return null
+    ret %ASTNode* null
+}
+
+; Declare external functions
+declare i8* @malloc(i64)
+declare void @free(i8*)

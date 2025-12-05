@@ -31,25 +31,61 @@ vibe/
 ## Prerequisites
 
 - CMake 3.20 or higher
-- LLVM (with development headers and tools)
-- C++ compiler (for linking LLVM libraries)
+- **LLVM 21** (specifically version 21.x) - with tools (`llvm-as`, `llvm-link`, `llc`)
+- C++ compiler (for linking the final executable)
+- Standard C library (libc) and POSIX dynamic library loading (libdl on Linux)
 
-### Installing LLVM
+**Note**: The bootstrap compiler uses LLVM tools during build time but does NOT link against LLVM libraries at runtime. Only the LLVM tools are required.
+
+### Installing LLVM 21
 
 **macOS** (using Homebrew):
 ```bash
 brew install llvm
+# Verify version:
+llvm-config --version  # Should show 21.x
 ```
 
 **Linux** (Ubuntu/Debian):
 ```bash
-sudo apt-get install llvm-dev clang
+# For Ubuntu 22.04+, LLVM 21 may be available in default repos
+sudo apt-get update
+sudo apt-get install llvm-21 llvm-21-dev clang-21
+
+# Or install from LLVM official repository:
+# See https://apt.llvm.org/ for setup instructions
 ```
 
 **Linux** (Fedora):
 ```bash
-sudo dnf install llvm-devel clang
+sudo dnf install llvm21 llvm21-devel clang
 ```
+
+### Verifying LLVM Installation
+
+After installing LLVM, verify that the required tools are available:
+```bash
+llvm-as --version   # Should show LLVM 21.x
+llvm-link --version # Should show LLVM 21.x
+llc --version       # Should show LLVM 21.x
+```
+
+If these commands are not found, you may need to add LLVM's bin directory to your PATH:
+```bash
+# macOS (Homebrew):
+export PATH="/usr/local/opt/llvm/bin:$PATH"
+
+# Linux (adjust path based on installation):
+export PATH="/usr/lib/llvm-21/bin:$PATH"
+```
+
+### Platform-Specific Notes
+
+**macOS**: The bootstrap compiler is currently configured for macOS. The target triple in all `.ll` files is set to `x86_64-apple-macosx10.15.0`. If building on a different macOS version, you may need to update the target triple in the LLVM IR files.
+
+**Linux**: For Linux builds, you'll need to update the target triple in all `.ll` files to match your Linux distribution (e.g., `x86_64-unknown-linux-gnu`).
+
+**Cross-Compilation**: Cross-compilation is not currently supported. The bootstrap compiler will only work on the same architecture/OS it was built on. This is a known limitation and a future goal.
 
 ## Build Instructions
 
@@ -109,11 +145,21 @@ Once built, the bootstrap compiler can be used to compile Vibe source files:
 The bootstrap compiler is currently under active development. Current status:
 
 - ✅ Phase 1: Project Structure
-- 🔄 Phase 2: Lexer (in progress)
-- ⏳ Phase 3: Parser
-- ⏳ Phase 4: Runtime Foundation
-- ⏳ Phase 5: FFI System
-- ⏳ Phase 6: Compiler Driver
+- ✅ Phase 2: Lexer
+- ✅ Phase 3: Parser
+- ✅ Phase 4: Runtime Foundation (including `define-bitcode` primitive)
+- ✅ Phase 5: FFI System
+- ✅ Phase 6: Compiler Driver
+
+**Note**: The bootstrap compiler structure is complete, but the implementation may need refinement and testing. The build system is configured for LLVM 21.
+
+## Known Limitations
+
+1. **Target Triple**: All LLVM IR files hardcode the target triple to the build system's architecture. Cross-compilation is not currently supported.
+
+2. **Platform Support**: Currently configured for macOS. Linux support requires updating target triples in all `.ll` files.
+
+3. **LLVM Version**: Requires LLVM 21 specifically. Other versions may not work correctly.
 
 ## Contributing
 

@@ -64,8 +64,12 @@ case "$COMMAND" in
     
     test)
         print_info "Running tests..."
-        # TODO: Implement test runner
-        print_warn "Test runner not yet implemented."
+        cd "${BUILD_DIR}"
+        cmake --build . --target run_tests || {
+            print_error "Tests failed."
+            exit 1
+        }
+        print_info "All tests passed!"
         ;;
     
     install)

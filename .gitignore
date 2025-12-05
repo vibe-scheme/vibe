@@ -1,7 +1,6 @@
 # Build output
 build/
 *.bc
-*.ll
 *.s
 *.o
 *.a

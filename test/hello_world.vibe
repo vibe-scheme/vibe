@@ -1,0 +1,6 @@
+(define-bitcode (hello name) "
+  %format = getelementptr [13 x i8], [13 x i8]* @.str_hello, i32 0, i32 0
+  call i32 @printf(i8* %format, i8* %name)
+  ret void
+")
+(hello "World")

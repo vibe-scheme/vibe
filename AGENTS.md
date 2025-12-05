@@ -120,6 +120,36 @@ Recorded development conversations, numbered sequentially:
 
 Example programs and tutorials demonstrating Vibe features.
 
+## Technical Considerations
+
+### LLVM Version Requirements
+
+- **LLVM 21** is required (specifically version 21.x)
+- The bootstrap compiler uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) but does NOT link against LLVM libraries at runtime
+- Only the LLVM tools are needed during build time
+- Verify installation with: `llvm-as --version`, `llvm-link --version`, `llc --version`
+
+### Target Triple Restriction
+
+**IMPORTANT**: All LLVM IR files currently hardcode the target triple to the build system's architecture (e.g., `x86_64-apple-macosx10.15.0`). This means:
+
+- The bootstrap compiler will only work on the same architecture/OS it was built on
+- Cross-compilation is not currently supported (this is a future goal)
+- Developers should be aware that target triples in `.ll` files match their development machine
+
+When adding new `.ll` files, use the same target triple as existing files. The target triple can be found at the top of any `.ll` file:
+```
+target triple = "x86_64-apple-macosx10.15.0"
+```
+
+For Linux builds, update the target triple to match your distribution (e.g., `x86_64-unknown-linux-gnu`).
+
+### Build System Notes
+
+- The CMake build system finds LLVM tools but does not require LLVM libraries for linking
+- The bootstrap compiler executable only needs standard C libraries (libc) and POSIX dynamic library loading (libdl on Linux)
+- macOS doesn't need a separate `dl` library (dlopen is in libc)
+
 ## Key Concepts
 
 ### `define-bitcode` Primitive
