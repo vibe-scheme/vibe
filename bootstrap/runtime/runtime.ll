@@ -16,69 +16,14 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; VALUE_PROCEDURE = 7
 ; VALUE_BITCODE = 8  ; For define-bitcode
 
-; VibeValue - Tagged union for all Vibe values
-; struct VibeValue {
-;     i32 type;           // Value type tag
-;     i64 data;           // Value data (pointer or immediate)
-; }
-
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %VibeValue = type { i32, i64 }
-
-; VibeCons - Cons cell for lists
-; struct VibeCons {
-;     %VibeValue car;     // First element
-;     %VibeValue cdr;     // Rest of list
-; }
-
 %VibeCons = type { %VibeValue, %VibeValue }
-
-; VibeString - String representation
-; struct VibeString {
-;     i64 length;         // String length
-;     i8* data;           // String data (null-terminated)
-; }
-
 %VibeString = type { i64, i8* }
-
-; VibeSymbol - Symbol internment entry
-; struct VibeSymbol {
-;     i64 hash;           // Hash value
-;     i8* name;           // Symbol name
-;     i64 name_len;       // Name length
-;     %VibeSymbol* next;  // Next in hash chain
-; }
-
 %VibeSymbol = type { i64, i8*, i64, %VibeSymbol* }
-
-; Symbol table - Hash table for symbol internment
-; struct SymbolTable {
-;     %VibeSymbol** buckets;  // Array of symbol pointers
-;     i64 bucket_count;       // Number of buckets
-;     i64 symbol_count;       // Total number of symbols
-; }
-
 %SymbolTable = type { %VibeSymbol**, i64, i64 }
-
-; Bitcode binding - For define-bitcode primitive
-; struct BitcodeBinding {
-;     i8* name;           // Binding name
-;     i64 name_len;       // Name length
-;     i8* bitcode;        // LLVM bitcode data
-;     i64 bitcode_len;    // Bitcode length
-;     %BitcodeBinding* next;  // Next binding
-; }
-
 %BitcodeBinding = type { i8*, i64, i8*, i64, %BitcodeBinding* }
-
-; Runtime state
-; struct Runtime {
-;     %SymbolTable* symbol_table;     // Symbol internment table
-;     %BitcodeBinding* bitcode_bindings;  // Linked list of bitcode bindings
-;     i64 heap_size;                  // Heap size
-;     i8* heap;                        // Heap memory
-;     i64 heap_pos;                    // Current heap position
-; }
-
 %Runtime = type { %SymbolTable*, %BitcodeBinding*, i64, i8*, i64 }
 
 ; Initialize runtime
@@ -122,7 +67,7 @@ entry:
     %table = call i8* @malloc(i64 24)
     %table_ptr = bitcast i8* %table to %SymbolTable*
     
-    %bucket_count = 256  ; Initial bucket count
+    %bucket_count = add i64 256, 0  ; Initial bucket count
     %bucket_size = mul i64 %bucket_count, 8  ; Size of pointer array
     %buckets = call i8* @calloc(i64 %bucket_count, i64 8)
     %buckets_ptr = bitcast i8* %buckets to %VibeSymbol**
@@ -207,14 +152,14 @@ entry:
     br label %search_loop
 
 search_loop:
-    %current = phi %VibeSymbol* [ %bucket, %entry ], [ %next, %check_next ]
+    %current = phi %VibeSymbol* [ %bucket, %entry ], [ %next, %next_symbol ]
     %is_null = icmp eq %VibeSymbol* %current, null
     br i1 %is_null, label %create_new, label %check_match
 
 check_match:
     ; Compare hash and name
-    %hash_field = getelementptr %VibeSymbol, %VibeSymbol* %current, i32 0, i32 0
-    %sym_hash = load i64, i64* %hash_field
+    %hash_field_check = getelementptr %VibeSymbol, %VibeSymbol* %current, i32 0, i32 0
+    %sym_hash = load i64, i64* %hash_field_check
     %hash_match = icmp eq i64 %sym_hash, %hash
     
     br i1 %hash_match, label %check_name, label %next_symbol
@@ -234,8 +179,8 @@ create_new:
     %symbol = call i8* @malloc(i64 32)
     %symbol_ptr = bitcast i8* %symbol to %VibeSymbol*
     
-    %hash_field = getelementptr %VibeSymbol, %VibeSymbol* %symbol_ptr, i32 0, i32 0
-    store i64 %hash, i64* %hash_field
+    %hash_field_new = getelementptr %VibeSymbol, %VibeSymbol* %symbol_ptr, i32 0, i32 0
+    store i64 %hash, i64* %hash_field_new
     
     ; Copy name
     %name_copy = call i8* @malloc(i64 %name_len)
@@ -248,8 +193,8 @@ create_new:
     store i64 %name_len, i64* %len_field
     
     ; Add to bucket
-    %next_field = getelementptr %VibeSymbol, %VibeSymbol* %symbol_ptr, i32 0, i32 3
-    store %VibeSymbol* %bucket, %VibeSymbol** %next_field
+    %next_field_new = getelementptr %VibeSymbol, %VibeSymbol* %symbol_ptr, i32 0, i32 3
+    store %VibeSymbol* %bucket, %VibeSymbol** %next_field_new
     
     store %VibeSymbol* %symbol_ptr, %VibeSymbol** %bucket_ptr
     

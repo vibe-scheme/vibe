@@ -17,19 +17,10 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; FFI_TYPE_POINTER = 7
 ; FFI_TYPE_STRING = 8
 
-; Library handle (opaque pointer)
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %LibraryHandle = type opaque
-
-; Function pointer type (generic)
 %FunctionPtr = type i8*
-
-; FFI call signature
-; struct FFICallSignature {
-;     i32 return_type;    // Return type
-;     i32* arg_types;     // Array of argument types
-;     i32 arg_count;      // Number of arguments
-; }
-
 %FFICallSignature = type { i32, i32*, i32 }
 
 ; Load dynamic library

@@ -5,18 +5,9 @@
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-; Forward declarations
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
-
-; Code generator state structure
-; struct CodeGen {
-;     i8* ir_buffer;        ; Buffer for generated IR text
-;     i64 buffer_size;      ; Current buffer size
-;     i64 buffer_pos;       ; Current position in buffer
-;     i32 string_counter;   ; Counter for unique string constant names
-;     i32 label_counter;   ; Counter for unique label names
-; }
-
 %CodeGen = type { i8*, i64, i64, i32, i32 }
 
 ; Initialize code generator
@@ -46,8 +37,8 @@ entry:
     %label_counter_ptr = getelementptr %CodeGen, %CodeGen* %cg_ptr, i32 0, i32 4
     store i32 0, i32* %label_counter_ptr
     
-    ; Write target triple header (44 bytes without null terminator)
-    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([45 x i8], [45 x i8]* @.str.target_triple, i32 0, i32 0), i64 44)
+    ; Write target triple header (46 bytes without null terminator)
+    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([47 x i8], [47 x i8]* @.str.target_triple, i32 0, i32 0), i64 46)
     
     ; Write printf declaration (31 bytes without null terminator)
     call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.printf_decl, i32 0, i32 0), i64 31)
@@ -154,7 +145,321 @@ entry:
     ret void
 }
 
-; Handle define-bitcode AST node
+; Handle define-bitcode-type AST node
+; codegen_define_bitcode_type: Generate LLVM type definition
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   node: AST node for define-bitcode-type form
+; Returns: 0 on success, -1 on error
+; Syntax: (define-bitcode-type TypeName (field1 type1) (field2 type2) ...)
+define i32 @codegen_define_bitcode_type(%CodeGen* %cg, %ASTNode* %node) {
+entry:
+    ; AST structure: LIST { ATOM: "define-bitcode-type", ATOM: "TypeName", LIST: fields, ... }
+    ; Get type name (second element)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %type_name_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
+    %type_name_node = load %ASTNode*, %ASTNode** %type_name_node_ptr
+    %type_name_val_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 2
+    %type_name = load i8*, i8** %type_name_val_ptr
+    
+    ; Get fields list (third element)
+    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %fields_list = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
+    
+    ; Get type name length
+    %type_name_len_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 3
+    %type_name_len = load i64, i64* %type_name_len_ptr
+    
+    ; Generate: %TypeName = type { type1, type2, ... }
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %type_name, i64 %type_name_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.type_equals, i32 0, i32 0), i64 7)
+    call void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields_list)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
+    
+    ret i32 0
+}
+
+; Append type fields to IR
+; codegen_append_type_fields: Generate field list for type definition
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   fields: AST node list of (field-name type) pairs
+define void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields) {
+entry:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.lbrace, i32 0, i32 0), i64 2)
+    
+    %is_null = icmp eq %ASTNode* %fields, null
+    br i1 %is_null, label %done, label %append_first
+    
+append_first:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %fields, i32 0, i32 4
+    %field_pair = load %ASTNode*, %ASTNode** %car_ptr
+    
+    ; field_pair is a list: (field-name type)
+    %field_car_ptr = getelementptr %ASTNode, %ASTNode* %field_pair, i32 0, i32 4
+    %field_name_node = load %ASTNode*, %ASTNode** %field_car_ptr
+    %field_name_val_ptr = getelementptr %ASTNode, %ASTNode* %field_name_node, i32 0, i32 2
+    %field_name = load i8*, i8** %field_name_val_ptr
+    
+    %field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %field_pair, i32 0, i32 5
+    %field_cdr = load %ASTNode*, %ASTNode** %field_cdr_ptr
+    %field_type_node_ptr = getelementptr %ASTNode, %ASTNode* %field_cdr, i32 0, i32 4
+    %field_type_node = load %ASTNode*, %ASTNode** %field_type_node_ptr
+    %field_type_val_ptr = getelementptr %ASTNode, %ASTNode* %field_type_node, i32 0, i32 2
+    %field_type = load i8*, i8** %field_type_val_ptr
+    %field_type_len_ptr = getelementptr %ASTNode, %ASTNode* %field_type_node, i32 0, i32 3
+    %field_type_len = load i64, i64* %field_type_len_ptr
+    
+    ; Append field type
+    call void @codegen_append(%CodeGen* %cg, i8* %field_type, i64 %field_type_len)
+    
+    ; Check for more fields
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %fields, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %cdr_ptr
+    %has_more = icmp ne %ASTNode* %next, null
+    br i1 %has_more, label %append_more, label %done
+    
+append_more:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2)
+    %next_car_ptr = getelementptr %ASTNode, %ASTNode* %next, i32 0, i32 4
+    %next_field_pair = load %ASTNode*, %ASTNode** %next_car_ptr
+    
+    ; next_field_pair is a list: (field-name type)
+    %next_field_car_ptr = getelementptr %ASTNode, %ASTNode* %next_field_pair, i32 0, i32 4
+    %next_field_name_node = load %ASTNode*, %ASTNode** %next_field_car_ptr
+    %next_field_name_val_ptr = getelementptr %ASTNode, %ASTNode* %next_field_name_node, i32 0, i32 2
+    %next_field_name = load i8*, i8** %next_field_name_val_ptr
+    
+    %next_field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %next_field_pair, i32 0, i32 5
+    %next_field_cdr = load %ASTNode*, %ASTNode** %next_field_cdr_ptr
+    %next_field_type_node_ptr = getelementptr %ASTNode, %ASTNode* %next_field_cdr, i32 0, i32 4
+    %next_field_type_node = load %ASTNode*, %ASTNode** %next_field_type_node_ptr
+    %next_field_type_val_ptr = getelementptr %ASTNode, %ASTNode* %next_field_type_node, i32 0, i32 2
+    %next_field_type = load i8*, i8** %next_field_type_val_ptr
+    %next_field_type_len_ptr = getelementptr %ASTNode, %ASTNode* %next_field_type_node, i32 0, i32 3
+    %next_field_type_len = load i64, i64* %next_field_type_len_ptr
+    
+    ; Append field type
+    call void @codegen_append(%CodeGen* %cg, i8* %next_field_type, i64 %next_field_type_len)
+    
+    ; Check for more fields
+    %next_cdr_ptr = getelementptr %ASTNode, %ASTNode* %next, i32 0, i32 5
+    %next_next = load %ASTNode*, %ASTNode** %next_cdr_ptr
+    %has_more_more = icmp ne %ASTNode* %next_next, null
+    br i1 %has_more_more, label %append_more, label %done
+    
+done:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.rbrace, i32 0, i32 0), i64 1)
+    ret void
+}
+
+; Handle define-bitcode-constant AST node
+; codegen_define_bitcode_constant: Generate LLVM constant definition
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   node: AST node for define-bitcode-constant form
+; Returns: 0 on success, -1 on error
+; Syntax: (define-bitcode-constant name type value)
+define i32 @codegen_define_bitcode_constant(%CodeGen* %cg, %ASTNode* %node) {
+entry:
+    ; AST structure: LIST { ATOM: "define-bitcode-constant", ATOM: "name", ATOM: "type", ATOM/STRING: value }
+    ; Get constant name (second element)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
+    %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
+    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
+    %name = load i8*, i8** %name_val_ptr
+    %name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
+    %name_len = load i64, i64* %name_len_ptr
+    
+    ; Get type (third element)
+    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+    
+    ; Get value (fourth element)
+    %cdr_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 5
+    %cdr_cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_cdr_ptr
+    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr_cdr, i32 0, i32 4
+    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
+    %value_val_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 2
+    %value = load i8*, i8** %value_val_ptr
+    %value_len_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 3
+    %value_len = load i64, i64* %value_len_ptr
+    
+    ; Check if value is a bytevector
+    %value_node_type_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 0
+    %value_node_type = load i32, i32* %value_node_type_ptr
+    %is_atom = icmp eq i32 %value_node_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %check_bytevector, label %not_bytevector
+    
+check_bytevector:
+    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 1
+    %atom_type = load i32, i32* %atom_type_ptr
+    %is_bytevector = icmp eq i32 %atom_type, 13  ; TOKEN_BYTEVECTOR
+    br i1 %is_bytevector, label %format_bytevector, label %not_bytevector
+    
+format_bytevector:
+    ; Generate: @name = constant type c"..." (convert bytevector to LLVM string literal)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %type, i64 %type_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.c_quote_open, i32 0, i32 0), i64 2)
+    ; Append bytevector data with escaping (convert null bytes to \00, etc.)
+    call void @codegen_append_bytevector(%CodeGen* %cg, i8* %value, i64 %value_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.quote, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
+    ret i32 0
+    
+not_bytevector:
+    ; Generate: @name = constant type value (for non-bytevector values)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %type, i64 %type_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %value, i64 %value_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
+    
+    ret i32 0
+}
+
+; Handle define-bitcode-function AST node (renamed from define-bitcode)
+; codegen_define_bitcode_function: Generate LLVM function definition with types
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   node: AST node for define-bitcode-function form
+; Returns: 0 on success, -1 on error
+; Syntax: (define-bitcode-function (name (param1 type1) (param2 type2) ...) return-type "LLVM IR body")
+define i32 @codegen_define_bitcode_function(%CodeGen* %cg, %ASTNode* %node) {
+entry:
+    ; AST structure: LIST { ATOM: "define-bitcode-function", LIST: signature, ATOM: return-type, STRING: body }
+    ; Get signature list (second element)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %sig_list_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
+    %sig_list = load %ASTNode*, %ASTNode** %sig_list_node_ptr
+    
+    ; Extract function name (first element of signature list)
+    %sig_car_ptr = getelementptr %ASTNode, %ASTNode* %sig_list, i32 0, i32 4
+    %func_name_node = load %ASTNode*, %ASTNode** %sig_car_ptr
+    %func_name_val_ptr = getelementptr %ASTNode, %ASTNode* %func_name_node, i32 0, i32 2
+    %func_name = load i8*, i8** %func_name_val_ptr
+    %func_name_len_ptr = getelementptr %ASTNode, %ASTNode* %func_name_node, i32 0, i32 3
+    %func_name_len = load i64, i64* %func_name_len_ptr
+    
+    ; Get parameters with types (rest of signature list)
+    %sig_cdr_ptr = getelementptr %ASTNode, %ASTNode* %sig_list, i32 0, i32 5
+    %params_list = load %ASTNode*, %ASTNode** %sig_cdr_ptr
+    
+    ; Get return type (third element)
+    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
+    %return_type_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 4
+    %return_type_node = load %ASTNode*, %ASTNode** %return_type_node_ptr
+    %return_type_val_ptr = getelementptr %ASTNode, %ASTNode* %return_type_node, i32 0, i32 2
+    %return_type = load i8*, i8** %return_type_val_ptr
+    %return_type_len_ptr = getelementptr %ASTNode, %ASTNode* %return_type_node, i32 0, i32 3
+    %return_type_len = load i64, i64* %return_type_len_ptr
+    
+    ; Get IR body (fourth element - string)
+    %cdr_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 5
+    %cdr_cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_cdr_ptr
+    %ir_body_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr_cdr, i32 0, i32 4
+    %ir_body_node = load %ASTNode*, %ASTNode** %ir_body_node_ptr
+    %ir_body_val_ptr = getelementptr %ASTNode, %ASTNode* %ir_body_node, i32 0, i32 2
+    %ir_body = load i8*, i8** %ir_body_val_ptr
+    %ir_body_len_ptr = getelementptr %ASTNode, %ASTNode* %ir_body_node, i32 0, i32 3
+    %ir_body_len = load i64, i64* %ir_body_len_ptr
+    
+    ; Generate function signature: define return-type @name(type1 %param1, ...) {
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.define, i32 0, i32 0), i64 7)
+    call void @codegen_append(%CodeGen* %cg, i8* %return_type, i64 %return_type_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %func_name, i64 %func_name_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lparen, i32 0, i32 0), i64 1)
+    
+    ; Generate typed parameters
+    call void @codegen_append_typed_params(%CodeGen* %cg, %ASTNode* %params_list)
+    
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.rparen_brace, i32 0, i32 0), i64 3)
+    
+    ; Append IR body
+    call void @codegen_append(%CodeGen* %cg, i8* %ir_body, i64 %ir_body_len)
+    
+    ; Close function
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.close_brace, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
+    
+    ret i32 0
+}
+
+; Append typed parameter list
+; codegen_append_typed_params: Append typed parameter list to function signature
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   params: AST node list of (param-name type) pairs
+define void @codegen_append_typed_params(%CodeGen* %cg, %ASTNode* %params) {
+entry:
+    %is_null = icmp eq %ASTNode* %params, null
+    br i1 %is_null, label %done, label %append_first
+    
+append_first:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 4
+    %param_pair = load %ASTNode*, %ASTNode** %car_ptr
+    
+    ; param_pair is a list: (param-name type)
+    %param_car_ptr = getelementptr %ASTNode, %ASTNode* %param_pair, i32 0, i32 4
+    %param_name_node = load %ASTNode*, %ASTNode** %param_car_ptr
+    %param_name_val_ptr = getelementptr %ASTNode, %ASTNode* %param_name_node, i32 0, i32 2
+    %param_name = load i8*, i8** %param_name_val_ptr
+    %param_name_len_ptr = getelementptr %ASTNode, %ASTNode* %param_name_node, i32 0, i32 3
+    %param_name_len = load i64, i64* %param_name_len_ptr
+    
+    %param_cdr_ptr = getelementptr %ASTNode, %ASTNode* %param_pair, i32 0, i32 5
+    %param_cdr = load %ASTNode*, %ASTNode** %param_cdr_ptr
+    %param_type_node_ptr = getelementptr %ASTNode, %ASTNode* %param_cdr, i32 0, i32 4
+    %param_type_node = load %ASTNode*, %ASTNode** %param_type_node_ptr
+    %param_type_val_ptr = getelementptr %ASTNode, %ASTNode* %param_type_node, i32 0, i32 2
+    %param_type = load i8*, i8** %param_type_val_ptr
+    %param_type_len_ptr = getelementptr %ASTNode, %ASTNode* %param_type_node, i32 0, i32 3
+    %param_type_len = load i64, i64* %param_type_len_ptr
+    
+    ; Append: type %param_name
+    call void @codegen_append(%CodeGen* %cg, i8* %param_type, i64 %param_type_len)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* %param_name, i64 %param_name_len)
+    
+    ; Check for more parameters
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %cdr_ptr
+    %has_more = icmp ne %ASTNode* %next, null
+    br i1 %has_more, label %append_more, label %done
+    
+append_more:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2)
+    call void @codegen_append_typed_params(%CodeGen* %cg, %ASTNode* %next)
+    br label %done
+    
+done:
+    ret void
+}
+
+; Handle define-bitcode AST node (legacy - kept for backward compatibility)
 ; codegen_define_bitcode: Generate LLVM function definition from define-bitcode
 ; Parameters:
 ;   cg: Pointer to CodeGen structure
@@ -460,7 +765,7 @@ entry:
 }
 
 ; String literals
-@.str.target_triple = private unnamed_addr constant [45 x i8] c"target triple = x86_64-apple-macosx10.15.0\0A\0A\00"
+@.str.target_triple = private unnamed_addr constant [47 x i8] c"target triple = \22x86_64-apple-macosx10.15.0\22\0A\0A\00"
 @.str.printf_decl = private unnamed_addr constant [32 x i8] c"declare i32 @printf(i8*, ...)\0A\0A\00"
 @.str.define_void = private unnamed_addr constant [12 x i8] c"define void\00"
 @.str.lparen = private unnamed_addr constant [2 x i8] c"(\00"
@@ -473,9 +778,88 @@ entry:
 @.str.call_void = private unnamed_addr constant [10 x i8] c"call void\00"
 @.str.define_main = private unnamed_addr constant [21 x i8] c"define i32 @main() {\00"
 @.str.ret_zero = private unnamed_addr constant [12 x i8] c"  ret i32 0\00"
+@.str.type_equals = private unnamed_addr constant [8 x i8] c" = type\00"
+@.str.lbrace = private unnamed_addr constant [3 x i8] c" {\00"
+@.str.rbrace = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.newline = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.at_sign = private unnamed_addr constant [2 x i8] c"@\00"
+@.str.constant_equals = private unnamed_addr constant [12 x i8] c" = constant\00"
+@.str.space = private unnamed_addr constant [2 x i8] c" \00"
+@.str.define = private unnamed_addr constant [8 x i8] c"define \00"
+@.str.c_quote_open = private unnamed_addr constant [3 x i8] c"c\22\00"
+@.str.quote = private unnamed_addr constant [2 x i8] c"\22\00"
+@.str.backslash_00 = private unnamed_addr constant [4 x i8] c"\\00\00"
+@.str.backslash_quote = private unnamed_addr constant [3 x i8] c"\\\22\00"
+@.str.backslash_backslash = private unnamed_addr constant [3 x i8] c"\\\\\00"
+
+; Append bytevector with proper escaping for LLVM IR
+; codegen_append_bytevector: Append bytevector data with escaping
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   data: Bytevector data
+;   len: Length of bytevector
+define void @codegen_append_bytevector(%CodeGen* %cg, i8* %data, i64 %len) {
+entry:
+    %i = alloca i64
+    store i64 0, i64* %i
+    br label %loop
+
+loop:
+    %i_val = load i64, i64* %i
+    %done = icmp uge i64 %i_val, %len
+    br i1 %done, label %exit, label %process_byte
+
+process_byte:
+    %byte_ptr = getelementptr i8, i8* %data, i64 %i_val
+    %byte = load i8, i8* %byte_ptr
+    %byte_int = zext i8 %byte to i32
+    
+    ; Check if null byte - escape as \00
+    %is_null = icmp eq i32 %byte_int, 0
+    br i1 %is_null, label %escape_null, label %check_quote
+    
+escape_null:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
+    br label %increment
+    
+check_quote:
+    ; Check if quote - escape as \"
+    %is_quote = icmp eq i32 %byte_int, 34
+    br i1 %is_quote, label %escape_quote, label %check_backslash
+    
+escape_quote:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2)
+    br label %increment
+    
+check_backslash:
+    ; Check if backslash - escape as \\
+    %is_backslash = icmp eq i32 %byte_int, 92
+    br i1 %is_backslash, label %escape_backslash, label %normal_byte
+    
+escape_backslash:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2)
+    br label %increment
+    
+normal_byte:
+    ; Write byte directly
+    %byte_ptr_copy = getelementptr i8, i8* %data, i64 %i_val
+    call void @codegen_append(%CodeGen* %cg, i8* %byte_ptr_copy, i64 1)
+    br label %increment
+    
+increment:
+    %i_val_inc = load i64, i64* %i
+    %i_new = add i64 %i_val_inc, 1
+    store i64 %i_new, i64* %i
+    br label %loop
+
+exit:
+    ret void
+}
 
 ; Declare external functions
 declare i8* @malloc(i64)
 declare i8* @realloc(i8*, i64)
 declare void @free(i8*)
-declare void @llvm.memcpy.p0i8.p0i8.i64(i8* noalias, i8* noalias, i64, i1)
+declare i64 @strlen(i8*)
+; LLVM memcpy intrinsic - signature matches runtime.ll
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)

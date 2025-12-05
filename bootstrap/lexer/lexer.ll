@@ -19,27 +19,11 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; TOKEN_UNQUOTE_SPLICING = 10
 ; TOKEN_DOT = 11
 ; TOKEN_ERROR = 12
+; TOKEN_BYTEVECTOR = 13
 
-; Token structure
-; struct Token {
-;     i32 type;           // Token type
-;     i8* value;          // Token value (for identifiers, strings, numbers)
-;     i64 value_len;      // Length of value
-;     i32 line;           // Line number
-;     i32 column;         // Column number
-; }
-
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %Token = type { i32, i8*, i64, i32, i32 }
-
-; Lexer state structure
-; struct Lexer {
-;     i8* source;         // Source code string
-;     i64 source_len;     // Length of source
-;     i64 pos;            // Current position
-;     i32 line;           // Current line number
-;     i32 column;         // Current column number
-; }
-
 %Lexer = type { i8*, i64, i64, i32, i32 }
 
 ; Initialize lexer with source string
@@ -146,10 +130,10 @@ newline:
     br label %increment_pos
 
 normal:
-    %col_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
-    %col = load i32, i32* %col_ptr
+    %col_ptr_normal = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
+    %col = load i32, i32* %col_ptr_normal
     %new_col = add i32 %col, 1
-    store i32 %new_col, i32* %col_ptr
+    store i32 %new_col, i32* %col_ptr_normal
     br label %increment_pos
 
 increment_pos:
@@ -169,6 +153,9 @@ done:
 ;   lexer: Pointer to Lexer structure
 define void @lex_skip_whitespace(%Lexer* %lexer) {
 entry:
+    br label %loop
+
+loop:
     %char = call i8 @lex_current_char(%Lexer* %lexer)
     %char_int = zext i8 %char to i32
     
@@ -186,7 +173,7 @@ entry:
 
 skip:
     call void @lex_advance(%Lexer* %lexer)
-    br label %entry
+    br label %loop
 
 done:
     ret void
@@ -326,23 +313,23 @@ escape:
     %next_int = zext i8 %next_char to i32
     
     ; Handle escape sequences
-    %pos = load i64, i64* %buffer_pos
-    %char_ptr = getelementptr i8, i8* %buffer, i64 %pos
+    %pos_escape = load i64, i64* %buffer_pos
+    %char_ptr_escape = getelementptr i8, i8* %buffer, i64 %pos_escape
     
     ; Simple escape handling (just copy the next char for now)
-    store i8 %next_char, i8* %char_ptr
-    %new_pos = add i64 %pos, 1
-    store i64 %new_pos, i64* %buffer_pos
+    store i8 %next_char, i8* %char_ptr_escape
+    %new_pos_escape = add i64 %pos_escape, 1
+    store i64 %new_pos_escape, i64* %buffer_pos
     
     call void @lex_advance(%Lexer* %lexer)
     br label %loop
 
 normal_char:
-    %pos = load i64, i64* %buffer_pos
-    %char_ptr = getelementptr i8, i8* %buffer, i64 %pos
-    store i8 %char, i8* %char_ptr
-    %new_pos = add i64 %pos, 1
-    store i64 %new_pos, i64* %buffer_pos
+    %pos_normal = load i64, i64* %buffer_pos
+    %char_ptr_normal = getelementptr i8, i8* %buffer, i64 %pos_normal
+    store i8 %char, i8* %char_ptr_normal
+    %new_pos_normal = add i64 %pos_normal, 1
+    store i64 %new_pos_normal, i64* %buffer_pos
     
     call void @lex_advance(%Lexer* %lexer)
     br label %loop
@@ -385,12 +372,240 @@ error:
     ret %Token* null
 }
 
+; Peek at character at offset from current position
+; lex_peek_char: Peek at character at given offset
+; Parameters:
+;   lexer: Pointer to Lexer structure
+;   offset: Offset from current position
+; Returns: Character at offset, or 0 if out of bounds
+define i8 @lex_peek_char(%Lexer* %lexer, i64 %offset) {
+entry:
+    %pos_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 2
+    %pos = load i64, i64* %pos_ptr
+    %peek_pos = add i64 %pos, %offset
+    
+    %len_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 1
+    %len = load i64, i64* %len_ptr
+    %is_oob = icmp uge i64 %peek_pos, %len
+    br i1 %is_oob, label %out_of_bounds, label %in_bounds
+
+out_of_bounds:
+    ret i8 0
+
+in_bounds:
+    %source_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 0
+    %source = load i8*, i8** %source_ptr
+    %char_ptr = getelementptr i8, i8* %source, i64 %peek_pos
+    %char = load i8, i8* %char_ptr
+    ret i8 %char
+}
+
+; Read vertical bar delimited symbol
+; lex_read_vertical_bar_symbol: Read a symbol delimited by vertical bars
+; Parameters:
+;   lexer: Pointer to Lexer structure
+; Returns: Pointer to Token structure (TOKEN_IDENTIFIER or TOKEN_SYMBOL)
+define %Token* @lex_read_vertical_bar_symbol(%Lexer* %lexer) {
+entry:
+    call void @lex_advance(%Lexer* %lexer)  ; Skip opening |
+    %start_pos_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 2
+    %start_pos = load i64, i64* %start_pos_ptr
+    
+    %buffer = call i8* @malloc(i64 1024)
+    %buffer_pos = alloca i64
+    store i64 0, i64* %buffer_pos
+    
+    br label %loop
+
+loop:
+    %char = call i8 @lex_current_char(%Lexer* %lexer)
+    %char_int = zext i8 %char to i32
+    %is_eof = call i32 @lex_is_eof(%Lexer* %lexer)
+    %is_vbar = icmp eq i32 %char_int, 124  ; Vertical bar |
+    
+    %eof_bool = icmp ne i32 %is_eof, 0
+    %done = or i1 %eof_bool, %is_vbar
+    br i1 %done, label %check_closing, label %append_char
+
+append_char:
+    %pos = load i64, i64* %buffer_pos
+    %char_ptr = getelementptr i8, i8* %buffer, i64 %pos
+    store i8 %char, i8* %char_ptr
+    %new_pos = add i64 %pos, 1
+    store i64 %new_pos, i64* %buffer_pos
+    
+    call void @lex_advance(%Lexer* %lexer)
+    br label %loop
+
+check_closing:
+    %eof_bool_check = icmp ne i32 %is_eof, 0
+    br i1 %eof_bool_check, label %error, label %done_ok
+
+done_ok:
+    call void @lex_advance(%Lexer* %lexer)  ; Skip closing |
+    
+    ; Create token
+    %token = call i8* @malloc(i64 32)
+    %token_ptr = bitcast i8* %token to %Token*
+    
+    %len = load i64, i64* %buffer_pos
+    %value = call i8* @malloc(i64 %len)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %value, i8* %buffer, i64 %len, i1 false)
+    
+    %type_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 0
+    store i32 1, i32* %type_ptr  ; TOKEN_IDENTIFIER
+    
+    %val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 1
+    store i8* %value, i8** %val_ptr
+    
+    %len_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 2
+    store i64 %len, i64* %len_val_ptr
+    
+    %line_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 3
+    %line = load i32, i32* %line_ptr
+    %line_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 3
+    store i32 %line, i32* %line_val_ptr
+    
+    %col_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
+    %col = load i32, i32* %col_ptr
+    %col_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 4
+    store i32 %col, i32* %col_val_ptr
+    
+    call void @free(i8* %buffer)
+    ret %Token* %token_ptr
+
+error:
+    call void @free(i8* %buffer)
+    %error_msg = call %Token* @lex_error(%Lexer* %lexer, i8* getelementptr inbounds ([29 x i8], [29 x i8]* @.str.unclosed_vbar, i32 0, i32 0))
+    ret %Token* %error_msg
+}
+
+; Read bytevector
+; lex_read_bytevector: Read a R7RS bytevector #u8(...)
+; Parameters:
+;   lexer: Pointer to Lexer structure
+; Returns: Pointer to Token structure (TOKEN_BYTEVECTOR)
+define %Token* @lex_read_bytevector(%Lexer* %lexer) {
+entry:
+    ; Skip #u8(
+    call void @lex_advance(%Lexer* %lexer)  ; Skip #
+    call void @lex_advance(%Lexer* %lexer)  ; Skip u
+    call void @lex_advance(%Lexer* %lexer)  ; Skip 8
+    call void @lex_advance(%Lexer* %lexer)  ; Skip (
+    
+    %buffer = call i8* @malloc(i64 1024)
+    %buffer_pos = alloca i64
+    store i64 0, i64* %buffer_pos
+    
+    br label %loop
+
+loop:
+    call void @lex_skip_whitespace(%Lexer* %lexer)
+    %char = call i8 @lex_current_char(%Lexer* %lexer)
+    %char_int = zext i8 %char to i32
+    %is_eof = call i32 @lex_is_eof(%Lexer* %lexer)
+    %is_rparen = icmp eq i32 %char_int, 41  ; ')'
+    
+    %eof_bool = icmp ne i32 %is_eof, 0
+    %done = or i1 %eof_bool, %is_rparen
+    br i1 %done, label %check_closing, label %read_number
+
+read_number:
+    ; Simple number reading (0-255)
+    %num_start = call i8 @lex_current_char(%Lexer* %lexer)
+    %num_start_int = zext i8 %num_start to i32
+    %is_digit = icmp uge i32 %num_start_int, 48
+    %is_digit2 = icmp ule i32 %num_start_int, 57
+    %is_digit_both = and i1 %is_digit, %is_digit2
+    br i1 %is_digit_both, label %read_digits, label %error
+
+read_digits:
+    %num_val = alloca i32
+    store i32 0, i32* %num_val
+    
+    br label %digit_loop
+
+digit_loop:
+    %digit_char = call i8 @lex_current_char(%Lexer* %lexer)
+    %digit_int = zext i8 %digit_char to i32
+    %is_digit_check = icmp uge i32 %digit_int, 48
+    %is_digit_check2 = icmp ule i32 %digit_int, 57
+    %is_digit_ok = and i1 %is_digit_check, %is_digit_check2
+    br i1 %is_digit_ok, label %accumulate, label %store_byte
+
+accumulate:
+    %current_val = load i32, i32* %num_val
+    %new_val = mul i32 %current_val, 10
+    %digit_val = sub i32 %digit_int, 48
+    %final_val = add i32 %new_val, %digit_val
+    store i32 %final_val, i32* %num_val
+    
+    call void @lex_advance(%Lexer* %lexer)
+    br label %digit_loop
+
+store_byte:
+    %byte_val = load i32, i32* %num_val
+    %byte_val_trunc = trunc i32 %byte_val to i8
+    %pos = load i64, i64* %buffer_pos
+    %byte_ptr = getelementptr i8, i8* %buffer, i64 %pos
+    store i8 %byte_val_trunc, i8* %byte_ptr
+    %new_pos = add i64 %pos, 1
+    store i64 %new_pos, i64* %buffer_pos
+    
+    br label %loop
+
+check_closing:
+    %eof_bool_check = icmp ne i32 %is_eof, 0
+    br i1 %eof_bool_check, label %error, label %done_ok
+
+done_ok:
+    call void @lex_advance(%Lexer* %lexer)  ; Skip closing )
+    
+    ; Create token
+    %token = call i8* @malloc(i64 32)
+    %token_ptr = bitcast i8* %token to %Token*
+    
+    %len = load i64, i64* %buffer_pos
+    %value = call i8* @malloc(i64 %len)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %value, i8* %buffer, i64 %len, i1 false)
+    
+    %type_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 0
+    store i32 13, i32* %type_ptr  ; TOKEN_BYTEVECTOR
+    
+    %val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 1
+    store i8* %value, i8** %val_ptr
+    
+    %len_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 2
+    store i64 %len, i64* %len_val_ptr
+    
+    %line_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 3
+    %line = load i32, i32* %line_ptr
+    %line_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 3
+    store i32 %line, i32* %line_val_ptr
+    
+    %col_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
+    %col = load i32, i32* %col_ptr
+    %col_val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 4
+    store i32 %col, i32* %col_val_ptr
+    
+    call void @free(i8* %buffer)
+    ret %Token* %token_ptr
+
+error:
+    call void @free(i8* %buffer)
+    %error_msg = call %Token* @lex_error(%Lexer* %lexer, i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.invalid_bytevector, i32 0, i32 0))
+    ret %Token* %error_msg
+}
+
 ; Skip comment
 ; lex_skip_comment: Skip a line comment (semicolon to newline)
 ; Parameters:
 ;   lexer: Pointer to Lexer structure
 define void @lex_skip_comment(%Lexer* %lexer) {
 entry:
+    br label %loop
+
+loop:
     %char = call i8 @lex_current_char(%Lexer* %lexer)
     %char_int = zext i8 %char to i32
     %is_eof = call i32 @lex_is_eof(%Lexer* %lexer)
@@ -403,7 +618,7 @@ entry:
 
 continue:
     call void @lex_advance(%Lexer* %lexer)
-    br label %entry
+    br label %loop
 
 exit:
     ret void
@@ -425,8 +640,8 @@ entry:
 eof:
     %eof_token = call i8* @malloc(i64 32)
     %eof_token_ptr = bitcast i8* %eof_token to %Token*
-    %type_ptr = getelementptr %Token, %Token* %eof_token_ptr, i32 0, i32 0
-    store i32 0, i32* %type_ptr  ; TOKEN_EOF
+    %type_ptr_eof = getelementptr %Token, %Token* %eof_token_ptr, i32 0, i32 0
+    store i32 0, i32* %type_ptr_eof  ; TOKEN_EOF
     ret %Token* %eof_token_ptr
 
 not_eof:
@@ -445,11 +660,46 @@ comment:
 
 check_string:
     %is_dquote = icmp eq i32 %char_int, 34
-    br i1 %is_dquote, label %string, label %check_lparen
+    br i1 %is_dquote, label %string, label %check_vertical_bar
 
 string:
     %str_token = call %Token* @lex_read_string(%Lexer* %lexer)
     ret %Token* %str_token
+
+check_vertical_bar:
+    %is_vbar = icmp eq i32 %char_int, 124  ; Vertical bar |
+    br i1 %is_vbar, label %vertical_bar_symbol, label %check_hash
+
+vertical_bar_symbol:
+    %vbar_token = call %Token* @lex_read_vertical_bar_symbol(%Lexer* %lexer)
+    ret %Token* %vbar_token
+
+check_hash:
+    %is_hash = icmp eq i32 %char_int, 35  ; Hash #
+    br i1 %is_hash, label %check_bytevector, label %check_lparen
+
+check_bytevector:
+    ; Check if next characters are "u8("
+    %peek1 = call i8 @lex_peek_char(%Lexer* %lexer, i64 1)
+    %peek1_int = zext i8 %peek1 to i32
+    %is_u = icmp eq i32 %peek1_int, 117  ; 'u'
+    br i1 %is_u, label %check_u8, label %identifier
+
+check_u8:
+    %peek2 = call i8 @lex_peek_char(%Lexer* %lexer, i64 2)
+    %peek2_int = zext i8 %peek2 to i32
+    %is_8 = icmp eq i32 %peek2_int, 56  ; '8'
+    br i1 %is_8, label %check_u8_lparen, label %identifier
+
+check_u8_lparen:
+    %peek3 = call i8 @lex_peek_char(%Lexer* %lexer, i64 3)
+    %peek3_int = zext i8 %peek3 to i32
+    %is_lparen_u8 = icmp eq i32 %peek3_int, 40  ; '('
+    br i1 %is_lparen_u8, label %bytevector, label %identifier
+
+bytevector:
+    %bytevec_token = call %Token* @lex_read_bytevector(%Lexer* %lexer)
+    ret %Token* %bytevec_token
 
 check_lparen:
     %is_lparen = icmp eq i32 %char_int, 40
@@ -458,8 +708,8 @@ check_lparen:
 lparen:
     %lparen_token = call i8* @malloc(i64 32)
     %lparen_token_ptr = bitcast i8* %lparen_token to %Token*
-    %type_ptr = getelementptr %Token, %Token* %lparen_token_ptr, i32 0, i32 0
-    store i32 5, i32* %type_ptr  ; TOKEN_LPAREN
+    %type_ptr_lparen = getelementptr %Token, %Token* %lparen_token_ptr, i32 0, i32 0
+    store i32 5, i32* %type_ptr_lparen  ; TOKEN_LPAREN
     call void @lex_advance(%Lexer* %lexer)
     ret %Token* %lparen_token_ptr
 
@@ -470,8 +720,8 @@ check_rparen:
 rparen:
     %rparen_token = call i8* @malloc(i64 32)
     %rparen_token_ptr = bitcast i8* %rparen_token to %Token*
-    %type_ptr = getelementptr %Token, %Token* %rparen_token_ptr, i32 0, i32 0
-    store i32 6, i32* %type_ptr  ; TOKEN_RPAREN
+    %type_ptr_rparen = getelementptr %Token, %Token* %rparen_token_ptr, i32 0, i32 0
+    store i32 6, i32* %type_ptr_rparen  ; TOKEN_RPAREN
     call void @lex_advance(%Lexer* %lexer)
     ret %Token* %rparen_token_ptr
 
@@ -482,8 +732,8 @@ check_quote_char:
 quote:
     %quote_token = call i8* @malloc(i64 32)
     %quote_token_ptr = bitcast i8* %quote_token to %Token*
-    %type_ptr = getelementptr %Token, %Token* %quote_token_ptr, i32 0, i32 0
-    store i32 7, i32* %type_ptr  ; TOKEN_QUOTE
+    %type_ptr_quote = getelementptr %Token, %Token* %quote_token_ptr, i32 0, i32 0
+    store i32 7, i32* %type_ptr_quote  ; TOKEN_QUOTE
     call void @lex_advance(%Lexer* %lexer)
     ret %Token* %quote_token_ptr
 
@@ -494,8 +744,8 @@ identifier:
     br label %read_loop
 
 read_loop:
-    %char = call i8 @lex_current_char(%Lexer* %lexer)
-    %is_delim = call i32 @lex_is_delimiter(i8 %char)
+    %char_loop = call i8 @lex_current_char(%Lexer* %lexer)
+    %is_delim = call i32 @lex_is_delimiter(i8 %char_loop)
     %delim_bool = icmp ne i32 %is_delim, 0
     br i1 %delim_bool, label %done_id, label %continue_id
 
@@ -562,6 +812,10 @@ entry:
     
     ret %Token* %error_token_ptr
 }
+
+; String literals
+@.str.unclosed_vbar = private unnamed_addr constant [29 x i8] c"Unclosed vertical bar symbol\00"
+@.str.invalid_bytevector = private unnamed_addr constant [26 x i8] c"Invalid bytevector syntax\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)

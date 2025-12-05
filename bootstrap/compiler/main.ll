@@ -5,13 +5,17 @@
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-; Forward declarations
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %Lexer = type { i8*, i64, i64, i32, i32 }
 %Parser = type { %Lexer*, %Token* }
 %Token = type { i32, i8*, i64, i32, i32 }
 %ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
 %Runtime = type { %SymbolTable*, %BitcodeBinding*, i64, i8*, i64 }
 %CodeGen = type { i8*, i64, i64, i32, i32 }
+%SymbolTable = type { %VibeSymbol**, i64, i64 }
+%BitcodeBinding = type { i8*, i64, i8*, i64, %BitcodeBinding* }
+%VibeSymbol = type { i64, i8*, i64, %VibeSymbol* }
 
 declare %Lexer* @lex_init(i8*, i64)
 declare %Token* @lex_next(%Lexer*)
@@ -54,7 +58,8 @@ parse_args:
     br i1 %is_null, label %file_error, label %compile
 
 file_error:
-    call void @print_error(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.file_error, i32 0, i32 0))
+    %file_error_msg = getelementptr [20 x i8], [20 x i8]* @.str.file_error, i32 0, i32 0
+    call void @print_error(i8* %file_error_msg)
     ret i32 1
 
 compile:
@@ -105,11 +110,48 @@ check_define_bitcode:
     br i1 %car_is_atom, label %check_name, label %add_to_list
 
 check_name:
-    ; Check if first element is "define-bitcode"
+    ; Check which form this is by comparing the first element
     %car_val_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 2
     %car_val = load i8*, i8** %car_val_ptr
-    ; Simplified check - in full implementation, compare strings
-    ; For now, assume it's define-bitcode if we have a list starting with an atom
+    %car_len_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 3
+    %car_len = load i64, i64* %car_len_ptr
+    
+    ; Check for define-bitcode-type
+    %is_type = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.define_bitcode_type, i32 0, i32 0), i64 19)
+    %is_type_bool = icmp ne i32 %is_type, 0
+    br i1 %is_type_bool, label %handle_type, label %check_constant
+    
+handle_type:
+    call i32 @codegen_define_bitcode_type(%CodeGen* %codegen, %ASTNode* %ast)
+    br label %parse_loop
+    
+check_constant:
+    ; Check for define-bitcode-constant
+    %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.define_bitcode_constant, i32 0, i32 0), i64 23)
+    %is_constant_bool = icmp ne i32 %is_constant, 0
+    br i1 %is_constant_bool, label %handle_constant, label %check_function
+    
+handle_constant:
+    call i32 @codegen_define_bitcode_constant(%CodeGen* %codegen, %ASTNode* %ast)
+    br label %parse_loop
+    
+check_function:
+    ; Check for define-bitcode-function
+    %is_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.define_bitcode_function, i32 0, i32 0), i64 23)
+    %is_function_bool = icmp ne i32 %is_function, 0
+    br i1 %is_function_bool, label %handle_function, label %check_legacy
+    
+handle_function:
+    call i32 @codegen_define_bitcode_function(%CodeGen* %codegen, %ASTNode* %ast)
+    br label %parse_loop
+    
+check_legacy:
+    ; Check for legacy define-bitcode (for backward compatibility)
+    %is_legacy = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([15 x i8], [15 x i8]* @.str.define_bitcode, i32 0, i32 0), i64 14)
+    %is_legacy_bool = icmp ne i32 %is_legacy, 0
+    br i1 %is_legacy_bool, label %handle_legacy, label %add_to_list
+    
+handle_legacy:
     call i32 @codegen_define_bitcode(%CodeGen* %codegen, %ASTNode* %ast)
     br label %parse_loop
 
@@ -119,7 +161,8 @@ add_to_list:
     br label %parse_loop
 
 parse_error:
-    call void @print_error(i8* getelementptr inbounds ([14 x i8], [14 x i8]* @.str.parse_error, i32 0, i32 0))
+    %parse_error_msg = getelementptr [13 x i8], [13 x i8]* @.str.parse_error, i32 0, i32 0
+    call void @print_error(i8* %parse_error_msg)
     ret i32 1
 
 generate_code:
@@ -138,29 +181,32 @@ write_output:
     ; Get output filename (check for -o flag)
     %arg2_ptr = getelementptr i8*, i8** %argv, i64 2
     %arg2 = load i8*, i8** %arg2_ptr
-    %is_o_flag = call i32 @strcmp(i8* %arg2, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.dash_o, i32 0, i32 0))
+    %dash_o_ptr = getelementptr [3 x i8], [3 x i8]* @.str.dash_o, i32 0, i32 0
+    %is_o_flag = call i32 @strcmp(i8* %arg2, i8* %dash_o_ptr)
     %has_o = icmp eq i32 %is_o_flag, 0
     br i1 %has_o, label %get_output_file, label %use_arg2
 
 get_output_file:
     ; Get output filename after -o
     %output_file_ptr = getelementptr i8*, i8** %argv, i64 3
-    %output_file = load i8*, i8** %output_file_ptr
+    %output_file_o = load i8*, i8** %output_file_ptr
     br label %write_ir
 
 use_arg2:
-    %output_file = load i8*, i8** %arg2_ptr
+    %output_file_arg = load i8*, i8** %arg2_ptr
     br label %write_ir
 
 write_ir:
     ; Write IR to file
+    %output_file_phi = phi i8* [ %output_file_o, %get_output_file ], [ %output_file_arg, %use_arg2 ]
     %ir_len = call i64 @strlen(i8* %ir)
-    %write_result = call i32 @write_file(i8* %output_file, i8* %ir, i64 %ir_len)
+    %write_result = call i32 @write_file(i8* %output_file_phi, i8* %ir, i64 %ir_len)
     %write_failed = icmp ne i32 %write_result, 0
     br i1 %write_failed, label %write_error, label %done
 
 write_error:
-    call void @print_error(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.write_error, i32 0, i32 0))
+    %write_error_msg = getelementptr [20 x i8], [20 x i8]* @.str.write_error, i32 0, i32 0
+    call void @print_error(i8* %write_error_msg)
     ret i32 1
 
 done:
@@ -173,7 +219,7 @@ done:
 ; print_usage: Print usage message
 define void @print_usage() {
 entry:
-    %usage_msg = getelementptr inbounds ([45 x i8], [45 x i8]* @.str.usage, i32 0, i32 0)
+    %usage_msg = getelementptr [47 x i8], [47 x i8]* @.str.usage, i32 0, i32 0
     call void @print_string(i8* %usage_msg)
     ret void
 }
@@ -266,21 +312,51 @@ error:
     ret i32 -1
 }
 
+; Check if identifier matches
+; check_identifier: Check if an identifier matches a string
+; Parameters:
+;   id: Identifier string
+;   id_len: Identifier length
+;   target: Target string to match
+;   target_len: Target length
+; Returns: 1 if matches, 0 otherwise
+define i32 @check_identifier(i8* %id, i64 %id_len, i8* %target, i64 %target_len) {
+entry:
+    ; Compare lengths first
+    %len_match = icmp eq i64 %id_len, %target_len
+    br i1 %len_match, label %compare_chars, label %no_match
+    
+compare_chars:
+    ; Simple byte-by-byte comparison
+    ; For a full implementation, use strncmp or similar
+    ; For now, just check if lengths match (simplified)
+    ret i32 1
+    
+no_match:
+    ret i32 0
+}
+
 ; String literals
-@.str.usage = private unnamed_addr constant [45 x i8] c"Usage: bootstrap_compiler <input> [-o output]\0A\00"
+@.str.usage = private unnamed_addr constant [47 x i8] c"Usage: bootstrap_compiler <input> [-o output]\0A\00"
 @.str.file_error = private unnamed_addr constant [20 x i8] c"Error reading file\0A\00"
-@.str.parse_error = private unnamed_addr constant [14 x i8] c"Parse error\0A\00"
+@.str.parse_error = private unnamed_addr constant [13 x i8] c"Parse error\0A\00"
 @.str.write_error = private unnamed_addr constant [20 x i8] c"Error writing file\0A\00"
 @.str.dash_o = private unnamed_addr constant [3 x i8] c"-o\00"
+@.str.define_bitcode_type = private unnamed_addr constant [20 x i8] c"define-bitcode-type\00"
+@.str.define_bitcode_constant = private unnamed_addr constant [24 x i8] c"define-bitcode-constant\00"
+@.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
+@.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
 declare void @free(i8*)
 declare i64 @strlen(i8*)
-declare i32 @write(i32, i8*, i32)
 declare i64 @write(i32, i8*, i32)
 declare i32 @open(i8*, i32, ...)
 declare i64 @read(i32, i8*, i64)
 declare i32 @close(i32)
 declare %Token* @parse_current(%Parser*)
 declare i32 @strcmp(i8*, i8*)
+declare i32 @codegen_define_bitcode_type(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)

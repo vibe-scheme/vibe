@@ -68,9 +68,10 @@ message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "LLVM tools directory: ${LLVM_TOOLS_BINARY_DIR}")
 
 # Verify required LLVM tools are available
-find_program(LLVM_AS NAMES llvm-as PATHS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
-find_program(LLVM_LINK NAMES llvm-link PATHS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
-find_program(LLC NAMES llc PATHS ${LLVM_TOOLS_BINARY_DIR} REQUIRED)
+# Search in LLVM_TOOLS_BINARY_DIR first to avoid finding old versions in PATH
+find_program(LLVM_AS NAMES llvm-as PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
+find_program(LLVM_LINK NAMES llvm-link PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
+find_program(LLC NAMES llc PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
 
 message(STATUS "Found llvm-as: ${LLVM_AS}")
 message(STATUS "Found llvm-link: ${LLVM_LINK}")
@@ -85,52 +86,97 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Shared Types - LLVM bitcode module (must be built first)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/types/types.ll -o ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/types/types.ll
+    COMMENT "Assembling types bitcode"
+)
+
+add_custom_target(bootstrap_types DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc)
+
 # Bootstrap Lexer - LLVM bitcode module
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll
-    COMMENT "Assembling lexer bitcode"
+    COMMENT "Assembling lexer bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+    COMMENT "Linking lexer with types"
 )
 
 add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
 
 # Bootstrap Parser - LLVM bitcode module
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll -o ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll
-    COMMENT "Assembling parser bitcode"
+    COMMENT "Assembling parser bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+    COMMENT "Linking parser with types"
 )
 
 add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
 
 # Bootstrap Runtime - LLVM bitcode module
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/runtime/runtime.ll -o ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_runtime_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/runtime/runtime.ll -o ${CMAKE_BINARY_DIR}/bootstrap_runtime_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/runtime/runtime.ll
-    COMMENT "Assembling runtime bitcode"
+    COMMENT "Assembling runtime bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_runtime_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_runtime_temp.bc
+    COMMENT "Linking runtime with types"
 )
 
 add_custom_target(bootstrap_runtime DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc)
 
 # FFI System - LLVM bitcode module
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/runtime/ffi.ll -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/runtime/ffi.ll -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/runtime/ffi.ll
-    COMMENT "Assembling FFI bitcode"
+    COMMENT "Assembling FFI bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
+    COMMENT "Linking FFI with types"
 )
 
 add_custom_target(bootstrap_ffi DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc)
 
 # Bootstrap Code Generator - LLVM bitcode module
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/compiler/codegen.ll -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/compiler/codegen.ll -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/compiler/codegen.ll
-    COMMENT "Assembling codegen bitcode"
+    COMMENT "Assembling codegen bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
+    COMMENT "Linking codegen with types"
 )
 
 add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
@@ -138,10 +184,17 @@ add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codege
 # Bootstrap Compiler - Main executable
 # First compile main.ll to bitcode, then link all modules and compile to native
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/compiler/main.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
+    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/compiler/main.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
     DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/compiler/main.ll
-    COMMENT "Assembling compiler main bitcode"
+    COMMENT "Assembling compiler main bitcode (temp)"
+)
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
+    COMMENT "Linking compiler main with types"
 )
 
 add_custom_command(
@@ -186,7 +239,7 @@ elseif(APPLE)
 endif()
 
 # Make bootstrap_compiler depend on all bitcode modules
-add_dependencies(bootstrap_compiler bootstrap_lexer bootstrap_parser bootstrap_runtime bootstrap_ffi bootstrap_codegen)
+add_dependencies(bootstrap_compiler bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_runtime bootstrap_ffi bootstrap_codegen)
 
 # Testing
 enable_testing()

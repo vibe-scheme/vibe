@@ -5,7 +5,8 @@
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
-; Forward declarations from lexer
+; Forward declarations from types.ll
+; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %Token = type { i32, i8*, i64, i32, i32 }
 %Lexer = type { i8*, i64, i64, i32, i32 }
 
@@ -19,27 +20,12 @@ declare %Token* @lex_peek(%Lexer*)
 ; AST_QUASIQUOTE = 3
 ; AST_UNQUOTE = 4
 ; AST_UNQUOTE_SPLICING = 5
+; AST_DEFINE_BITCODE_TYPE = 6
+; AST_DEFINE_BITCODE_CONSTANT = 7
+; AST_DEFINE_BITCODE_FUNCTION = 8
 
-; AST node structure
-; struct ASTNode {
-;     i32 type;           // Node type
-;     i32 atom_type;      // Atom type (if AST_ATOM): TOKEN_IDENTIFIER, TOKEN_NUMBER, etc.
-;     i8* value;          // Value (for atoms)
-;     i64 value_len;      // Value length
-;     %ASTNode* car;      // First element (for lists)
-;     %ASTNode* cdr;      // Rest of list (for lists)
-;     i32 line;           // Line number
-;     i32 column;         // Column number
-; }
-
+; Forward declarations from types.ll (continued)
 %ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
-
-; Parser state structure
-; struct Parser {
-;     %Lexer* lexer;      // Lexer instance
-;     %Token* current;    // Current token
-; }
-
 %Parser = type { %Lexer*, %Token* }
 
 ; Initialize parser with lexer
@@ -198,17 +184,17 @@ parse_start:
 
 empty_list:
     call void @parse_advance(%Parser* %parser)  ; Consume RPAREN
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
-    store %ASTNode* null, %ASTNode** %car_ptr
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %cdr_ptr
+    %car_ptr_empty = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
+    store %ASTNode* null, %ASTNode** %car_ptr_empty
+    %cdr_ptr_empty = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* null, %ASTNode** %cdr_ptr_empty
     ret %ASTNode* %list_node_ptr
 
 parse_elements:
     ; Parse first element
     %first = call %ASTNode* @parse_expr(%Parser* %parser)
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
-    store %ASTNode* %first, %ASTNode** %car_ptr
+    %car_ptr_elements = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 4
+    store %ASTNode* %first, %ASTNode** %car_ptr_elements
     
     ; Check for dot notation (improper list)
     %is_dot = call i32 @parse_check(%Parser* %parser, i32 11)  ; TOKEN_DOT
@@ -218,8 +204,8 @@ parse_elements:
 dot_notation:
     call void @parse_advance(%Parser* %parser)  ; Consume DOT
     %cdr_expr = call %ASTNode* @parse_expr(%Parser* %parser)
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
-    store %ASTNode* %cdr_expr, %ASTNode** %cdr_ptr
+    %cdr_ptr_dot = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* %cdr_expr, %ASTNode** %cdr_ptr_dot
     
     ; Expect right parenthesis
     %is_rparen2 = call i32 @parse_check(%Parser* %parser, i32 6)  ; TOKEN_RPAREN
@@ -233,8 +219,8 @@ done_dot:
 parse_rest:
     ; Parse rest of list
     %rest = call %ASTNode* @parse_list_tail(%Parser* %parser)
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
-    store %ASTNode* %rest, %ASTNode** %cdr_ptr
+    %cdr_ptr_rest = getelementptr %ASTNode, %ASTNode* %list_node_ptr, i32 0, i32 5
+    store %ASTNode* %rest, %ASTNode** %cdr_ptr_rest
     ret %ASTNode* %list_node_ptr
 
 error:

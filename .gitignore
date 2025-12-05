@@ -27,4 +27,5 @@ Thumbs.db
 
 # Test output
 test_output/
+test/*.ll
 *.test
