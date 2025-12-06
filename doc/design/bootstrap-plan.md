@@ -105,6 +105,11 @@ The central primitive that enables self-hosting. Binds an LLVM module to a name,
 - Implement platform abstraction (POSIX/Windows)
 - Implement type conversion
 - Implement function calling
+- **FFI-based LLVM Integration**: Use FFI to call LLVM C API for bitcode generation
+  - Load LLVM libraries dynamically via FFI
+  - Resolve LLVM C API function symbols
+  - Create wrappers for LLVM context, module, function creation
+  - Enable direct bitcode generation instead of text IR
 
 ### Phase 6: Compiler Driver
 - Implement main entry point
@@ -127,11 +132,23 @@ The central primitive that enables self-hosting. Binds an LLVM module to a name,
 - Test FFI with simple C library calls
 - Test end-to-end compilation of simple Vibe programs
 
+## FFI-Based LLVM Integration
+
+The bootstrap compiler uses FFI to integrate with LLVM C API, enabling:
+- Direct bitcode generation via LLVM API calls
+- Runtime loading of LLVM libraries
+- Platform abstraction for LLVM integration
+- Future migration path to 2nd gen bootstrap
+
+See `doc/design/ffi-llvm-integration.md` for detailed design.
+
 ## Future Work
 
 Once bootstrap compiler is complete:
 1. Write core Vibe kernel in Vibe itself (using `define-bitcode`)
-2. Implement macro system
-3. Begin self-hosting the compiler
-4. Expand standard library
-5. Optimize code generation
+2. Convert bootstrap .ll files to `define-bitcode-*` methods (2nd gen bootstrap)
+3. Implement macro system
+4. Begin self-hosting the compiler
+5. Expand standard library
+6. Optimize code generation
+7. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation

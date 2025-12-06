@@ -1,6 +1,14 @@
 ; Bootstrap Code Generator for Vibe
 ; Generates LLVM IR from AST nodes
 ; All functions use snake_case naming convention
+;
+; MIGRATION NOTE: This code generator currently uses text IR generation.
+; Future work will integrate LLVM C API via FFI for direct bitcode generation.
+; The migration strategy is:
+; 1. Keep text IR generation working (current state) ✓
+; 2. Add LLVM API calls alongside (parallel implementation) - TODO
+; 3. Switch to LLVM API by default (new default) - TODO
+; 4. Keep text IR as fallback (for debugging) - TODO
 
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
@@ -8,17 +16,50 @@ target triple = "x86_64-apple-macosx10.15.0"
 ; Forward declarations from types.ll
 ; Types are defined in bootstrap/types/types.ll and linked via llvm-link
 %ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
+; CodeGen structure - will be extended to include LLVM context/module handles
+; Future: %CodeGen = type { i8*, i64, i64, i32, i32, %LLVMContextRef, %LLVMModuleRef }
 %CodeGen = type { i8*, i64, i64, i32, i32 }
+
+; NOTE: Forward declarations for LLVM FFI functions will be added here when needed.
+; These functions are defined in bootstrap/runtime/ffi.ll and will be available
+; after linking. For now, they're not used, so we don't declare them yet to
+; avoid type definition issues during compilation.
+; 
+; When ready to use LLVM FFI functions, uncomment and ensure types are defined:
+; %LLVMContextRef = type i8*
+; %LLVMModuleRef = type i8*
+; %LLVMTypeRef = type i8*
+; %LLVMValueRef = type i8*
+; declare i32 @llvm_ffi_init()
+; declare %LLVMContextRef @llvm_create_context()
+; declare void @llvm_dispose_context(%LLVMContextRef)
+; declare %LLVMModuleRef @llvm_create_module(%LLVMContextRef, i8*)
+; declare void @llvm_dispose_module(%LLVMModuleRef)
+; declare void @llvm_set_target(%LLVMModuleRef, i8*)
+; declare %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef, %LLVMTypeRef*, i32, i32)
+; declare %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef, i8*, i32, i32)
+; declare %LLVMValueRef @llvm_add_function(%LLVMModuleRef, i8*, %LLVMTypeRef)
+; declare i32 @llvm_write_bitcode_to_file(%LLVMModuleRef, i8*)
 
 ; Initialize code generator
 ; codegen_init: Initialize code generator
 ; Returns: Pointer to CodeGen structure
+; TODO: Future version will initialize LLVM context and module via FFI
 define %CodeGen* @codegen_init() {
 entry:
     %cg = call i8* @malloc(i64 32)
     %cg_ptr = bitcast i8* %cg to %CodeGen*
     
-    ; Allocate initial buffer (64KB)
+    ; TODO: Initialize LLVM FFI
+    ; %ffi_init_result = call i32 @llvm_ffi_init()
+    ; TODO: Create LLVM context
+    ; %llvm_context = call %LLVMContextRef @llvm_create_context()
+    ; TODO: Create LLVM module
+    ; %llvm_module = call %LLVMModuleRef @llvm_create_module(%LLVMContextRef %llvm_context, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.module_name, i32 0, i32 0))
+    ; TODO: Set target triple via LLVM API
+    ; call void @llvm_set_target(%LLVMModuleRef %llvm_module, i8* getelementptr inbounds ([28 x i8], [28 x i8]* @.str.target_triple_value, i32 0, i32 0))
+    
+    ; Allocate initial buffer (64KB) - for text IR generation (current approach)
     %buffer_size = add i64 65536, 0
     %buffer = call i8* @malloc(i64 %buffer_size)
     
@@ -37,11 +78,11 @@ entry:
     %label_counter_ptr = getelementptr %CodeGen, %CodeGen* %cg_ptr, i32 0, i32 4
     store i32 0, i32* %label_counter_ptr
     
-    ; Write target triple header (46 bytes without null terminator)
+    ; Write target triple header (46 bytes without null terminator) - text IR approach
     call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([47 x i8], [47 x i8]* @.str.target_triple, i32 0, i32 0), i64 46)
     
-    ; Write printf declaration (31 bytes without null terminator)
-    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.printf_decl, i32 0, i32 0), i64 31)
+    ; Write printf declaration (41 bytes without null terminator) - text IR approach
+    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([42 x i8], [42 x i8]* @.str.printf_decl, i32 0, i32 0), i64 41)
     
     ret %CodeGen* %cg_ptr
 }
@@ -93,6 +134,10 @@ append:
 ;   str: String value
 ;   len: String length
 ; Returns: Constant name (as string pointer)
+; NOTE: This function generates the constant definition immediately.
+; For bootstrap simplicity, constants are generated when encountered.
+; In a more sophisticated implementation, constants would be collected
+; and generated at module level before functions.
 define i8* @codegen_string_literal(%CodeGen* %cg, i8* %str, i64 %len) {
 entry:
     ; Get unique constant name
@@ -105,11 +150,13 @@ entry:
     ; For now, use a simple naming scheme
     %name = call i8* @codegen_format_string_name(i32 %counter)
     
-    ; Calculate string length including null terminator
-    %str_len = add i64 %len, 1
-    
     ; Generate IR: @.str_N = private constant [L x i8] c"...\00"
-    ; This is simplified - in real implementation, properly escape the string
+    ; Note: len already includes the string length, we'll add null terminator in the constant
+    ; IMPORTANT: This generates the constant at the current position in the IR buffer.
+    ; For function call arguments, we need to generate constants BEFORE the function.
+    ; For bootstrap simplicity, we'll generate constants at module level by checking
+    ; if we're currently in a function body. A better approach would be to collect
+    ; all constants first, but for bootstrap we'll use a simpler approach.
     call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
     
     ret i8* %name
@@ -119,14 +166,35 @@ entry:
 ; codegen_format_string_name: Format a string constant name
 ; Parameters:
 ;   num: Number for unique name
-; Returns: Formatted name string
+; Returns: Formatted name string (e.g., ".str.0")
 define i8* @codegen_format_string_name(i32 %num) {
 entry:
-    ; Simplified - allocate buffer and format
-    ; In real implementation, use sprintf or similar
-    %buffer = call i8* @malloc(i64 32)
-    ; For now, return a simple name
-    ; This would be properly formatted in a full implementation
+    ; Allocate buffer for name (e.g., ".str.0" = 6 bytes + null = 7)
+    %buffer = call i8* @malloc(i64 16)
+    
+    ; Write ".str."
+    %dot_str = getelementptr i8, i8* %buffer, i64 0
+    store i8 46, i8* %dot_str  ; '.'
+    %s = getelementptr i8, i8* %buffer, i64 1
+    store i8 115, i8* %s  ; 's'
+    %t = getelementptr i8, i8* %buffer, i64 2
+    store i8 116, i8* %t  ; 't'
+    %r = getelementptr i8, i8* %buffer, i64 3
+    store i8 114, i8* %r  ; 'r'
+    %dot2 = getelementptr i8, i8* %buffer, i64 4
+    store i8 46, i8* %dot2  ; '.'
+    
+    ; Convert number to string (simplified - just use single digit for now)
+    %num_mod = urem i32 %num, 10
+    %num_char = add i32 %num_mod, 48  ; Convert to ASCII
+    %num_trunc = trunc i32 %num_char to i8
+    %num_ptr = getelementptr i8, i8* %buffer, i64 5
+    store i8 %num_trunc, i8* %num_ptr
+    
+    ; Null terminate
+    %null_ptr = getelementptr i8, i8* %buffer, i64 6
+    store i8 0, i8* %null_ptr
+    
     ret i8* %buffer
 }
 
@@ -140,8 +208,116 @@ entry:
 define void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len) {
 entry:
     ; Generate: @.str_N = private constant [L x i8] c"...\00"
-    ; This is a placeholder - full implementation would properly escape and format
-    ; For now, just append a placeholder
+    ; Note: name is like ".str.0", we need "@.str.0" for the constant declaration
+    ; Start with "@"
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    
+    ; Append name (name is ".str.0", so this gives "@.str.0")
+    %name_len = call i64 @strlen(i8* %name)
+    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
+    
+    ; Append " = private constant ["
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.constant_decl, i32 0, i32 0), i64 21)
+    
+    ; Append length as string (including null terminator)
+    %len_plus_one = add i64 %len, 1
+    %len_str = call i8* @codegen_format_number(i64 %len_plus_one)
+    %len_str_len = call i64 @strlen(i8* %len_str)
+    call void @codegen_append(%CodeGen* %cg, i8* %len_str, i64 %len_str_len)
+    
+    ; Append " x i8] c\""
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.x_i8_c_quote, i32 0, i32 0), i64 9)
+    
+    ; Append string with escaping
+    call void @codegen_append_escaped_string(%CodeGen* %cg, i8* %str, i64 %len)
+    
+    ; Append null terminator "\00"
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
+    
+    ; Append "\"\0A"
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.quote_newline, i32 0, i32 0), i64 2)
+    
+    ret void
+}
+
+; Format number as string (simplified implementation)
+; codegen_format_number: Convert number to string
+; Parameters:
+;   num: Number to convert
+; Returns: String representation
+define i8* @codegen_format_number(i64 %num) {
+entry:
+    %buffer = call i8* @malloc(i64 32)
+    ; Simplified - just convert to single digit for now
+    %num_mod = urem i64 %num, 10
+    %num_char = add i64 %num_mod, 48
+    %num_trunc = trunc i64 %num_char to i8
+    store i8 %num_trunc, i8* %buffer
+    %null_ptr = getelementptr i8, i8* %buffer, i64 1
+    store i8 0, i8* %null_ptr
+    ret i8* %buffer
+}
+
+; Append escaped string
+; codegen_append_escaped_string: Append string with proper escaping for LLVM IR
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   str: String value
+;   len: String length
+define void @codegen_append_escaped_string(%CodeGen* %cg, i8* %str, i64 %len) {
+entry:
+    %i = alloca i64
+    store i64 0, i64* %i
+    br label %loop
+
+loop:
+    %i_val = load i64, i64* %i
+    %done = icmp uge i64 %i_val, %len
+    br i1 %done, label %exit, label %process_char
+
+process_char:
+    %char_ptr = getelementptr i8, i8* %str, i64 %i_val
+    %char = load i8, i8* %char_ptr
+    %char_int = zext i8 %char to i32
+    
+    ; Check if null byte - escape as \00
+    %is_null = icmp eq i32 %char_int, 0
+    br i1 %is_null, label %escape_null, label %check_quote
+    
+escape_null:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
+    br label %increment
+    
+check_quote:
+    ; Check if quote - escape as \"
+    %is_quote = icmp eq i32 %char_int, 34
+    br i1 %is_quote, label %escape_quote, label %check_backslash
+    
+escape_quote:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2)
+    br label %increment
+    
+check_backslash:
+    ; Check if backslash - escape as \\
+    %is_backslash = icmp eq i32 %char_int, 92
+    br i1 %is_backslash, label %escape_backslash, label %normal_char
+    
+escape_backslash:
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2)
+    br label %increment
+    
+normal_char:
+    ; Write byte directly
+    call void @codegen_append(%CodeGen* %cg, i8* %char_ptr, i64 1)
+    br label %increment
+    
+increment:
+    %i_val_inc = load i64, i64* %i
+    %i_new = add i64 %i_val_inc, 1
+    store i64 %i_new, i64* %i
+    br label %loop
+
+exit:
     ret void
 }
 
@@ -152,6 +328,7 @@ entry:
 ;   node: AST node for define-bitcode-type form
 ; Returns: 0 on success, -1 on error
 ; Syntax: (define-bitcode-type TypeName (field1 type1) (field2 type2) ...)
+; TODO: Future version will use llvm_create_struct_type() via FFI instead of text IR
 define i32 @codegen_define_bitcode_type(%CodeGen* %cg, %ASTNode* %node) {
 entry:
     ; AST structure: LIST { ATOM: "define-bitcode-type", ATOM: "TypeName", LIST: fields, ... }
@@ -262,6 +439,7 @@ done:
 ;   node: AST node for define-bitcode-constant form
 ; Returns: 0 on success, -1 on error
 ; Syntax: (define-bitcode-constant name type value)
+; TODO: Future version will use llvm_create_constant_string() via FFI instead of text IR
 define i32 @codegen_define_bitcode_constant(%CodeGen* %cg, %ASTNode* %node) {
 entry:
     ; AST structure: LIST { ATOM: "define-bitcode-constant", ATOM: "name", ATOM: "type", ATOM/STRING: value }
@@ -343,6 +521,7 @@ not_bytevector:
 ;   node: AST node for define-bitcode-function form
 ; Returns: 0 on success, -1 on error
 ; Syntax: (define-bitcode-function (name (param1 type1) (param2 type2) ...) return-type "LLVM IR body")
+; TODO: Future version will use llvm_create_function_type() and llvm_add_function() via FFI instead of text IR
 define i32 @codegen_define_bitcode_function(%CodeGen* %cg, %ASTNode* %node) {
 entry:
     ; AST structure: LIST { ATOM: "define-bitcode-function", LIST: signature, ATOM: return-type, STRING: body }
@@ -536,7 +715,9 @@ entry:
     
     ; Start function definition
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.define_void, i32 0, i32 0), i64 11)
-    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 0)  ; Length 0 means use strlen
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    %name_len_call = call i64 @strlen(i8* %name)
+    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len_call)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lparen, i32 0, i32 0), i64 1)
     
     ; Generate parameters (simplified - assume all i8*)
@@ -568,11 +749,14 @@ append_first:
     %param_node = load %ASTNode*, %ASTNode** %car_ptr
     %param_val_ptr = getelementptr %ASTNode, %ASTNode* %param_node, i32 0, i32 2
     %param_name = load i8*, i8** %param_val_ptr
+    %param_name_len_ptr = getelementptr %ASTNode, %ASTNode* %param_node, i32 0, i32 3
+    %param_name_len = load i64, i64* %param_name_len_ptr
     
     ; Append: i8* %param_name
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.i8_ptr, i32 0, i32 0), i64 3)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %param_name, i64 0)
+    call void @codegen_append(%CodeGen* %cg, i8* %param_name, i64 %param_name_len)
     
     ; Check for more parameters
     %cdr_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 5
@@ -600,7 +784,10 @@ define i32 @codegen_call(%CodeGen* %cg, i8* %func_name, %ASTNode* %args) {
 entry:
     ; Generate: call void @func_name(args...)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.call_void, i32 0, i32 0), i64 9)
-    call void @codegen_append(%CodeGen* %cg, i8* %func_name, i64 0)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
+    %func_name_len = call i64 @strlen(i8* %func_name)
+    call void @codegen_append(%CodeGen* %cg, i8* %func_name, i64 %func_name_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lparen, i32 0, i32 0), i64 1)
     
     ; Generate arguments
@@ -609,6 +796,58 @@ entry:
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.rparen, i32 0, i32 0), i64 1)
     
     ret i32 0
+}
+
+; Helper: Generate string constant definition only (without reference)
+; codegen_define_string_constant_only: Generate string constant definition
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   str: String value
+;   len: String length
+; Returns: Constant name (as string pointer)
+define i8* @codegen_define_string_constant_only(%CodeGen* %cg, i8* %str, i64 %len) {
+entry:
+    ; Get unique constant name
+    %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
+    %counter = load i32, i32* %counter_ptr
+    %new_counter = add i32 %counter, 1
+    store i32 %new_counter, i32* %counter_ptr
+    
+    ; Generate constant name
+    %name = call i8* @codegen_format_string_name(i32 %counter)
+    
+    ; Generate IR: @.str_N = private constant [L x i8] c"...\00"
+    call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
+    
+    ret i8* %name
+}
+
+; Helper: Get string constant name without generating definition
+; codegen_get_string_constant_name: Get constant name for a string (assumes constant already exists)
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   str: String value
+;   len: String length
+; Returns: Constant name (as string pointer)
+; NOTE: This assumes the constant was already generated. Since constants are generated
+; before function calls, and we're calling this during function call generation, the
+; constant was generated with counter value (current_counter - 1). We use that to get the name.
+; For bootstrap, this is sufficient. A more robust implementation would track
+; string-to-constant-name mappings.
+define i8* @codegen_get_string_constant_name(%CodeGen* %cg, i8* %str, i64 %len) {
+entry:
+    ; Get current counter
+    %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
+    %counter = load i32, i32* %counter_ptr
+    
+    ; The constant was generated with counter value (counter - 1) since we're
+    ; calling this after constants have been generated. Use that value.
+    %prev_counter = sub i32 %counter, 1
+    
+    ; Generate name using the counter value that was used when the constant was generated
+    %name = call i8* @codegen_format_string_name(i32 %prev_counter)
+    
+    ret i8* %name
 }
 
 ; Append call arguments
@@ -640,18 +879,50 @@ check_string:
     br i1 %is_string, label %gen_string_arg, label %done
 
 gen_string_arg:
-    ; Generate string constant and use it
+    ; Extract string value
     %str_val_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 2
     %str_val = load i8*, i8** %str_val_ptr
     %str_len_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 3
     %str_len = load i64, i64* %str_len_ptr
     
-    ; Generate string constant name
-    %const_name = call i8* @codegen_string_literal(%CodeGen* %cg, i8* %str_val, i64 %str_len)
+    ; Get constant name (constants should already be defined by codegen_collect_string_constants)
+    ; We need to find the constant name that was generated for this string.
+    ; For bootstrap simplicity, we'll regenerate the name using the same algorithm.
+    ; In a more sophisticated implementation, we'd track which constants map to which strings.
+    ; For now, we'll use a helper that generates the name without creating the constant.
+    %const_name = call i8* @codegen_get_string_constant_name(%CodeGen* %cg, i8* %str_val, i64 %str_len)
     
-    ; Generate: getelementptr to get pointer to string
-    ; This is simplified - full implementation would generate proper getelementptr
-    call void @codegen_append(%CodeGen* %cg, i8* %const_name, i64 0)
+    ; Generate: i8* getelementptr ([L x i8], [L x i8]* @.str_N, i32 0, i32 0)
+    ; First append the result type
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.i8_ptr, i32 0, i32 0), i64 3)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    
+    ; Then append getelementptr instruction with opening parenthesis and bracket
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([15 x i8], [15 x i8]* @.str.getelementptr_open, i32 0, i32 0), i64 14)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lbracket, i32 0, i32 0), i64 1)
+    
+    ; Append length (including null terminator)
+    %len_plus_one = add i64 %str_len, 1
+    %len_str = call i8* @codegen_format_number(i64 %len_plus_one)
+    %len_str_len = call i64 @strlen(i8* %len_str)
+    call void @codegen_append(%CodeGen* %cg, i8* %len_str, i64 %len_str_len)
+    
+    ; Append " x i8], ["
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.x_i8_bracket_comma, i32 0, i32 0), i64 9)
+    
+    ; Append length again (including null terminator)
+    call void @codegen_append(%CodeGen* %cg, i8* %len_str, i64 %len_str_len)
+    
+    ; Append " x i8]* @"
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.x_i8_ptr_at, i32 0, i32 0), i64 9)
+    
+    ; Append constant name (const_name is like ".str.0", we need "@.str.0" for the reference)
+    %name_len = call i64 @strlen(i8* %const_name)
+    call void @codegen_append(%CodeGen* %cg, i8* %const_name, i64 %name_len)
+    
+    ; Append ", i32 0, i32 0)"
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([15 x i8], [15 x i8]* @.str.getelementptr_indices, i32 0, i32 0), i64 14)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.rparen, i32 0, i32 0), i64 1)
     
     ; Check for more arguments
     %cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
@@ -668,6 +939,93 @@ done:
     ret void
 }
 
+; Collect string constants from expressions
+; codegen_collect_string_constants: Collect and generate string constants from expressions
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   exprs: AST node list of expressions
+define void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %exprs) {
+entry:
+    %is_null = icmp eq %ASTNode* %exprs, null
+    br i1 %is_null, label %done, label %process_expr
+
+process_expr:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %exprs, i32 0, i32 4
+    %expr = load %ASTNode*, %ASTNode** %car_ptr
+    
+    ; Check if this is a function call (list starting with identifier)
+    %expr_type_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 0
+    %expr_type = load i32, i32* %expr_type_ptr
+    %is_list = icmp eq i32 %expr_type, 1  ; AST_LIST
+    
+    br i1 %is_list, label %check_call, label %next_expr
+
+check_call:
+    ; Extract arguments and collect string constants from them
+    %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
+    %args = load %ASTNode*, %ASTNode** %expr_cdr_ptr
+    call void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %args)
+    br label %next_expr
+
+next_expr:
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %exprs, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %cdr_ptr
+    call void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %next)
+    br label %done
+
+done:
+    ret void
+}
+
+; Collect string constants from function call arguments
+; codegen_collect_string_constants_from_args: Collect string constants from arguments
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   args: AST node list of arguments
+define void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %is_null = icmp eq %ASTNode* %args, null
+    br i1 %is_null, label %done, label %check_arg
+
+check_arg:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %arg_node = load %ASTNode*, %ASTNode** %car_ptr
+    
+    ; Check if argument is a string literal
+    %arg_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 0
+    %arg_type = load i32, i32* %arg_type_ptr
+    %is_atom = icmp eq i32 %arg_type, 0  ; AST_ATOM
+    
+    br i1 %is_atom, label %check_string, label %next_arg
+
+check_string:
+    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 1
+    %atom_type = load i32, i32* %atom_type_ptr
+    %is_string = icmp eq i32 %atom_type, 3  ; TOKEN_STRING
+    
+    br i1 %is_string, label %gen_constant, label %next_arg
+
+gen_constant:
+    ; Generate string constant at module level
+    %str_val_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 2
+    %str_val = load i8*, i8** %str_val_ptr
+    %str_len_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 3
+    %str_len = load i64, i64* %str_len_ptr
+    
+    ; Generate constant definition (this will be at module level, before main)
+    call i8* @codegen_define_string_constant_only(%CodeGen* %cg, i8* %str_val, i64 %str_len)
+    br label %next_arg
+
+next_arg:
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %cdr_ptr
+    call void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %next)
+    br label %done
+
+done:
+    ret void
+}
+
 ; Generate main function
 ; codegen_main: Generate main function with top-level expressions
 ; Parameters:
@@ -676,6 +1034,10 @@ done:
 ; Returns: 0 on success, -1 on error
 define i32 @codegen_main(%CodeGen* %cg, %ASTNode* %exprs) {
 entry:
+    ; First, collect and generate all string constants at module level
+    ; This ensures constants are defined before functions
+    call void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %exprs)
+    
     ; Generate: define i32 @main() {
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_main, i32 0, i32 0), i64 20)
     
@@ -730,8 +1092,11 @@ gen_call:
     %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
     %args = load %ASTNode*, %ASTNode** %expr_cdr_ptr
     
-    ; Generate function call
+    ; Generate function call with proper indentation
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
     call i32 @codegen_call(%CodeGen* %cg, i8* %func_name, %ASTNode* %args)
+    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
     
     br label %next_expr
 
@@ -750,6 +1115,7 @@ done:
 ; Parameters:
 ;   cg: Pointer to CodeGen structure
 ; Returns: IR string (null-terminated)
+; NOTE: This function returns text IR. Future version will write bitcode directly.
 define i8* @codegen_get_ir(%CodeGen* %cg) {
 entry:
     %buffer_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 0
@@ -764,9 +1130,24 @@ entry:
     ret i8* %buffer
 }
 
+; Write bitcode to file (future LLVM API version)
+; codegen_write_bitcode: Write module bitcode to file using LLVM API
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   filename: Output file path (null-terminated string)
+; Returns: 0 on success, -1 on error
+; TODO: Implement using LLVM C API via FFI
+define i32 @codegen_write_bitcode(%CodeGen* %cg, i8* %filename) {
+entry:
+    ; TODO: Get LLVM module from CodeGen structure
+    ; TODO: Call llvm_write_bitcode_to_file() via FFI
+    ; For now, return error (not yet implemented)
+    ret i32 -1
+}
+
 ; String literals
 @.str.target_triple = private unnamed_addr constant [47 x i8] c"target triple = \22x86_64-apple-macosx10.15.0\22\0A\0A\00"
-@.str.printf_decl = private unnamed_addr constant [32 x i8] c"declare i32 @printf(i8*, ...)\0A\0A\00"
+@.str.printf_decl = private unnamed_addr constant [42 x i8] c"declare i32 @printf(i8* nocapture, ...)\0A\0A\00"
 @.str.define_void = private unnamed_addr constant [12 x i8] c"define void\00"
 @.str.lparen = private unnamed_addr constant [2 x i8] c"(\00"
 @.str.rparen = private unnamed_addr constant [2 x i8] c")\00"
@@ -791,6 +1172,15 @@ entry:
 @.str.backslash_00 = private unnamed_addr constant [4 x i8] c"\\00\00"
 @.str.backslash_quote = private unnamed_addr constant [3 x i8] c"\\\22\00"
 @.str.backslash_backslash = private unnamed_addr constant [3 x i8] c"\\\\\00"
+@.str.constant_decl = private unnamed_addr constant [22 x i8] c" = private constant [\00"
+@.str.x_i8_c_quote = private unnamed_addr constant [10 x i8] c" x i8] c\22\00"
+@.str.quote_newline = private unnamed_addr constant [3 x i8] c"\22\0A\00"
+@.str.getelementptr_start = private unnamed_addr constant [16 x i8] c"getelementptr [\00"
+@.str.getelementptr_open = private unnamed_addr constant [15 x i8] c"getelementptr(\00"
+@.str.lbracket = private unnamed_addr constant [2 x i8] c"[\00"
+@.str.x_i8_bracket_comma = private unnamed_addr constant [10 x i8] c" x i8], [\00"
+@.str.x_i8_ptr_at = private unnamed_addr constant [10 x i8] c" x i8]* @\00"
+@.str.getelementptr_indices = private unnamed_addr constant [15 x i8] c", i32 0, i32 0\00"
 
 ; Append bytevector with proper escaping for LLVM IR
 ; codegen_append_bytevector: Append bytevector data with escaping

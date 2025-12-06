@@ -125,8 +125,9 @@ Example programs and tutorials demonstrating Vibe features.
 ### LLVM Version Requirements
 
 - **LLVM 21** is required (specifically version 21.x)
-- The bootstrap compiler uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) but does NOT link against LLVM libraries at runtime
-- Only the LLVM tools are needed during build time
+- The bootstrap compiler uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) during build time
+- The bootstrap compiler will link against LLVM libraries via FFI for bitcode generation
+- FFI is used to call LLVM C API functions for generating bitcode programmatically
 - Verify installation with: `llvm-as --version`, `llvm-link --version`, `llc --version`
 
 ### Target Triple Restriction
@@ -146,18 +147,21 @@ For Linux builds, update the target triple to match your distribution (e.g., `x8
 
 ### Build System Notes
 
-- The CMake build system finds LLVM tools but does not require LLVM libraries for linking
-- The bootstrap compiler executable only needs standard C libraries (libc) and POSIX dynamic library loading (libdl on Linux)
-- macOS doesn't need a separate `dl` library (dlopen is in libc)
+- The CMake build system finds LLVM tools and LLVM libraries for linking
+- The bootstrap compiler executable links against LLVM C API libraries (Core, IR, Support, Target, etc.)
+- FFI is reintroduced to enable calling LLVM C API functions at runtime
+- FFI requires dynamic library loading (dlopen/dlsym) - libdl on Linux, built-in on macOS
+- LLVM libraries will be loaded via FFI at runtime for bitcode generation
 
 ## Key Concepts
 
-### `define-bitcode` Primitive
+### `define-bitcode-*` Primitives
 
-This is the core primitive that enables self-hosting. It allows binding LLVM modules to names, enabling core language features to be implemented in Vibe itself. For example:
+These are the core primitives that enable self-hosting. They allows binding LLVM functions, types, and constants to names,
+enabling core language features to be implemented in Vibe itself. For example:
 
 ```scheme
-(define-bitcode (lambda formals body)
+(define-bitcode-function (lambda (formals |i8*|) (body |i8*|)) |void*|
   ;; LLVM IR code that implements lambda
   ...)
 ```
@@ -170,12 +174,14 @@ The FFI (Foreign Function Interface) system allows Vibe to call functions from d
 - System calls
 - Calling C libraries
 - Platform-specific functionality
+- **LLVM C API integration** - calling LLVM functions for bitcode generation
 
-The FFI system is implemented in `bootstrap/runtime/ffi.ll` and provides:
-- Library loading (`ffi_load_library`)
-- Symbol resolution (`ffi_get_symbol`)
-- Function calling (`ffi_call`)
-- Type mapping (`ffi_define_type`)
+The FFI system will be implemented in `bootstrap/runtime/ffi.ll` and provides:
+- Library loading (`ffi_load_library`) - Load LLVM libraries dynamically
+- Symbol resolution (`ffi_get_symbol`) - Get LLVM C API function pointers
+- Function calling (`ffi_call`) - Call foreign functions including LLVM C API
+- Type mapping (`ffi_define_type`) - Map Vibe types to C/LLVM types
+- LLVM-specific wrappers for creating contexts, modules, functions, etc.
 
 ## Questions or Issues
 
@@ -184,9 +190,76 @@ If you encounter issues or have questions:
 2. Review the implementation plan in `doc/design/bootstrap-plan.md`
 3. Document any new insights or decisions in the appropriate chat document
 
+### LLVM Integration via FFI
+
+The bootstrap compiler uses FFI to call LLVM C API functions for bitcode generation. This approach:
+
+- **Keeps bootstrap pure LLVM IR**: No C++ dependency, maintains pure LLVM IR bootstrap
+- **Enables runtime flexibility**: Can load different LLVM versions at runtime
+- **Provides platform abstraction**: FFI handles platform differences (macOS/Linux/Windows)
+- **Future-proof**: Aligns with 2nd generation bootstrap goals where bootstrap .ll files will be converted to `define-bitcode-*` methods
+- **Direct bitcode generation**: Can generate bitcode directly via LLVM API instead of text IR strings
+
+The LLVM C API integration via FFI allows:
+- Creating LLVM contexts and modules programmatically
+- Generating functions, types, and constants via API calls
+- Writing bitcode files directly without text IR intermediate format
+- Better error handling and validation through LLVM's API
+
 ## Next Steps After Bootstrap
 
 Once the bootstrap compiler is complete:
 1. Write the core Vibe kernel in Vibe itself (using `define-bitcode`)
-2. Implement the macro system
-3. Begin self-hosting the compiler
+2. Convert bootstrap .ll files to `define-bitcode-*` methods (2nd gen bootstrap)
+3. Implement the macro system
+4. Begin self-hosting the compiler
+5. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation
+
+## End-of-Session Practices
+
+At the end of each development session, the following steps should be completed:
+
+### 1. Memorialize the Chat
+
+Create a new chat document in `doc/chats/` following the naming convention:
+- Format: `NNNN-descriptive-name.md` where NNNN is the next sequential number
+- Check existing chat files to determine the next number
+- Include:
+  - Date and context
+  - Overview of work completed
+  - Key decisions made
+  - Implementation details
+  - Technical challenges encountered
+  - Files modified
+  - Related documentation references
+
+### 2. Generate Git Commit Message
+
+Create a commit message following best practices:
+- **First line**: Concise summary (50-72 characters, imperative mood)
+- **Blank line**: Separate summary from body
+- **Body**: Detailed explanation of changes, why they were made, and any important notes
+- **Format**: Use present tense, imperative mood (e.g., "Fix string constant generation" not "Fixed string constant generation")
+
+Example:
+```
+Fix string constant generation in function calls
+
+String constants were being generated inline within function call
+arguments, causing invalid LLVM IR syntax. Implemented two-phase
+constant generation: collect all string constants at module level
+before generating functions, then generate only references in function
+calls.
+
+- Add codegen_collect_string_constants to traverse AST and generate
+  constants at module level
+- Fix getelementptr syntax to include result type and parentheses
+- Update codegen_append_call_args to use constant references only
+
+Fixes compilation errors when string literals are used as function
+arguments.
+```
+
+### 3. Update AGENTS.md (if needed)
+
+If new practices, patterns, or conventions were established during the session, document them in AGENTS.md to ensure consistency in future sessions.

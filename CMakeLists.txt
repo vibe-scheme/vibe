@@ -3,7 +3,7 @@ project(Vibe LANGUAGES C CXX)
 
 # Find LLVM package (version 21)
 # Note: We require LLVM 21. The bootstrap compiler uses LLVM tools (llvm-as, llvm-link, llc)
-# but does not link against LLVM libraries at runtime.
+# during build time and links against LLVM C API libraries via FFI for bitcode generation.
 
 # Try to find LLVM 21 in common locations first
 # Homebrew on macOS typically installs to /usr/local/opt/llvm or /opt/homebrew/opt/llvm
@@ -147,7 +147,7 @@ add_custom_command(
 
 add_custom_target(bootstrap_runtime DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc)
 
-# FFI System - LLVM bitcode module
+# Bootstrap FFI - LLVM bitcode module
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
     COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/runtime/ffi.ll -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
@@ -226,11 +226,30 @@ add_custom_command(
 )
 
 # Create native executable from object file
-# Note: The bootstrap compiler does not link against LLVM libraries.
-# It only uses LLVM tools during build time. The executable only needs
-# standard C libraries (libc) and dynamic library loading (libdl on POSIX).
+# Note: The bootstrap compiler links against LLVM C API libraries via FFI.
+# FFI is used to call LLVM C API functions at runtime for bitcode generation.
+# The executable needs standard C libraries (libc), dynamic library loading
+# (libdl on Linux), and LLVM C API libraries.
 add_executable(bootstrap_compiler ${CMAKE_BINARY_DIR}/bootstrap_compiler.o)
 set_target_properties(bootstrap_compiler PROPERTIES LINKER_LANGUAGE C)
+
+# Link against LLVM C API libraries
+# Map LLVM components to library names
+# Note: We use LLVM's component mapping, but may need to adjust component names
+# based on the actual LLVM installation. Common components:
+# - Core: Core LLVM functionality
+# - BitWriter: For writing bitcode files
+# - IR: IR functionality (may be part of Core in some builds)
+llvm_map_components_to_libnames(LLVM_LIBS
+    Core
+    BitWriter
+    Support
+)
+
+# Link LLVM libraries
+target_link_libraries(bootstrap_compiler ${LLVM_LIBS})
+
+# Link dynamic library loading (for FFI)
 if(UNIX AND NOT APPLE)
     target_link_libraries(bootstrap_compiler dl)
 elseif(APPLE)
@@ -264,6 +283,5 @@ install(FILES
     ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
     ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
     ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
-    ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
     DESTINATION lib/vibe
 )

@@ -4,12 +4,12 @@
 (define-bitcode-type Point (x |i32|) (y |i32|))
 
 ; Define a constant (using vertical bar for type, bytevector for value)
-(define-bitcode-constant hello_string |[13 x i8]| #u8(72 101 108 108 111 44 32 87 111 114 108 100 0))
+(define-bitcode-constant hello_string |[14 x i8]| #u8(72 101 108 108 111 44 32 87 111 114 108 100 33 0))
 
 ; Define a function with typed parameters (using vertical bar symbols)
 (define-bitcode-function (hello (name |i8*|)) |void| "
-  %format = getelementptr [13 x i8], [13 x i8]* @hello_string, i32 0, i32 0
-  call i32 @printf(i8* %format, i8* %name)
+  %format = getelementptr [14 x i8], [14 x i8]* @hello_string, i32 0, i32 0
+  call i32 (i8*, ...) @printf(i8* %format, i8* %name)
   ret void
 ")
 

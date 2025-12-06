@@ -221,3 +221,163 @@ entry:
 
 ; External declaration for dlerror
 declare i8* @dlerror()
+
+; ============================================================================
+; LLVM C API Wrappers via FFI
+; ============================================================================
+; These functions provide wrappers around LLVM C API functions.
+; They will be used by the code generator to create bitcode programmatically.
+;
+; Note: Full implementation of all LLVM C API wrappers is a large task.
+; This section provides the foundation and key wrappers. Additional wrappers
+; can be added incrementally as needed.
+; ============================================================================
+
+; LLVM Context type (opaque pointer)
+%LLVMContextRef = type i8*
+
+; LLVM Module type (opaque pointer)
+%LLVMModuleRef = type i8*
+
+; LLVM Type type (opaque pointer)
+%LLVMTypeRef = type i8*
+
+; LLVM Value type (opaque pointer)
+%LLVMValueRef = type i8*
+
+; LLVM Basic Block type (opaque pointer)
+%LLVMBasicBlockRef = type i8*
+
+; LLVM Builder type (opaque pointer)
+%LLVMBuilderRef = type i8*
+
+; Load LLVM library and initialize function pointers
+; llvm_ffi_init: Initialize LLVM FFI by loading LLVM libraries
+; Returns: 0 on success, -1 on error
+; Note: This function loads the LLVM library and resolves function symbols.
+; In a full implementation, this would cache function pointers for all LLVM C API functions.
+define i32 @llvm_ffi_init() {
+entry:
+    ; TODO: Load LLVM library (e.g., libLLVM.dylib on macOS, libLLVM-21.so on Linux)
+    ; TODO: Resolve LLVM C API function symbols
+    ; TODO: Store function pointers for later use
+    ; For now, return success (assuming LLVM libraries are linked statically or via CMake)
+    ret i32 0
+}
+
+; Create LLVM context
+; llvm_create_context: Create a new LLVM context
+; Returns: LLVMContextRef, or null on error
+define %LLVMContextRef @llvm_create_context() {
+entry:
+    ; TODO: Call LLVMContextCreate() via FFI
+    ; For now, return null as placeholder
+    ; In full implementation: call LLVMContextCreate() function pointer
+    ret %LLVMContextRef null
+}
+
+; Dispose LLVM context
+; llvm_dispose_context: Dispose an LLVM context
+; Parameters:
+;   context: LLVMContextRef to dispose
+define void @llvm_dispose_context(%LLVMContextRef %context) {
+entry:
+    ; TODO: Call LLVMContextDispose() via FFI
+    ; In full implementation: call LLVMContextDispose() function pointer
+    ret void
+}
+
+; Create LLVM module
+; llvm_create_module: Create a new LLVM module
+; Parameters:
+;   context: LLVMContextRef
+;   module_id: Module identifier (null-terminated string)
+; Returns: LLVMModuleRef, or null on error
+define %LLVMModuleRef @llvm_create_module(%LLVMContextRef %context, i8* %module_id) {
+entry:
+    ; TODO: Call LLVMModuleCreateWithNameInContext() via FFI
+    ; For now, return null as placeholder
+    ret %LLVMModuleRef null
+}
+
+; Dispose LLVM module
+; llvm_dispose_module: Dispose an LLVM module
+; Parameters:
+;   module: LLVMModuleRef to dispose
+define void @llvm_dispose_module(%LLVMModuleRef %module) {
+entry:
+    ; TODO: Call LLVMDisposeModule() via FFI
+    ret void
+}
+
+; Set target triple for module
+; llvm_set_target: Set the target triple for a module
+; Parameters:
+;   module: LLVMModuleRef
+;   triple: Target triple string (null-terminated)
+define void @llvm_set_target(%LLVMModuleRef %module, i8* %triple) {
+entry:
+    ; TODO: Call LLVMSetTarget() via FFI
+    ret void
+}
+
+; Create function type
+; llvm_create_function_type: Create a function type
+; Parameters:
+;   return_type: LLVMTypeRef for return type
+;   param_types: Array of LLVMTypeRef for parameters
+;   param_count: Number of parameters
+;   is_vararg: 1 if varargs, 0 otherwise
+; Returns: LLVMTypeRef for function type, or null on error
+define %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %return_type, %LLVMTypeRef* %param_types, i32 %param_count, i32 %is_vararg) {
+entry:
+    ; TODO: Call LLVMFunctionType() via FFI
+    ret %LLVMTypeRef null
+}
+
+; Create constant string
+; llvm_create_constant_string: Create a constant string value
+; Parameters:
+;   context: LLVMContextRef
+;   str: String data
+;   len: String length
+;   dont_null_terminate: 1 to not add null terminator, 0 to add it
+; Returns: LLVMValueRef for constant string, or null on error
+define %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %len, i32 %dont_null_terminate) {
+entry:
+    ; TODO: Call LLVMConstStringInContext() via FFI
+    ret %LLVMValueRef null
+}
+
+; Add function to module
+; llvm_add_function: Add a function to a module
+; Parameters:
+;   module: LLVMModuleRef
+;   name: Function name (null-terminated string)
+;   function_type: LLVMTypeRef for function type
+; Returns: LLVMValueRef for function, or null on error
+define %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %name, %LLVMTypeRef %function_type) {
+entry:
+    ; TODO: Call LLVMAddFunction() via FFI
+    ret %LLVMValueRef null
+}
+
+; Write bitcode to file
+; llvm_write_bitcode_to_file: Write module bitcode to file
+; Parameters:
+;   module: LLVMModuleRef
+;   path: Output file path (null-terminated string)
+; Returns: 0 on success, non-zero on error
+define i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %path) {
+entry:
+    ; TODO: Call LLVMWriteBitcodeToFile() via FFI
+    ; For now, return error as placeholder
+    ret i32 -1
+}
+
+; Note: Additional LLVM C API wrappers should be added here as needed:
+; - Type creation functions (Int8Type, Int32Type, VoidType, PointerType, ArrayType, StructType)
+; - Builder functions (CreateBuilder, PositionBuilderAtEnd, BuildRet, BuildCall, BuildGEP)
+; - Basic block functions (AppendBasicBlock)
+; - Parameter functions (GetParam, SetValueName)
+; - And other LLVM C API functions as required

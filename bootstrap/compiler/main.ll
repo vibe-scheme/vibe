@@ -156,8 +156,29 @@ handle_legacy:
     br label %parse_loop
 
 add_to_list:
-    ; Add AST node to expressions list (simplified - in full implementation, build proper list)
-    ; For now, just continue parsing
+    ; Add AST node to expressions list by creating a cons cell
+    ; Allocate new cons cell
+    %new_cons = call i8* @malloc(i64 48)
+    %new_cons_ptr = bitcast i8* %new_cons to %ASTNode*
+    
+    ; Set node type to LIST
+    %cons_type_ptr = getelementptr %ASTNode, %ASTNode* %new_cons_ptr, i32 0, i32 0
+    store i32 1, i32* %cons_type_ptr  ; AST_LIST
+    
+    ; Set car to the current AST node
+    %cons_car_ptr = getelementptr %ASTNode, %ASTNode* %new_cons_ptr, i32 0, i32 4
+    store %ASTNode* %ast, %ASTNode** %cons_car_ptr
+    
+    ; Get current list head
+    %current_list = load %ASTNode*, %ASTNode** %exprs_list
+    
+    ; Set cdr to current list (prepend)
+    %cons_cdr_ptr = getelementptr %ASTNode, %ASTNode* %new_cons_ptr, i32 0, i32 5
+    store %ASTNode* %current_list, %ASTNode** %cons_cdr_ptr
+    
+    ; Update list head
+    store %ASTNode* %new_cons_ptr, %ASTNode** %exprs_list
+    
     br label %parse_loop
 
 parse_error:
@@ -327,9 +348,14 @@ entry:
     br i1 %len_match, label %compare_chars, label %no_match
     
 compare_chars:
-    ; Simple byte-by-byte comparison
-    ; For a full implementation, use strncmp or similar
-    ; For now, just check if lengths match (simplified)
+    ; Use strncmp to compare strings (with length limit)
+    ; strncmp returns 0 if strings match
+    %len_int = trunc i64 %id_len to i32
+    %cmp_result = call i32 @strncmp(i8* %id, i8* %target, i32 %len_int)
+    %is_match = icmp eq i32 %cmp_result, 0
+    br i1 %is_match, label %match, label %no_match
+    
+match:
     ret i32 1
     
 no_match:
@@ -357,6 +383,7 @@ declare i64 @read(i32, i8*, i64)
 declare i32 @close(i32)
 declare %Token* @parse_current(%Parser*)
 declare i32 @strcmp(i8*, i8*)
+declare i32 @strncmp(i8*, i8*, i32)
 declare i32 @codegen_define_bitcode_type(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
