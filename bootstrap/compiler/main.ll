@@ -191,9 +191,6 @@ generate_code:
     %exprs = load %ASTNode*, %ASTNode** %exprs_list
     call i32 @codegen_main(%CodeGen* %codegen, %ASTNode* %exprs)
     
-    ; Get generated IR
-    %ir = call i8* @codegen_get_ir(%CodeGen* %codegen)
-    
     ; Check for output file argument
     %has_output = icmp ugt i32 %argc, 2
     br i1 %has_output, label %write_output, label %done
@@ -211,17 +208,16 @@ get_output_file:
     ; Get output filename after -o
     %output_file_ptr = getelementptr i8*, i8** %argv, i64 3
     %output_file_o = load i8*, i8** %output_file_ptr
-    br label %write_ir
+    br label %write_bitcode
 
 use_arg2:
     %output_file_arg = load i8*, i8** %arg2_ptr
-    br label %write_ir
+    br label %write_bitcode
 
-write_ir:
-    ; Write IR to file
+write_bitcode:
+    ; Write bitcode to file using LLVM API
     %output_file_phi = phi i8* [ %output_file_o, %get_output_file ], [ %output_file_arg, %use_arg2 ]
-    %ir_len = call i64 @strlen(i8* %ir)
-    %write_result = call i32 @write_file(i8* %output_file_phi, i8* %ir, i64 %ir_len)
+    %write_result = call i32 @codegen_write_bitcode(%CodeGen* %codegen, i8* %output_file_phi)
     %write_failed = icmp ne i32 %write_result, 0
     br i1 %write_failed, label %write_error, label %done
 
@@ -232,6 +228,7 @@ write_error:
 
 done:
     ; Cleanup
+    call void @codegen_dispose(%CodeGen* %codegen)
     call void @free(i8* %file_data)
     ret i32 0
 }
@@ -387,3 +384,5 @@ declare i32 @strncmp(i8*, i8*, i32)
 declare i32 @codegen_define_bitcode_type(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
+declare void @codegen_dispose(%CodeGen*)
+declare i32 @codegen_write_bitcode(%CodeGen*, i8*)

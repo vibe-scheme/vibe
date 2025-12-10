@@ -223,14 +223,13 @@ entry:
 declare i8* @dlerror()
 
 ; ============================================================================
-; LLVM C API Wrappers via FFI
+; LLVM C API Wrappers
 ; ============================================================================
 ; These functions provide wrappers around LLVM C API functions.
 ; They will be used by the code generator to create bitcode programmatically.
 ;
-; Note: Full implementation of all LLVM C API wrappers is a large task.
-; This section provides the foundation and key wrappers. Additional wrappers
-; can be added incrementally as needed.
+; Since LLVM is statically linked, we can declare LLVM C API functions as
+; external and call them directly without dynamic loading.
 ; ============================================================================
 
 ; LLVM Context type (opaque pointer)
@@ -251,17 +250,74 @@ declare i8* @dlerror()
 ; LLVM Builder type (opaque pointer)
 %LLVMBuilderRef = type i8*
 
+; LLVM Memory Buffer type (opaque pointer)
+%LLVMMemoryBufferRef = type i8*
+
+; External declarations for LLVM C API functions
+; Context management
+declare %LLVMContextRef @LLVMContextCreate()
+declare void @LLVMContextDispose(%LLVMContextRef)
+
+; Module management
+declare %LLVMModuleRef @LLVMModuleCreateWithNameInContext(i8*, %LLVMContextRef)
+declare void @LLVMDisposeModule(%LLVMModuleRef)
+declare void @LLVMSetTarget(%LLVMModuleRef, i8*)
+
+; Type creation
+declare %LLVMTypeRef @LLVMInt8TypeInContext(%LLVMContextRef)
+declare %LLVMTypeRef @LLVMInt32TypeInContext(%LLVMContextRef)
+declare %LLVMTypeRef @LLVMInt64TypeInContext(%LLVMContextRef)
+declare %LLVMTypeRef @LLVMVoidTypeInContext(%LLVMContextRef)
+declare %LLVMTypeRef @LLVMPointerType(%LLVMTypeRef, i32)
+declare %LLVMTypeRef @LLVMArrayType(%LLVMTypeRef, i32)
+declare %LLVMTypeRef @LLVMStructTypeInContext(%LLVMContextRef, %LLVMTypeRef*, i32, i32)
+declare %LLVMTypeRef @LLVMFunctionType(%LLVMTypeRef, %LLVMTypeRef*, i32, i32)
+
+; Constant creation
+declare %LLVMValueRef @LLVMConstStringInContext(%LLVMContextRef, i8*, i32, i32)
+declare %LLVMValueRef @LLVMConstInt(%LLVMTypeRef, i64, i32)
+declare %LLVMValueRef @LLVMConstNull(%LLVMTypeRef)
+
+; Function management
+declare %LLVMValueRef @LLVMAddFunction(%LLVMModuleRef, i8*, %LLVMTypeRef)
+declare %LLVMValueRef @LLVMGetParam(%LLVMValueRef, i32)
+declare void @LLVMSetValueName(%LLVMValueRef, i8*)
+
+; Basic block management
+declare %LLVMBasicBlockRef @LLVMAppendBasicBlock(%LLVMValueRef, i8*)
+
+; Builder management
+declare %LLVMBuilderRef @LLVMCreateBuilderInContext(%LLVMContextRef)
+declare void @LLVMDisposeBuilder(%LLVMBuilderRef)
+declare void @LLVMPositionBuilderAtEnd(%LLVMBuilderRef, %LLVMBasicBlockRef)
+
+; Instruction building
+declare %LLVMValueRef @LLVMBuildRetVoid(%LLVMBuilderRef)
+declare %LLVMValueRef @LLVMBuildRet(%LLVMBuilderRef, %LLVMValueRef)
+declare %LLVMValueRef @LLVMBuildCall2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
+declare %LLVMValueRef @LLVMBuildGEP2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
+
+; Global variable management
+declare %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef, %LLVMTypeRef, i8*)
+declare void @LLVMSetInitializer(%LLVMValueRef, %LLVMValueRef)
+declare void @LLVMSetGlobalConstant(%LLVMValueRef, i32)
+declare void @LLVMSetLinkage(%LLVMValueRef, i32)
+
+; IR parsing
+declare i32 @LLVMParseIRInContext(%LLVMContextRef, %LLVMMemoryBufferRef, %LLVMModuleRef*, i8**)
+declare %LLVMMemoryBufferRef @LLVMCreateMemoryBufferWithMemoryRangeCopy(i8*, i64, i8*)
+declare void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef)
+
+; Bitcode writing
+declare i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef, i8*)
+
 ; Load LLVM library and initialize function pointers
-; llvm_ffi_init: Initialize LLVM FFI by loading LLVM libraries
+; llvm_ffi_init: Initialize LLVM FFI
 ; Returns: 0 on success, -1 on error
-; Note: This function loads the LLVM library and resolves function symbols.
-; In a full implementation, this would cache function pointers for all LLVM C API functions.
+; Note: Since LLVM is statically linked, this is a no-op but kept for API compatibility
 define i32 @llvm_ffi_init() {
 entry:
-    ; TODO: Load LLVM library (e.g., libLLVM.dylib on macOS, libLLVM-21.so on Linux)
-    ; TODO: Resolve LLVM C API function symbols
-    ; TODO: Store function pointers for later use
-    ; For now, return success (assuming LLVM libraries are linked statically or via CMake)
+    ; LLVM is statically linked, so no initialization needed
     ret i32 0
 }
 
@@ -270,10 +326,8 @@ entry:
 ; Returns: LLVMContextRef, or null on error
 define %LLVMContextRef @llvm_create_context() {
 entry:
-    ; TODO: Call LLVMContextCreate() via FFI
-    ; For now, return null as placeholder
-    ; In full implementation: call LLVMContextCreate() function pointer
-    ret %LLVMContextRef null
+    %context = call %LLVMContextRef @LLVMContextCreate()
+    ret %LLVMContextRef %context
 }
 
 ; Dispose LLVM context
@@ -282,8 +336,7 @@ entry:
 ;   context: LLVMContextRef to dispose
 define void @llvm_dispose_context(%LLVMContextRef %context) {
 entry:
-    ; TODO: Call LLVMContextDispose() via FFI
-    ; In full implementation: call LLVMContextDispose() function pointer
+    call void @LLVMContextDispose(%LLVMContextRef %context)
     ret void
 }
 
@@ -295,9 +348,8 @@ entry:
 ; Returns: LLVMModuleRef, or null on error
 define %LLVMModuleRef @llvm_create_module(%LLVMContextRef %context, i8* %module_id) {
 entry:
-    ; TODO: Call LLVMModuleCreateWithNameInContext() via FFI
-    ; For now, return null as placeholder
-    ret %LLVMModuleRef null
+    %module = call %LLVMModuleRef @LLVMModuleCreateWithNameInContext(i8* %module_id, %LLVMContextRef %context)
+    ret %LLVMModuleRef %module
 }
 
 ; Dispose LLVM module
@@ -306,7 +358,7 @@ entry:
 ;   module: LLVMModuleRef to dispose
 define void @llvm_dispose_module(%LLVMModuleRef %module) {
 entry:
-    ; TODO: Call LLVMDisposeModule() via FFI
+    call void @LLVMDisposeModule(%LLVMModuleRef %module)
     ret void
 }
 
@@ -317,8 +369,90 @@ entry:
 ;   triple: Target triple string (null-terminated)
 define void @llvm_set_target(%LLVMModuleRef %module, i8* %triple) {
 entry:
-    ; TODO: Call LLVMSetTarget() via FFI
+    call void @LLVMSetTarget(%LLVMModuleRef %module, i8* %triple)
     ret void
+}
+
+; Get i8 type
+; llvm_get_int8_type: Get i8 type from context
+; Parameters:
+;   context: LLVMContextRef
+; Returns: LLVMTypeRef for i8 type
+define %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context) {
+entry:
+    %type = call %LLVMTypeRef @LLVMInt8TypeInContext(%LLVMContextRef %context)
+    ret %LLVMTypeRef %type
+}
+
+; Get i32 type
+; llvm_get_int32_type: Get i32 type from context
+; Parameters:
+;   context: LLVMContextRef
+; Returns: LLVMTypeRef for i32 type
+define %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %context) {
+entry:
+    %type = call %LLVMTypeRef @LLVMInt32TypeInContext(%LLVMContextRef %context)
+    ret %LLVMTypeRef %type
+}
+
+; Get i64 type
+; llvm_get_int64_type: Get i64 type from context
+; Parameters:
+;   context: LLVMContextRef
+; Returns: LLVMTypeRef for i64 type
+define %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef %context) {
+entry:
+    %type = call %LLVMTypeRef @LLVMInt64TypeInContext(%LLVMContextRef %context)
+    ret %LLVMTypeRef %type
+}
+
+; Get void type
+; llvm_get_void_type: Get void type from context
+; Parameters:
+;   context: LLVMContextRef
+; Returns: LLVMTypeRef for void type
+define %LLVMTypeRef @llvm_get_void_type(%LLVMContextRef %context) {
+entry:
+    %type = call %LLVMTypeRef @LLVMVoidTypeInContext(%LLVMContextRef %context)
+    ret %LLVMTypeRef %type
+}
+
+; Create pointer type
+; llvm_get_pointer_type: Create a pointer type
+; Parameters:
+;   element_type: LLVMTypeRef for element type
+;   address_space: Address space (0 for default)
+; Returns: LLVMTypeRef for pointer type
+define %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %element_type, i32 %address_space) {
+entry:
+    %ptr_type = call %LLVMTypeRef @LLVMPointerType(%LLVMTypeRef %element_type, i32 %address_space)
+    ret %LLVMTypeRef %ptr_type
+}
+
+; Create array type
+; llvm_get_array_type: Create an array type
+; Parameters:
+;   element_type: LLVMTypeRef for element type
+;   element_count: Number of elements
+; Returns: LLVMTypeRef for array type
+define %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %element_type, i32 %element_count) {
+entry:
+    %array_type = call %LLVMTypeRef @LLVMArrayType(%LLVMTypeRef %element_type, i32 %element_count)
+    ret %LLVMTypeRef %array_type
+}
+
+; Create struct type
+; llvm_get_struct_type: Create a struct type from field types
+; Parameters:
+;   context: LLVMContextRef
+;   field_types: Array of LLVMTypeRef for field types
+;   field_count: Number of fields
+;   packed: 1 if packed, 0 otherwise
+; Returns: LLVMTypeRef for struct type, or null on error
+define %LLVMTypeRef @llvm_get_struct_type(%LLVMContextRef %context, %LLVMTypeRef* %field_types, i32 %field_count, i32 %packed) {
+entry:
+    %struct_type = call %LLVMTypeRef @LLVMStructTypeInContext(%LLVMContextRef %context, %LLVMTypeRef* %field_types, i32 %field_count, i32 %packed)
+    ret %LLVMTypeRef %struct_type
 }
 
 ; Create function type
@@ -331,8 +465,8 @@ entry:
 ; Returns: LLVMTypeRef for function type, or null on error
 define %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %return_type, %LLVMTypeRef* %param_types, i32 %param_count, i32 %is_vararg) {
 entry:
-    ; TODO: Call LLVMFunctionType() via FFI
-    ret %LLVMTypeRef null
+    %func_type = call %LLVMTypeRef @LLVMFunctionType(%LLVMTypeRef %return_type, %LLVMTypeRef* %param_types, i32 %param_count, i32 %is_vararg)
+    ret %LLVMTypeRef %func_type
 }
 
 ; Create constant string
@@ -345,8 +479,32 @@ entry:
 ; Returns: LLVMValueRef for constant string, or null on error
 define %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %len, i32 %dont_null_terminate) {
 entry:
-    ; TODO: Call LLVMConstStringInContext() via FFI
-    ret %LLVMValueRef null
+    %const_str = call %LLVMValueRef @LLVMConstStringInContext(%LLVMContextRef %context, i8* %str, i32 %len, i32 %dont_null_terminate)
+    ret %LLVMValueRef %const_str
+}
+
+; Create constant integer
+; llvm_create_constant_int: Create a constant integer value
+; Parameters:
+;   type: LLVMTypeRef for integer type
+;   value: Integer value
+;   sign_extend: 1 if sign-extended, 0 otherwise
+; Returns: LLVMValueRef for constant integer
+define %LLVMValueRef @llvm_create_constant_int(%LLVMTypeRef %type, i64 %value, i32 %sign_extend) {
+entry:
+    %const_int = call %LLVMValueRef @LLVMConstInt(%LLVMTypeRef %type, i64 %value, i32 %sign_extend)
+    ret %LLVMValueRef %const_int
+}
+
+; Create null constant
+; llvm_create_constant_null: Create a null constant
+; Parameters:
+;   type: LLVMTypeRef for type
+; Returns: LLVMValueRef for null constant
+define %LLVMValueRef @llvm_create_constant_null(%LLVMTypeRef %type) {
+entry:
+    %null_const = call %LLVMValueRef @LLVMConstNull(%LLVMTypeRef %type)
+    ret %LLVMValueRef %null_const
 }
 
 ; Add function to module
@@ -358,8 +516,228 @@ entry:
 ; Returns: LLVMValueRef for function, or null on error
 define %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %name, %LLVMTypeRef %function_type) {
 entry:
-    ; TODO: Call LLVMAddFunction() via FFI
-    ret %LLVMValueRef null
+    %func = call %LLVMValueRef @LLVMAddFunction(%LLVMModuleRef %module, i8* %name, %LLVMTypeRef %function_type)
+    ret %LLVMValueRef %func
+}
+
+; Get function parameter
+; llvm_get_param: Get a function parameter by index
+; Parameters:
+;   func: LLVMValueRef for function
+;   index: Parameter index (0-based)
+; Returns: LLVMValueRef for parameter
+define %LLVMValueRef @llvm_get_param(%LLVMValueRef %func, i32 %index) {
+entry:
+    %param = call %LLVMValueRef @LLVMGetParam(%LLVMValueRef %func, i32 %index)
+    ret %LLVMValueRef %param
+}
+
+; Set value name
+; llvm_set_value_name: Set the name of a value
+; Parameters:
+;   value: LLVMValueRef
+;   name: Name string (null-terminated)
+define void @llvm_set_value_name(%LLVMValueRef %value, i8* %name) {
+entry:
+    call void @LLVMSetValueName(%LLVMValueRef %value, i8* %name)
+    ret void
+}
+
+; Append basic block
+; llvm_append_basic_block: Append a basic block to a function
+; Parameters:
+;   func: LLVMValueRef for function
+;   name: Block name (null-terminated string, can be null)
+; Returns: LLVMBasicBlockRef for basic block
+define %LLVMBasicBlockRef @llvm_append_basic_block(%LLVMValueRef %func, i8* %name) {
+entry:
+    %bb = call %LLVMBasicBlockRef @LLVMAppendBasicBlock(%LLVMValueRef %func, i8* %name)
+    ret %LLVMBasicBlockRef %bb
+}
+
+; Create builder
+; llvm_create_builder: Create an IR builder
+; Parameters:
+;   context: LLVMContextRef
+; Returns: LLVMBuilderRef
+define %LLVMBuilderRef @llvm_create_builder(%LLVMContextRef %context) {
+entry:
+    %builder = call %LLVMBuilderRef @LLVMCreateBuilderInContext(%LLVMContextRef %context)
+    ret %LLVMBuilderRef %builder
+}
+
+; Dispose builder
+; llvm_dispose_builder: Dispose an IR builder
+; Parameters:
+;   builder: LLVMBuilderRef to dispose
+define void @llvm_dispose_builder(%LLVMBuilderRef %builder) {
+entry:
+    call void @LLVMDisposeBuilder(%LLVMBuilderRef %builder)
+    ret void
+}
+
+; Position builder at end of basic block
+; llvm_position_builder_at_end: Position builder at end of basic block
+; Parameters:
+;   builder: LLVMBuilderRef
+;   bb: LLVMBasicBlockRef
+define void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %bb) {
+entry:
+    call void @LLVMPositionBuilderAtEnd(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %bb)
+    ret void
+}
+
+; Build return void
+; llvm_build_ret_void: Build a return void instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+; Returns: LLVMValueRef for instruction
+define %LLVMValueRef @llvm_build_ret_void(%LLVMBuilderRef %builder) {
+entry:
+    %inst = call %LLVMValueRef @LLVMBuildRetVoid(%LLVMBuilderRef %builder)
+    ret %LLVMValueRef %inst
+}
+
+; Build return
+; llvm_build_ret: Build a return instruction with value
+; Parameters:
+;   builder: LLVMBuilderRef
+;   value: LLVMValueRef to return
+; Returns: LLVMValueRef for instruction
+define %LLVMValueRef @llvm_build_ret(%LLVMBuilderRef %builder, %LLVMValueRef %value) {
+entry:
+    %inst = call %LLVMValueRef @LLVMBuildRet(%LLVMBuilderRef %builder, %LLVMValueRef %value)
+    ret %LLVMValueRef %inst
+}
+
+; Build function call
+; llvm_build_call: Build a function call instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   func_type: LLVMTypeRef for function type
+;   func: LLVMValueRef for function to call
+;   args: Array of LLVMValueRef for arguments
+;   arg_count: Number of arguments
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for call instruction
+define %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %func_type, %LLVMValueRef %func, %LLVMValueRef* %args, i32 %arg_count, i8* %name) {
+entry:
+    %call = call %LLVMValueRef @LLVMBuildCall2(%LLVMBuilderRef %builder, %LLVMTypeRef %func_type, %LLVMValueRef %func, %LLVMValueRef* %args, i32 %arg_count, i8* %name)
+    ret %LLVMValueRef %call
+}
+
+; Build getelementptr
+; llvm_build_gep: Build a getelementptr instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   type: LLVMTypeRef for source type
+;   pointer: LLVMValueRef for pointer
+;   indices: Array of LLVMValueRef for indices
+;   index_count: Number of indices
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for gep instruction
+define %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %type, %LLVMValueRef %pointer, %LLVMValueRef* %indices, i32 %index_count, i8* %name) {
+entry:
+    %gep = call %LLVMValueRef @LLVMBuildGEP2(%LLVMBuilderRef %builder, %LLVMTypeRef %type, %LLVMValueRef %pointer, %LLVMValueRef* %indices, i32 %index_count, i8* %name)
+    ret %LLVMValueRef %gep
+}
+
+; Add global variable
+; llvm_add_global: Add a global variable to module
+; Parameters:
+;   module: LLVMModuleRef
+;   type: LLVMTypeRef for variable type
+;   name: Variable name (null-terminated string)
+; Returns: LLVMValueRef for global variable
+define %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %type, i8* %name) {
+entry:
+    %global = call %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef %module, %LLVMTypeRef %type, i8* %name)
+    ret %LLVMValueRef %global
+}
+
+; Set global initializer
+; llvm_set_initializer: Set the initializer for a global variable
+; Parameters:
+;   global: LLVMValueRef for global variable
+;   initializer: LLVMValueRef for initializer value
+define void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %initializer) {
+entry:
+    call void @LLVMSetInitializer(%LLVMValueRef %global, %LLVMValueRef %initializer)
+    ret void
+}
+
+; Set global constant
+; llvm_set_global_constant: Set whether a global is constant
+; Parameters:
+;   global: LLVMValueRef for global variable
+;   is_constant: 1 if constant, 0 otherwise
+define void @llvm_set_global_constant(%LLVMValueRef %global, i32 %is_constant) {
+entry:
+    call void @LLVMSetGlobalConstant(%LLVMValueRef %global, i32 %is_constant)
+    ret void
+}
+
+; Set linkage
+; llvm_set_linkage: Set linkage type for a global
+; Parameters:
+;   global: LLVMValueRef for global
+;   linkage: Linkage type (LLVMLinkage enum value)
+define void @llvm_set_linkage(%LLVMValueRef %global, i32 %linkage) {
+entry:
+    call void @LLVMSetLinkage(%LLVMValueRef %global, i32 %linkage)
+    ret void
+}
+
+; Parse IR in context
+; llvm_parse_ir_in_context: Parse IR text into a module
+; Parameters:
+;   context: LLVMContextRef
+;   ir_text: IR text string
+;   ir_len: Length of IR text
+;   module: Pointer to LLVMModuleRef (output parameter)
+; Returns: 0 on success, non-zero on error
+define i32 @llvm_parse_ir_in_context(%LLVMContextRef %context, i8* %ir_text, i64 %ir_len, %LLVMModuleRef* %module) {
+entry:
+    ; Create memory buffer from IR text
+    %buffer = call %LLVMMemoryBufferRef @LLVMCreateMemoryBufferWithMemoryRangeCopy(i8* %ir_text, i64 %ir_len, i8* null)
+    %buffer_null = icmp eq %LLVMMemoryBufferRef %buffer, null
+    br i1 %buffer_null, label %error, label %parse
+    
+parse:
+    ; Parse IR from buffer
+    %error_msg = alloca i8*
+    store i8* null, i8** %error_msg
+    %parse_result = call i32 @LLVMParseIRInContext(%LLVMContextRef %context, %LLVMMemoryBufferRef %buffer, %LLVMModuleRef* %module, i8** %error_msg)
+    
+    ; Check parse result before disposing buffer
+    %parse_failed = icmp ne i32 %parse_result, 0
+    br i1 %parse_failed, label %dispose_and_error, label %dispose_and_success
+    
+dispose_and_success:
+    ; Dispose buffer only if parsing succeeded
+    ; Note: LLVMParseIRInContext does NOT take ownership, we must dispose
+    ; Double-check buffer is not null before disposing
+    %buffer_check = icmp ne %LLVMMemoryBufferRef %buffer, null
+    br i1 %buffer_check, label %dispose_success, label %success
+    
+dispose_success:
+    call void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef %buffer)
+    br label %success
+    
+dispose_and_error:
+    ; Dispose buffer even on error, but check it's not null
+    %buffer_check_err = icmp ne %LLVMMemoryBufferRef %buffer, null
+    br i1 %buffer_check_err, label %dispose_error, label %error
+    
+dispose_error:
+    call void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef %buffer)
+    br label %error
+    
+success:
+    ret i32 0
+    
+error:
+    ret i32 -1
 }
 
 ; Write bitcode to file
@@ -370,14 +748,6 @@ entry:
 ; Returns: 0 on success, non-zero on error
 define i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %path) {
 entry:
-    ; TODO: Call LLVMWriteBitcodeToFile() via FFI
-    ; For now, return error as placeholder
-    ret i32 -1
+    %result = call i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef %module, i8* %path)
+    ret i32 %result
 }
-
-; Note: Additional LLVM C API wrappers should be added here as needed:
-; - Type creation functions (Int8Type, Int32Type, VoidType, PointerType, ArrayType, StructType)
-; - Builder functions (CreateBuilder, PositionBuilderAtEnd, BuildRet, BuildCall, BuildGEP)
-; - Basic block functions (AppendBasicBlock)
-; - Parameter functions (GetParam, SetValueName)
-; - And other LLVM C API functions as required
