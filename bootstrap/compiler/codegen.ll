@@ -24,6 +24,8 @@ target triple = "x86_64-apple-macosx10.15.0"
 %LLVMValueRef = type i8*
 %LLVMBasicBlockRef = type i8*
 %LLVMBuilderRef = type i8*
+%LLVMTargetRef = type i8*
+%LLVMTargetMachineRef = type i8*
 
 ; CodeGen structure - extended to include LLVM context/module handles
 ; Fields:
@@ -44,6 +46,7 @@ declare void @llvm_dispose_context(%LLVMContextRef)
 declare %LLVMModuleRef @llvm_create_module(%LLVMContextRef, i8*)
 declare void @llvm_dispose_module(%LLVMModuleRef)
 declare void @llvm_set_target(%LLVMModuleRef, i8*)
+declare void @llvm_set_data_layout(%LLVMModuleRef, i8*)
 declare %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef)
 declare %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef)
 declare %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef)
@@ -71,6 +74,13 @@ declare void @llvm_set_global_constant(%LLVMValueRef, i32)
 declare void @llvm_set_linkage(%LLVMValueRef, i32)
 declare i32 @llvm_parse_ir_in_context(%LLVMContextRef, i8*, i64, %LLVMModuleRef*)
 declare i32 @llvm_write_bitcode_to_file(%LLVMModuleRef, i8*)
+declare i8* @llvm_get_default_target_triple()
+declare i32 @llvm_get_target_from_triple(i8*, %LLVMTargetRef*, i8**)
+declare %LLVMTargetMachineRef @llvm_create_target_machine(%LLVMTargetRef, i8*, i8*, i8*, i32, i32, i32)
+declare i32 @llvm_target_machine_emit_to_file(%LLVMTargetMachineRef, %LLVMModuleRef, i8*, i32, i8**)
+declare void @llvm_dispose_target_machine(%LLVMTargetMachineRef)
+declare %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef, i8*)
+declare %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef, i8*)
 
 ; Initialize code generator
 ; codegen_init: Initialize code generator
@@ -102,6 +112,10 @@ set_target:
     ; Use bitcast to convert the constant array pointer to i8*
     %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
     call void @llvm_set_target(%LLVMModuleRef %llvm_module, i8* %target_triple_array)
+    
+    ; Set data layout via LLVM API
+    %data_layout_array = bitcast [35 x i8]* @.str.data_layout_value to i8*
+    call void @llvm_set_data_layout(%LLVMModuleRef %llvm_module, i8* %data_layout_array)
     
     ; Allocate initial buffer (64KB) - for text IR generation (backward compatibility)
     %buffer_size = add i64 65536, 0
@@ -135,6 +149,23 @@ set_target:
     
     ; Write target triple header (46 bytes without null terminator) - text IR approach (backward compatibility)
     call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([47 x i8], [47 x i8]* @.str.target_triple, i32 0, i32 0), i64 46)
+    
+    ; Add printf declaration via LLVM API
+    %i32_type = call %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %llvm_context)
+    %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %llvm_context)
+    %i8_ptr_type = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %i8_type, i32 0)
+    
+    ; Create function type: i32 (i8*, ...) - vararg function
+    %printf_param_types = alloca %LLVMTypeRef, i32 1
+    store %LLVMTypeRef %i8_ptr_type, %LLVMTypeRef* %printf_param_types
+    %printf_func_type = call %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %i32_type, %LLVMTypeRef* %printf_param_types, i32 1, i32 1)
+    
+    ; Add printf function to module
+    %printf_name = getelementptr [7 x i8], [7 x i8]* @.str.printf_name, i32 0, i32 0
+    %printf_func = call %LLVMValueRef @llvm_add_function(%LLVMModuleRef %llvm_module, i8* %printf_name, %LLVMTypeRef %printf_func_type)
+    
+    ; Note: ExternalLinkage is the default for functions added via LLVMAddFunction
+    ; We don't need to set linkage explicitly for external declarations
     
     ; Write printf declaration (41 bytes without null terminator) - text IR approach (backward compatibility)
     call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([42 x i8], [42 x i8]* @.str.printf_decl, i32 0, i32 0), i64 41)
@@ -1026,6 +1057,116 @@ done:
 ; Returns: 0 on success, -1 on error
 define i32 @codegen_call(%CodeGen* %cg, i8* %func_name, %ASTNode* %args) {
 entry:
+    ; Get LLVM module and builder
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    
+    ; Check if we can use LLVM API (both module and builder must be non-null)
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    %either_null = or i1 %module_null, %builder_null
+    br i1 %either_null, label %text_only, label %use_llvm_api
+    
+use_llvm_api:
+    ; Look up function in module
+    %func = call %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %module, i8* %func_name)
+    %func_null = icmp eq %LLVMValueRef %func, null
+    br i1 %func_null, label %text_only, label %build_call
+    
+build_call:
+    ; Get context for types
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    
+    ; For printf, function type is i32 (i8*, ...)
+    ; Get i32 and i8* types
+    %i32_type = call %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %context)
+    %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
+    %i8_ptr_type = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %i8_type, i32 0)
+    
+    ; Count arguments and build argument array
+    ; For now, assume printf with one string argument
+    ; Allocate space for one argument
+    %arg_array = alloca %LLVMValueRef, i32 1
+    
+    ; Build argument: getelementptr to string constant
+    ; First, we need to get the string constant from args
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %call_with_no_args, label %get_first_arg
+    
+get_first_arg:
+    %arg_car_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %arg_node = load %ASTNode*, %ASTNode** %arg_car_ptr
+    
+    ; Check if argument is a string literal
+    %arg_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 0
+    %arg_type = load i32, i32* %arg_type_ptr
+    %is_atom = icmp eq i32 %arg_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %check_string_type, label %call_with_no_args
+    
+check_string_type:
+    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 1
+    %atom_type = load i32, i32* %atom_type_ptr
+    %is_string = icmp eq i32 %atom_type, 3  ; TOKEN_STRING
+    br i1 %is_string, label %build_string_arg, label %call_with_no_args
+    
+build_string_arg:
+    ; Get string value and length
+    %str_val_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 2
+    %str_val = load i8*, i8** %str_val_ptr
+    %str_len_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 3
+    %str_len = load i64, i64* %str_len_ptr
+    
+    ; Get the string constant name (should already be generated)
+    %const_name = call i8* @codegen_get_string_constant_name(%CodeGen* %cg, i8* %str_val, i64 %str_len)
+    
+    ; Look up the global constant
+    %global = call %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef %module, i8* %const_name)
+    %global_null = icmp eq %LLVMValueRef %global, null
+    br i1 %global_null, label %call_with_no_args, label %build_gep
+    
+build_gep:
+    ; Build getelementptr: getelementptr ([len x i8], [len x i8]* @.str.N, i32 0, i32 0)
+    %len_plus_one = add i64 %str_len, 1
+    %len_plus_one_int = trunc i64 %len_plus_one to i32
+    %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
+    
+    ; Create indices: [0, 0]
+    %indices = alloca %LLVMValueRef, i32 2
+    %zero_const = call %LLVMValueRef @llvm_create_constant_int(%LLVMTypeRef %i32_type, i64 0, i32 0)
+    %zero_idx = getelementptr %LLVMValueRef, %LLVMValueRef* %indices, i32 0
+    store %LLVMValueRef %zero_const, %LLVMValueRef* %zero_idx
+    %zero_idx2 = getelementptr %LLVMValueRef, %LLVMValueRef* %indices, i32 1
+    store %LLVMValueRef %zero_const, %LLVMValueRef* %zero_idx2
+    
+    ; Build GEP instruction
+    %gep = call %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %array_type, %LLVMValueRef %global, %LLVMValueRef* %indices, i32 2, i8* null)
+    
+    ; Store in argument array
+    store %LLVMValueRef %gep, %LLVMValueRef* %arg_array
+    br label %call_func
+    
+call_with_no_args:
+    ; No arguments - use null array
+    br label %call_func
+    
+call_func:
+    ; PHI nodes must be first in the block
+    %args_count = phi i32 [ 1, %build_gep ], [ 0, %call_with_no_args ]
+    %args_ptr = phi %LLVMValueRef* [ %arg_array, %build_gep ], [ null, %call_with_no_args ]
+    
+    ; Create function type for call: i32 (i8*, ...)
+    %param_types = alloca %LLVMTypeRef, i32 1
+    store %LLVMTypeRef %i8_ptr_type, %LLVMTypeRef* %param_types
+    %call_func_type = call %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %i32_type, %LLVMTypeRef* %param_types, i32 1, i32 1)
+    
+    ; Build call instruction
+    %call_result = call %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %call_func_type, %LLVMValueRef %func, %LLVMValueRef* %args_ptr, i32 %args_count, i8* null)
+    br label %done
+    
+text_only:
     ; Generate: call void @func_name(args...)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.call_void, i32 0, i32 0), i64 9)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
@@ -1038,9 +1179,12 @@ entry:
     call void @codegen_append_call_args(%CodeGen* %cg, %ASTNode* %args)
     
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.rparen, i32 0, i32 0), i64 1)
+    br label %done
     
+done:
     ret i32 0
 }
+
 
 ; Helper: Generate string constant definition only (without reference)
 ; codegen_define_string_constant_only: Generate string constant definition
@@ -1060,6 +1204,48 @@ entry:
     ; Generate constant name
     %name = call i8* @codegen_format_string_name(i32 %counter)
     
+    ; Get LLVM context and module
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    
+    ; Create string constant using LLVM API if available
+    %context_null = icmp eq %LLVMContextRef %context, null
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    %can_use_llvm = or i1 %context_null, %module_null
+    %can_use_llvm_not = xor i1 %can_use_llvm, -1
+    br i1 %can_use_llvm_not, label %create_llvm_constant, label %text_only
+    
+create_llvm_constant:
+    ; Get i8 type
+    %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
+    
+    ; Create array type [len+1 x i8] (including null terminator)
+    %len_plus_one = add i64 %len, 1
+    %len_plus_one_int = trunc i64 %len_plus_one to i32
+    %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
+    
+    ; Create string constant (with null terminator)
+    %str_len_int = trunc i64 %len to i32
+    %const_str = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %str_len_int, i32 0)
+    
+    ; Add as global variable with the constant name
+    %global = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %array_type, i8* %name)
+    
+    ; Set initializer
+    call void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %const_str)
+    
+    ; Set as constant
+    call void @llvm_set_global_constant(%LLVMValueRef %global, i32 1)
+    
+    ; Set linkage to private (equivalent to "private" in text IR)
+    ; LLVMLinkage enum: LLVMPrivateLinkage = 0
+    call void @llvm_set_linkage(%LLVMValueRef %global, i32 0)
+    
+    br label %text_only
+    
+text_only:
     ; Generate IR: @.str_N = private constant [L x i8] c"...\00"
     call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
     
@@ -1364,15 +1550,17 @@ build_ret:
     
     ; Generate return i32 0 (if not already generated by expressions)
     %ret_inst = call %LLVMValueRef @llvm_build_ret(%LLVMBuilderRef %builder, %LLVMValueRef %zero_const)
-    br label %text_only
+    br label %done
     
 text_only:
-    ; Also generate text IR for backward compatibility
+    ; Fallback to text IR generation if LLVM API unavailable
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_main, i32 0, i32 0), i64 20)
     call void @codegen_append_top_level_exprs(%CodeGen* %cg, %ASTNode* %exprs)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.ret_zero, i32 0, i32 0), i64 11)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.close_brace, i32 0, i32 0), i64 1)
+    br label %done
     
+done:
     ret i32 0
 }
 
@@ -1601,11 +1789,94 @@ error:
     ret i32 -1
 }
 
+; Write object file
+; codegen_write_object_file: Write module directly to object file using TargetMachine API
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   filename: Output file path (null-terminated string)
+; Returns: 0 on success, -1 on error
+define i32 @codegen_write_object_file(%CodeGen* %cg, i8* %filename) {
+entry:
+    %cg_null = icmp eq %CodeGen* %cg, null
+    br i1 %cg_null, label %error, label %get_module
+    
+get_module:
+    ; Get LLVM module from CodeGen structure
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    br i1 %module_null, label %error, label %get_triple
+    
+get_triple:
+    ; Get default target triple from LLVM (this should match the system)
+    %default_triple = call i8* @llvm_get_default_target_triple()
+    %triple_null = icmp eq i8* %default_triple, null
+    br i1 %triple_null, label %use_hardcoded_triple, label %get_target
+    
+use_hardcoded_triple:
+    ; Fallback to hardcoded triple if default fails
+    %triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
+    br label %get_target_with_triple
+    
+get_target:
+    ; Use default triple
+    br label %get_target_with_triple
+    
+get_target_with_triple:
+    ; Get the triple to use (either default or hardcoded)
+    %triple_to_use = phi i8* [ %default_triple, %get_target ], [ %triple_array, %use_hardcoded_triple ]
+    br label %get_target_impl
+    
+get_target_impl:
+    ; Get target from triple
+    %target_ptr = alloca %LLVMTargetRef
+    %error_msg_ptr = alloca i8*
+    store i8* null, i8** %error_msg_ptr
+    %target_result = call i32 @llvm_get_target_from_triple(i8* %triple_to_use, %LLVMTargetRef* %target_ptr, i8** %error_msg_ptr)
+    %target_failed = icmp ne i32 %target_result, 0
+    br i1 %target_failed, label %error, label %create_target_machine
+    
+create_target_machine:
+    %target = load %LLVMTargetRef, %LLVMTargetRef* %target_ptr
+    
+    ; Create target machine with default options
+    ; CPU: empty string (use default)
+    ; Features: empty string (use default)
+    ; Level: 2 (CodeGenLevelDefault)
+    ; Reloc: 0 (RelocDefault)
+    ; CodeModel: 0 (CodeModelDefault)
+    %cpu_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %features_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %tm = call %LLVMTargetMachineRef @llvm_create_target_machine(%LLVMTargetRef %target, i8* %triple_to_use, i8* %cpu_str, i8* %features_str, i32 2, i32 0, i32 0)
+    %tm_null = icmp eq %LLVMTargetMachineRef %tm, null
+    br i1 %tm_null, label %error, label %emit_file
+    
+emit_file:
+    ; Emit module to object file
+    ; CodeGen type: 1 = ObjectFile
+    %error_msg_emit = alloca i8*
+    store i8* null, i8** %error_msg_emit
+    %emit_result = call i32 @llvm_target_machine_emit_to_file(%LLVMTargetMachineRef %tm, %LLVMModuleRef %module, i8* %filename, i32 1, i8** %error_msg_emit)
+    
+    ; Dispose target machine
+    call void @llvm_dispose_target_machine(%LLVMTargetMachineRef %tm)
+    
+    %emit_failed = icmp ne i32 %emit_result, 0
+    br i1 %emit_failed, label %error, label %success
+    
+success:
+    ret i32 0
+    
+error:
+    ret i32 -1
+}
+
 ; String literals
 @.str.target_triple = private unnamed_addr constant [47 x i8] c"target triple = \22x86_64-apple-macosx10.15.0\22\0A\0A\00"
 @.str.printf_decl = private unnamed_addr constant [42 x i8] c"declare i32 @printf(i8* nocapture, ...)\0A\0A\00"
 @.str.module_name = private unnamed_addr constant [5 x i8] c"vibe\00"
 @.str.target_triple_value = private unnamed_addr constant [27 x i8] c"x86_64-apple-macosx10.15.0\00"
+@.str.data_layout_value = private unnamed_addr constant [38 x i8] c"e-m:o-i64:64-f80:128-n8:16:32:64-S128\00"
 @.str.space_at = private unnamed_addr constant [3 x i8] c" @\00"
 @.str.newline_close_brace = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
 @.str.main_name = private unnamed_addr constant [5 x i8] c"main\00"
@@ -1645,6 +1916,8 @@ error:
 @.str.x_i8_bracket_comma = private unnamed_addr constant [10 x i8] c" x i8], [\00"
 @.str.x_i8_ptr_at = private unnamed_addr constant [10 x i8] c" x i8]* @\00"
 @.str.getelementptr_indices = private unnamed_addr constant [15 x i8] c", i32 0, i32 0\00"
+@.str.printf_name = private unnamed_addr constant [7 x i8] c"printf\00"
+@.str.empty = private unnamed_addr constant [1 x i8] c"\00"
 
 ; Append bytevector with proper escaping for LLVM IR
 ; codegen_append_bytevector: Append bytevector data with escaping

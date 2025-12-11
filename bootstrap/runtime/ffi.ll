@@ -253,6 +253,12 @@ declare i8* @dlerror()
 ; LLVM Memory Buffer type (opaque pointer)
 %LLVMMemoryBufferRef = type i8*
 
+; LLVM Target type (opaque pointer)
+%LLVMTargetRef = type i8*
+
+; LLVM TargetMachine type (opaque pointer)
+%LLVMTargetMachineRef = type i8*
+
 ; External declarations for LLVM C API functions
 ; Context management
 declare %LLVMContextRef @LLVMContextCreate()
@@ -262,6 +268,7 @@ declare void @LLVMContextDispose(%LLVMContextRef)
 declare %LLVMModuleRef @LLVMModuleCreateWithNameInContext(i8*, %LLVMContextRef)
 declare void @LLVMDisposeModule(%LLVMModuleRef)
 declare void @LLVMSetTarget(%LLVMModuleRef, i8*)
+declare void @LLVMSetDataLayout(%LLVMModuleRef, i8*)
 
 ; Type creation
 declare %LLVMTypeRef @LLVMInt8TypeInContext(%LLVMContextRef)
@@ -311,13 +318,50 @@ declare void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef)
 ; Bitcode writing
 declare i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef, i8*)
 
+; TargetMachine API
+; Native target initialization functions (must be called before using TargetMachine API)
+; These are X86-specific initialization functions (for x86_64 target)
+declare void @LLVMInitializeX86TargetInfo()
+declare void @LLVMInitializeX86Target()
+declare void @LLVMInitializeX86TargetMC()
+declare void @LLVMInitializeX86AsmPrinter()
+declare void @LLVMInitializeX86AsmParser()
+
+declare i8* @LLVMGetDefaultTargetTriple()
+declare i32 @LLVMGetTargetFromTriple(i8*, %LLVMTargetRef*, i8**)
+declare %LLVMTargetMachineRef @LLVMCreateTargetMachine(%LLVMTargetRef, i8*, i8*, i8*, i32, i32, i32)
+declare i32 @LLVMTargetMachineEmitToFile(%LLVMTargetMachineRef, %LLVMModuleRef, i8*, i32, i8**)
+declare void @LLVMDisposeTargetMachine(%LLVMTargetMachineRef)
+
+; Function lookup
+declare %LLVMValueRef @LLVMGetNamedFunction(%LLVMModuleRef, i8*)
+
+; Global variable lookup
+declare %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef, i8*)
+
+; Initialize native target
+; llvm_initialize_native_target: Initialize native target for TargetMachine API
+; This must be called before using TargetMachine functions
+; For x86_64 target, this initializes X86 target components
+define void @llvm_initialize_native_target() {
+entry:
+    ; Initialize X86 target components
+    call void @LLVMInitializeX86TargetInfo()
+    call void @LLVMInitializeX86Target()
+    call void @LLVMInitializeX86TargetMC()
+    call void @LLVMInitializeX86AsmPrinter()
+    call void @LLVMInitializeX86AsmParser()
+    ret void
+}
+
 ; Load LLVM library and initialize function pointers
-; llvm_ffi_init: Initialize LLVM FFI
+; llvm_ffi_init: Initialize LLVM FFI and native target
 ; Returns: 0 on success, -1 on error
-; Note: Since LLVM is statically linked, this is a no-op but kept for API compatibility
+; Note: Since LLVM is statically linked, we call initialization functions directly.
 define i32 @llvm_ffi_init() {
 entry:
-    ; LLVM is statically linked, so no initialization needed
+    ; Initialize native target (required for TargetMachine API)
+    call void @llvm_initialize_native_target()
     ret i32 0
 }
 
@@ -370,6 +414,17 @@ entry:
 define void @llvm_set_target(%LLVMModuleRef %module, i8* %triple) {
 entry:
     call void @LLVMSetTarget(%LLVMModuleRef %module, i8* %triple)
+    ret void
+}
+
+; Set data layout for module
+; llvm_set_data_layout: Set the data layout for a module
+; Parameters:
+;   module: LLVMModuleRef
+;   data_layout: Data layout string (null-terminated)
+define void @llvm_set_data_layout(%LLVMModuleRef %module, i8* %data_layout) {
+entry:
+    call void @LLVMSetDataLayout(%LLVMModuleRef %module, i8* %data_layout)
     ret void
 }
 
@@ -750,4 +805,91 @@ define i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %path) {
 entry:
     %result = call i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef %module, i8* %path)
     ret i32 %result
+}
+
+; Get default target triple
+; llvm_get_default_target_triple: Get default target triple string
+; Returns: Target triple string (caller must free with free())
+define i8* @llvm_get_default_target_triple() {
+entry:
+    %triple = call i8* @LLVMGetDefaultTargetTriple()
+    ret i8* %triple
+}
+
+; Get target from triple
+; llvm_get_target_from_triple: Get target from triple string
+; Parameters:
+;   triple: Target triple string (null-terminated)
+;   target: Pointer to LLVMTargetRef (output parameter)
+; Returns: 0 on success, non-zero on error (error message in error_msg if provided)
+define i32 @llvm_get_target_from_triple(i8* %triple, %LLVMTargetRef* %target, i8** %error_msg) {
+entry:
+    %result = call i32 @LLVMGetTargetFromTriple(i8* %triple, %LLVMTargetRef* %target, i8** %error_msg)
+    ret i32 %result
+}
+
+; Create target machine
+; llvm_create_target_machine: Create a target machine
+; Parameters:
+;   target: LLVMTargetRef
+;   triple: Target triple string (null-terminated)
+;   cpu: CPU name (null-terminated, can be empty string)
+;   features: Feature string (null-terminated, can be empty string)
+;   level: Optimization level (0=CodeGenLevelNone, 1=CodeGenLevelLess, 2=CodeGenLevelDefault, 3=CodeGenLevelAggressive)
+;   reloc: Relocation model (0=RelocDefault, 1=RelocStatic, 2=RelocPIC, 3=RelocDynamicNoPic)
+;   code_model: Code model (0=CodeModelDefault, 1=CodeModelJITDefault, 2=CodeModelSmall, 3=CodeModelKernel, 4=CodeModelMedium, 5=CodeModelLarge)
+; Returns: LLVMTargetMachineRef, or null on error
+define %LLVMTargetMachineRef @llvm_create_target_machine(%LLVMTargetRef %target, i8* %triple, i8* %cpu, i8* %features, i32 %level, i32 %reloc, i32 %code_model) {
+entry:
+    %tm = call %LLVMTargetMachineRef @LLVMCreateTargetMachine(%LLVMTargetRef %target, i8* %triple, i8* %cpu, i8* %features, i32 %level, i32 %reloc, i32 %code_model)
+    ret %LLVMTargetMachineRef %tm
+}
+
+; Emit module to file
+; llvm_target_machine_emit_to_file: Emit module to file using target machine
+; Parameters:
+;   tm: LLVMTargetMachineRef
+;   module: LLVMModuleRef
+;   filename: Output file path (null-terminated string)
+;   codegen: Code generation type (0=AssemblyFile, 1=ObjectFile, 2=...)
+;   error_msg: Pointer to i8* for error message (output parameter, can be null)
+; Returns: 0 on success, non-zero on error
+define i32 @llvm_target_machine_emit_to_file(%LLVMTargetMachineRef %tm, %LLVMModuleRef %module, i8* %filename, i32 %codegen, i8** %error_msg) {
+entry:
+    %result = call i32 @LLVMTargetMachineEmitToFile(%LLVMTargetMachineRef %tm, %LLVMModuleRef %module, i8* %filename, i32 %codegen, i8** %error_msg)
+    ret i32 %result
+}
+
+; Dispose target machine
+; llvm_dispose_target_machine: Dispose a target machine
+; Parameters:
+;   tm: LLVMTargetMachineRef to dispose
+define void @llvm_dispose_target_machine(%LLVMTargetMachineRef %tm) {
+entry:
+    call void @LLVMDisposeTargetMachine(%LLVMTargetMachineRef %tm)
+    ret void
+}
+
+; Get named function
+; llvm_get_named_function: Get a function by name from module
+; Parameters:
+;   module: LLVMModuleRef
+;   name: Function name (null-terminated string)
+; Returns: LLVMValueRef for function, or null if not found
+define %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %module, i8* %name) {
+entry:
+    %func = call %LLVMValueRef @LLVMGetNamedFunction(%LLVMModuleRef %module, i8* %name)
+    ret %LLVMValueRef %func
+}
+
+; Get named global
+; llvm_get_named_global: Get a global variable by name from module
+; Parameters:
+;   module: LLVMModuleRef
+;   name: Global name (null-terminated string)
+; Returns: LLVMValueRef for global, or null if not found
+define %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef %module, i8* %name) {
+entry:
+    %global = call %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef %module, i8* %name)
+    ret %LLVMValueRef %global
 }

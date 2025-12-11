@@ -215,6 +215,27 @@ Once the bootstrap compiler is complete:
 4. Begin self-hosting the compiler
 5. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation
 
+### Future: `define-bitcode-ffi-function`
+
+When we begin rewriting `.ll` files in `.vibe`, we should implement `define-bitcode-ffi-function` to:
+
+1. **Declare external C functions from Vibe code**:
+   ```scheme
+   (define-bitcode-ffi-function printf
+     (return-type |i32|)
+     (params (|i8*| format) ...)
+     (linkage external)
+     (vararg #t))
+   ```
+
+2. **Replace hardcoded declarations**: Move `printf` and other C library function declarations from hardcoded `codegen_init()` calls to Vibe code, making the compiler more flexible and extensible.
+
+3. **Support user-defined FFI**: Allow users to declare their own external functions for calling C libraries, enabling better integration with system libraries.
+
+4. **Pattern for FFI usage**: This will establish the pattern for declaring and using FFI functions from Vibe code, which is essential for the self-hosting goals.
+
+**Current status**: External function declarations (like `printf`) are hardcoded in `codegen_init()`. The infrastructure for FFI exists, but `define-bitcode-ffi-function` is not yet implemented. This will be implemented as part of the 2nd generation bootstrap when rewriting `.ll` files in `.vibe`.
+
 ## End-of-Session Practices
 
 At the end of each development session, the following steps should be completed:

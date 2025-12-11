@@ -215,8 +215,22 @@ use_arg2:
     br label %write_bitcode
 
 write_bitcode:
-    ; Write bitcode to file using LLVM API
+    ; Write bitcode or object file based on extension
     %output_file_phi = phi i8* [ %output_file_o, %get_output_file ], [ %output_file_arg, %use_arg2 ]
+    
+    ; Check if output file ends with .o (object file)
+    %ext_check = call i32 @check_extension(i8* %output_file_phi, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.dot_o, i32 0, i32 0))
+    %is_object_file = icmp ne i32 %ext_check, 0
+    br i1 %is_object_file, label %write_object, label %write_bc
+    
+write_object:
+    ; Write object file directly
+    %write_obj_result = call i32 @codegen_write_object_file(%CodeGen* %codegen, i8* %output_file_phi)
+    %write_obj_failed = icmp ne i32 %write_obj_result, 0
+    br i1 %write_obj_failed, label %write_error, label %done
+    
+write_bc:
+    ; Write bitcode to file using LLVM API
     %write_result = call i32 @codegen_write_bitcode(%CodeGen* %codegen, i8* %output_file_phi)
     %write_failed = icmp ne i32 %write_result, 0
     br i1 %write_failed, label %write_error, label %done
@@ -359,6 +373,40 @@ no_match:
     ret i32 0
 }
 
+; Check if filename ends with extension
+; check_extension: Check if a filename ends with a given extension
+; Parameters:
+;   filename: Filename string (null-terminated)
+;   extension: Extension string (null-terminated, e.g., ".o")
+; Returns: 1 if filename ends with extension, 0 otherwise
+define i32 @check_extension(i8* %filename, i8* %extension) {
+entry:
+    ; Get lengths
+    %filename_len = call i64 @strlen(i8* %filename)
+    %ext_len = call i64 @strlen(i8* %extension)
+    
+    ; Check if filename is long enough
+    %len_ok = icmp uge i64 %filename_len, %ext_len
+    br i1 %len_ok, label %check_suffix, label %no_match
+    
+check_suffix:
+    ; Calculate offset to start of suffix
+    %suffix_offset = sub i64 %filename_len, %ext_len
+    %suffix_ptr = getelementptr i8, i8* %filename, i64 %suffix_offset
+    
+    ; Compare suffix with extension
+    %ext_len_int = trunc i64 %ext_len to i32
+    %cmp_result = call i32 @strncmp(i8* %suffix_ptr, i8* %extension, i32 %ext_len_int)
+    %is_match = icmp eq i32 %cmp_result, 0
+    br i1 %is_match, label %match, label %no_match
+    
+match:
+    ret i32 1
+    
+no_match:
+    ret i32 0
+}
+
 ; String literals
 @.str.usage = private unnamed_addr constant [47 x i8] c"Usage: bootstrap_compiler <input> [-o output]\0A\00"
 @.str.file_error = private unnamed_addr constant [20 x i8] c"Error reading file\0A\00"
@@ -369,6 +417,7 @@ no_match:
 @.str.define_bitcode_constant = private unnamed_addr constant [24 x i8] c"define-bitcode-constant\00"
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
+@.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
@@ -386,3 +435,4 @@ declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
 declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
+declare i32 @codegen_write_object_file(%CodeGen*, i8*)
