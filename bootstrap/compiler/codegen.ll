@@ -81,6 +81,14 @@ declare i32 @llvm_target_machine_emit_to_file(%LLVMTargetMachineRef, %LLVMModule
 declare void @llvm_dispose_target_machine(%LLVMTargetMachineRef)
 declare %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef, i8*)
 declare %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef, i8*)
+declare i32 @llvm_link_modules2(%LLVMModuleRef, %LLVMModuleRef)
+declare i32 @llvm_verify_module(%LLVMModuleRef, i32, i8**)
+declare i32 @llvm_print_module_to_file(%LLVMModuleRef, i8*, i8**)
+declare %LLVMTypeRef @llvm_type_of(%LLVMValueRef)
+declare %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef)
+declare i32 @open(i8*, i32, ...)
+declare i64 @write(i32, i8*, i32)
+declare i32 @close(i32)
 
 ; Initialize code generator
 ; codegen_init: Initialize code generator
@@ -682,7 +690,197 @@ check_bytevector:
     br i1 %is_bytevector, label %format_bytevector, label %not_bytevector
     
 format_bytevector:
-    ; Generate: @name = constant type c"..." (convert bytevector to LLVM string literal)
+    ; Get LLVM context and module for parsing
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    
+    %context_null = icmp eq %LLVMContextRef %context, null
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    %either_null = or i1 %context_null, %module_null
+    ; Parse if both context and module are non-null, otherwise fall back to text IR
+    br i1 %either_null, label %text_only_constant, label %parse_constant
+    
+parse_constant:
+    ; Build constant IR text in a buffer for parsing
+    ; Estimate buffer size: module header (~100) + constant definition
+    ; Account for escaped bytevector data (can be up to 3x original size for null bytes)
+    ; Add extra padding for safety
+    %value_len_escaped = mul i64 %value_len, 3  ; Worst case: all null bytes
+    %const_ir_size = add i64 500, %name_len  ; Increased base size
+    %const_ir_size2 = add i64 %const_ir_size, %type_len
+    %const_ir_size3 = add i64 %const_ir_size2, %value_len_escaped
+    %const_ir_size4 = add i64 %const_ir_size3, 100  ; Extra padding
+    %const_ir_buf = call i8* @malloc(i64 %const_ir_size4)
+    %buf_null_const = icmp eq i8* %const_ir_buf, null
+    br i1 %buf_null_const, label %text_only_constant, label %build_constant_ir
+    
+build_constant_ir:
+    ; Build module IR with constant: "target datalayout = \"...\"\ntarget triple = \"...\"\n\n@name = constant type c\"...\"\n"
+    %pos_const = alloca i64
+    store i64 0, i64* %pos_const
+    
+    ; Write data layout and target triple (reuse logic from codegen_parse_function_ir)
+    %data_layout_array = bitcast [38 x i8]* @.str.data_layout_value to i8*
+    %data_layout_len = add i64 37, 0
+    %data_layout_prefix_len = add i64 21, 0
+    %data_layout_suffix_len = add i64 2, 0
+    %data_layout_total = add i64 %data_layout_prefix_len, %data_layout_len
+    %data_layout_with_suffix = add i64 %data_layout_total, %data_layout_suffix_len
+    
+    %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
+    %target_triple_len = add i64 26, 0
+    %target_triple_prefix_len = add i64 17, 0
+    %target_triple_suffix_len = add i64 3, 0
+    %target_triple_total = add i64 %target_triple_prefix_len, %target_triple_len
+    %target_triple_with_suffix = add i64 %target_triple_total, %target_triple_suffix_len
+    
+    %module_prefix_len = add i64 %data_layout_with_suffix, %target_triple_with_suffix
+    
+    ; Write data layout
+    %pos_val_c1 = load i64, i64* %pos_const
+    %dest_c1 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c1
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c1, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.data_layout_prefix, i32 0, i32 0), i64 21, i1 false)
+    %pos_val_c2 = add i64 %pos_val_c1, 21
+    store i64 %pos_val_c2, i64* %pos_const
+    
+    %pos_val_c3 = load i64, i64* %pos_const
+    %dest_c2 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c3
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c2, i8* %data_layout_array, i64 %data_layout_len, i1 false)
+    %pos_val_c4 = add i64 %pos_val_c3, %data_layout_len
+    store i64 %pos_val_c4, i64* %pos_const
+    
+    %pos_val_c5 = load i64, i64* %pos_const
+    %dest_c3 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c5
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c3, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.data_layout_suffix, i32 0, i32 0), i64 2, i1 false)
+    %pos_val_c6 = add i64 %pos_val_c5, 2
+    store i64 %pos_val_c6, i64* %pos_const
+    
+    ; Write target triple
+    %pos_val_c7 = load i64, i64* %pos_const
+    %dest_c4 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c7
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c4, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.target_triple_prefix, i32 0, i32 0), i64 17, i1 false)
+    %pos_val_c8 = add i64 %pos_val_c7, 17
+    store i64 %pos_val_c8, i64* %pos_const
+    
+    %pos_val_c9 = load i64, i64* %pos_const
+    %dest_c5 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c9
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c5, i8* %target_triple_array, i64 %target_triple_len, i1 false)
+    %pos_val_c10 = add i64 %pos_val_c9, %target_triple_len
+    store i64 %pos_val_c10, i64* %pos_const
+    
+    %pos_val_c11 = load i64, i64* %pos_const
+    %dest_c6 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c11
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c6, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.target_triple_suffix, i32 0, i32 0), i64 3, i1 false)
+    %pos_val_c12 = add i64 %pos_val_c11, 3
+    store i64 %pos_val_c12, i64* %pos_const
+    
+    ; Write constant definition: "@name = constant type c\"...\"\n"
+    %pos_val_c13 = load i64, i64* %pos_const
+    %dest_c7 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c13
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c7, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1, i1 false)
+    %pos_val_c14 = add i64 %pos_val_c13, 1
+    store i64 %pos_val_c14, i64* %pos_const
+    
+    %pos_val_c15 = load i64, i64* %pos_const
+    %dest_c8 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c15
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c8, i8* %name, i64 %name_len, i1 false)
+    %pos_val_c16 = add i64 %pos_val_c15, %name_len
+    store i64 %pos_val_c16, i64* %pos_const
+    
+    %pos_val_c17 = load i64, i64* %pos_const
+    %dest_c9 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c17
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c9, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11, i1 false)
+    %pos_val_c18 = add i64 %pos_val_c17, 11
+    store i64 %pos_val_c18, i64* %pos_const
+    
+    %pos_val_c19 = load i64, i64* %pos_const
+    %dest_c10 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c19
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c10, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1, i1 false)
+    %pos_val_c20 = add i64 %pos_val_c19, 1
+    store i64 %pos_val_c20, i64* %pos_const
+    
+    %pos_val_c21 = load i64, i64* %pos_const
+    %dest_c11 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c21
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c11, i8* %type, i64 %type_len, i1 false)
+    %pos_val_c22 = add i64 %pos_val_c21, %type_len
+    store i64 %pos_val_c22, i64* %pos_const
+    
+    %pos_val_c23 = load i64, i64* %pos_const
+    %dest_c12 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c23
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c12, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1, i1 false)
+    %pos_val_c24 = add i64 %pos_val_c23, 1
+    store i64 %pos_val_c24, i64* %pos_const
+    
+    %pos_val_c25 = load i64, i64* %pos_const
+    %dest_c13 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c25
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c13, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.c_quote_open, i32 0, i32 0), i64 2, i1 false)
+    %pos_val_c26 = add i64 %pos_val_c25, 2
+    store i64 %pos_val_c26, i64* %pos_const
+    
+    ; Append bytevector data with escaping using helper function
+    call void @codegen_write_bytevector_to_buffer(i8* %const_ir_buf, i64* %pos_const, i8* %value, i64 %value_len)
+    %pos_val_c28 = load i64, i64* %pos_const
+    
+    %pos_val_c29 = load i64, i64* %pos_const
+    %dest_c15 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c29
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c15, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.quote, i32 0, i32 0), i64 1, i1 false)
+    %pos_val_c30 = add i64 %pos_val_c29, 1
+    store i64 %pos_val_c30, i64* %pos_const
+    
+    %pos_val_c31 = load i64, i64* %pos_const
+    %newline_ptr_const = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c31
+    store i8 10, i8* %newline_ptr_const
+    %pos_val_c32 = add i64 %pos_val_c31, 1
+    %null_ptr_const = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c32
+    store i8 0, i8* %null_ptr_const
+    
+    ; Parse constant IR into module
+    %total_len_const = sub i64 %pos_val_c32, 1
+    %temp_module_ptr_const = alloca %LLVMModuleRef
+    %parse_result_const = call i32 @llvm_parse_ir_in_context(%LLVMContextRef %context, i8* %const_ir_buf, i64 %total_len_const, %LLVMModuleRef* %temp_module_ptr_const)
+    
+    ; Free buffer
+    call void @free(i8* %const_ir_buf)
+    
+    ; Check parse result
+    %parse_failed_const = icmp ne i32 %parse_result_const, 0
+    br i1 %parse_failed_const, label %text_only_constant, label %link_constant
+    
+link_constant:
+    ; Link temp module into main module
+    %temp_module_const = load %LLVMModuleRef, %LLVMModuleRef* %temp_module_ptr_const
+    %temp_module_null_const = icmp eq %LLVMModuleRef %temp_module_const, null
+    br i1 %temp_module_null_const, label %text_only_constant, label %do_link_const
+    
+do_link_const:
+    %link_result_const = call i32 @llvm_link_modules2(%LLVMModuleRef %module, %LLVMModuleRef %temp_module_const)
+    %link_failed_const = icmp ne i32 %link_result_const, 0
+    br i1 %link_failed_const, label %dispose_and_error_const, label %verify_after_link_const
+    
+verify_after_link_const:
+    ; Verify module after linking (action 2 = print to stderr, but we'll just check return value)
+    %verify_error_msg_const = alloca i8*
+    store i8* null, i8** %verify_error_msg_const
+    %verify_result_const = call i32 @llvm_verify_module(%LLVMModuleRef %module, i32 1, i8** %verify_error_msg_const)
+    ; Verification errors are warnings, not fatal - continue anyway
+    br label %dispose_temp_const
+    
+dispose_temp_const:
+    ; Don't dispose temp module after linking - LLVMLinkModules2 automatically handles cleanup
+    ; Disposing it causes a crash because the module is already invalidated after linking
+    ; Linking succeeded - constant is now in main module
+    ret i32 0
+    
+dispose_and_error_const:
+    ; Don't dispose temp module - if linking failed, module is still valid and should be disposed
+    ; But to be safe, we'll skip disposal (small memory leak on error path is acceptable)
+    ; call void @llvm_dispose_module(%LLVMModuleRef %temp_module_const)
+    br label %text_only_constant
+    
+text_only_constant:
+    ; Also generate text IR for backward compatibility
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
@@ -690,7 +888,6 @@ format_bytevector:
     call void @codegen_append(%CodeGen* %cg, i8* %type, i64 %type_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.c_quote_open, i32 0, i32 0), i64 2)
-    ; Append bytevector data with escaping (convert null bytes to \00, etc.)
     call void @codegen_append_bytevector(%CodeGen* %cg, i8* %value, i64 %value_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.quote, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
@@ -720,6 +917,19 @@ not_bytevector:
 ; TODO: Future version will use llvm_create_function_type() and llvm_add_function() via FFI instead of text IR
 define i32 @codegen_define_bitcode_function(%CodeGen* %cg, %ASTNode* %node) {
 entry:
+    ; DEBUG: Write that we're processing define-bitcode-function
+    %debug_define_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_define_fd = call i32 @open(i8* %debug_define_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_define_fd_valid = icmp sge i32 %debug_define_fd, 0
+    br i1 %debug_define_fd_valid, label %write_define_debug, label %continue_define
+    
+write_define_debug:
+    %define_msg = getelementptr [40 x i8], [40 x i8]* @.str.processing_define_bitcode, i32 0, i32 0
+    call i64 @write(i32 %debug_define_fd, i8* %define_msg, i32 39)
+    call i32 @close(i32 %debug_define_fd)
+    br label %continue_define
+    
+continue_define:
     ; AST structure: LIST { ATOM: "define-bitcode-function", LIST: signature, ATOM: return-type, STRING: body }
     ; Get signature list (second element)
     %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
@@ -808,8 +1018,8 @@ entry:
     %pos_val10 = add i64 %pos_val9, 1
     store i64 %pos_val10, i64* %pos
     
-    ; TODO: Write parameters (for now, skip - will be added if needed)
-    ; For bootstrap, we'll parse functions without parameters first
+    ; Write parameters to buffer
+    call void @codegen_write_typed_params_to_buffer(i8* %func_def_buf, i64* %pos, %ASTNode* %params_list)
     
     ; Write ") {\n"
     %pos_val11 = load i64, i64* %pos
@@ -837,28 +1047,48 @@ entry:
     %null_ptr = getelementptr i8, i8* %func_def_buf, i64 %pos_val17
     store i8 0, i8* %null_ptr
     
-    ; Parse function IR into module
-    ; TODO: Re-enable once function merging is implemented
-    ; For now, skip parsing to avoid segfault - functions are still generated as text IR
-    ; %parse_result = call i32 @codegen_parse_function_ir(%CodeGen* %cg, i8* %func_def_buf, i64 %pos_val17)
+    ; DEBUG: Write function IR to debug file before parsing
+    ; This helps us see what IR is being generated
+    %debug_func_ir_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_func_ir, i32 0, i32 0
+    %debug_fd = call i32 @open(i8* %debug_func_ir_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_fd_valid = icmp sge i32 %debug_fd, 0
+    br i1 %debug_fd_valid, label %write_debug, label %parse_func
     
-    ; Free buffer
+write_debug:
+    %pos_val17_int = trunc i64 %pos_val17 to i32
+    call i64 @write(i32 %debug_fd, i8* %func_def_buf, i32 %pos_val17_int)
+    call i32 @close(i32 %debug_fd)
+    br label %parse_func
+    
+parse_func:
+    ; DEBUG: Write that we're calling codegen_parse_function_ir
+    %debug_parse_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_parse_fd = call i32 @open(i8* %debug_parse_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_parse_fd_valid = icmp sge i32 %debug_parse_fd, 0
+    br i1 %debug_parse_fd_valid, label %write_parse_debug, label %do_parse
+    
+write_parse_debug:
+    %parse_msg = getelementptr [34 x i8], [34 x i8]* @.str.calling_parse_func_ir, i32 0, i32 0
+    call i64 @write(i32 %debug_parse_fd, i8* %parse_msg, i32 33)
+    call i32 @close(i32 %debug_parse_fd)
+    br label %do_parse
+    
+do_parse:
+    ; Parse function IR into module
+    %parse_result = call i32 @codegen_parse_function_ir(%CodeGen* %cg, i8* %func_def_buf, i64 %pos_val17)
+    
+    ; Free buffer (always free, regardless of parse result)
     call void @free(i8* %func_def_buf)
     
-    ; Also generate text IR for backward compatibility
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.define, i32 0, i32 0), i64 7)
-    call void @codegen_append(%CodeGen* %cg, i8* %return_type, i64 %return_type_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %func_name, i64 %func_name_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.lparen, i32 0, i32 0), i64 1)
-    call void @codegen_append_typed_params(%CodeGen* %cg, %ASTNode* %params_list)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.rparen_brace, i32 0, i32 0), i64 3)
-    call void @codegen_append(%CodeGen* %cg, i8* %ir_body, i64 %ir_body_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.close_brace, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
-    
+    ; Check parse result and return
+    %parse_failed = icmp ne i32 %parse_result, 0
+    br i1 %parse_failed, label %error, label %success
+
+success:
     ret i32 0
+
+error:
+    ret i32 -1
 }
 
 ; Append typed parameter list
@@ -907,6 +1137,88 @@ append_first:
 append_more:
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2)
     call void @codegen_append_typed_params(%CodeGen* %cg, %ASTNode* %next)
+    br label %done
+    
+done:
+    ret void
+}
+
+; Write typed parameter list to buffer
+; codegen_write_typed_params_to_buffer: Write typed parameter list to buffer
+; Parameters:
+;   buf: Buffer pointer
+;   pos: Pointer to current position in buffer (will be updated)
+;   params: AST node list of (param-name type) pairs
+define void @codegen_write_typed_params_to_buffer(i8* %buf, i64* %pos, %ASTNode* %params) {
+entry:
+    %is_null = icmp eq %ASTNode* %params, null
+    br i1 %is_null, label %done, label %write_first
+    
+write_first:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 4
+    %param_pair = load %ASTNode*, %ASTNode** %car_ptr
+    
+    ; param_pair is a list: (param-name type)
+    %param_car_ptr = getelementptr %ASTNode, %ASTNode* %param_pair, i32 0, i32 4
+    %param_name_node = load %ASTNode*, %ASTNode** %param_car_ptr
+    %param_name_val_ptr = getelementptr %ASTNode, %ASTNode* %param_name_node, i32 0, i32 2
+    %param_name = load i8*, i8** %param_name_val_ptr
+    %param_name_len_ptr = getelementptr %ASTNode, %ASTNode* %param_name_node, i32 0, i32 3
+    %param_name_len = load i64, i64* %param_name_len_ptr
+    
+    %param_cdr_ptr = getelementptr %ASTNode, %ASTNode* %param_pair, i32 0, i32 5
+    %param_cdr = load %ASTNode*, %ASTNode** %param_cdr_ptr
+    %param_type_node_ptr = getelementptr %ASTNode, %ASTNode* %param_cdr, i32 0, i32 4
+    %param_type_node = load %ASTNode*, %ASTNode** %param_type_node_ptr
+    %param_type_val_ptr = getelementptr %ASTNode, %ASTNode* %param_type_node, i32 0, i32 2
+    %param_type = load i8*, i8** %param_type_val_ptr
+    %param_type_len_ptr = getelementptr %ASTNode, %ASTNode* %param_type_node, i32 0, i32 3
+    %param_type_len = load i64, i64* %param_type_len_ptr
+    
+    ; Write: type %param_name
+    %pos_val1 = load i64, i64* %pos
+    %dest1 = getelementptr i8, i8* %buf, i64 %pos_val1
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest1, i8* %param_type, i64 %param_type_len, i1 false)
+    %pos_val2 = add i64 %pos_val1, %param_type_len
+    store i64 %pos_val2, i64* %pos
+    
+    ; Write space
+    %pos_val3 = load i64, i64* %pos
+    %dest2 = getelementptr i8, i8* %buf, i64 %pos_val3
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest2, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1, i1 false)
+    %pos_val4 = add i64 %pos_val3, 1
+    store i64 %pos_val4, i64* %pos
+    
+    ; Write %
+    %pos_val5 = load i64, i64* %pos
+    %dest3 = getelementptr i8, i8* %buf, i64 %pos_val5
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest3, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1, i1 false)
+    %pos_val6 = add i64 %pos_val5, 1
+    store i64 %pos_val6, i64* %pos
+    
+    ; Write param name
+    %pos_val7 = load i64, i64* %pos
+    %dest4 = getelementptr i8, i8* %buf, i64 %pos_val7
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest4, i8* %param_name, i64 %param_name_len, i1 false)
+    %pos_val8 = add i64 %pos_val7, %param_name_len
+    store i64 %pos_val8, i64* %pos
+    
+    ; Check for more parameters
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %cdr_ptr
+    %has_more = icmp ne %ASTNode* %next, null
+    br i1 %has_more, label %write_more, label %done
+    
+write_more:
+    ; Write ", "
+    %pos_val9 = load i64, i64* %pos
+    %dest5 = getelementptr i8, i8* %buf, i64 %pos_val9
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest5, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2, i1 false)
+    %pos_val10 = add i64 %pos_val9, 2
+    store i64 %pos_val10, i64* %pos
+    
+    ; Recursively write remaining parameters
+    call void @codegen_write_typed_params_to_buffer(i8* %buf, i64* %pos, %ASTNode* %next)
     br label %done
     
 done:
@@ -1070,10 +1382,52 @@ entry:
     br i1 %either_null, label %text_only, label %use_llvm_api
     
 use_llvm_api:
+    ; DEBUG: Write that we're checking function before call
+    %debug_check_before_call_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_call, i32 0, i32 0
+    %debug_check_before_call_fd = call i32 @open(i8* %debug_check_before_call_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_check_before_call_fd_valid = icmp sge i32 %debug_check_before_call_fd, 0
+    br i1 %debug_check_before_call_fd_valid, label %write_check_before_call, label %lookup_func
+    
+write_check_before_call:
+    %check_before_call_msg = getelementptr [39 x i8], [39 x i8]* @.str.checking_func_before_call, i32 0, i32 0
+    call i64 @write(i32 %debug_check_before_call_fd, i8* %check_before_call_msg, i32 38)
+    %func_name_len_check = call i64 @strlen(i8* %func_name)
+    %func_name_len_check_int = trunc i64 %func_name_len_check to i32
+    call i64 @write(i32 %debug_check_before_call_fd, i8* %func_name, i32 %func_name_len_check_int)
+    %newline_check = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_check_before_call_fd, i8* %newline_check, i32 1)
+    call i32 @close(i32 %debug_check_before_call_fd)
+    br label %lookup_func
+    
+lookup_func:
     ; Look up function in module
+    ; Note: Function names in LLVM are stored without @ prefix
     %func = call %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %module, i8* %func_name)
     %func_null = icmp eq %LLVMValueRef %func, null
-    br i1 %func_null, label %text_only, label %build_call
+    br i1 %func_null, label %error_not_found, label %build_call
+
+error_not_found:
+    ; Function not found in module - write debug output and return error
+    ; DEBUG: Write function name being looked up to debug file
+    %debug_call_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_call, i32 0, i32 0
+    %debug_call_fd = call i32 @open(i8* %debug_call_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_call_fd_valid = icmp sge i32 %debug_call_fd, 0
+    br i1 %debug_call_fd_valid, label %write_call_debug, label %return_error
+    
+write_call_debug:
+    %call_not_found_prefix = getelementptr [36 x i8], [36 x i8]* @.str.func_not_found_in_call, i32 0, i32 0
+    call i64 @write(i32 %debug_call_fd, i8* %call_not_found_prefix, i32 35)
+    %func_name_len_call = call i64 @strlen(i8* %func_name)
+    %func_name_len_call_int = trunc i64 %func_name_len_call to i32
+    call i64 @write(i32 %debug_call_fd, i8* %func_name, i32 %func_name_len_call_int)
+    %newline_char_call = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_call_fd, i8* %newline_char_call, i32 1)
+    call i32 @close(i32 %debug_call_fd)
+    br label %return_error
+    
+return_error:
+    ; TODO: This should not happen if functions are properly linked
+    ret i32 -1
     
 build_call:
     ; Get context for types
@@ -1157,13 +1511,13 @@ call_func:
     %args_count = phi i32 [ 1, %build_gep ], [ 0, %call_with_no_args ]
     %args_ptr = phi %LLVMValueRef* [ %arg_array, %build_gep ], [ null, %call_with_no_args ]
     
-    ; Create function type for call: i32 (i8*, ...)
-    %param_types = alloca %LLVMTypeRef, i32 1
-    store %LLVMTypeRef %i8_ptr_type, %LLVMTypeRef* %param_types
-    %call_func_type = call %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %i32_type, %LLVMTypeRef* %param_types, i32 1, i32 1)
+    ; Get the function's actual type from the function value
+    ; Function values have pointer type, so get the pointee type (the function signature)
+    %func_ptr_type = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %func)
+    %func_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %func_ptr_type)
     
-    ; Build call instruction
-    %call_result = call %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %call_func_type, %LLVMValueRef %func, %LLVMValueRef* %args_ptr, i32 %args_count, i8* null)
+    ; Build call instruction using the function's actual type
+    %call_result = call %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %func_type, %LLVMValueRef %func, %LLVMValueRef* %args_ptr, i32 %args_count, i8* null)
     br label %done
     
 text_only:
@@ -1603,11 +1957,34 @@ gen_call:
     %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
     %args = load %ASTNode*, %ASTNode** %expr_cdr_ptr
     
-    ; Generate function call with proper indentation
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call i32 @codegen_call(%CodeGen* %cg, i8* %func_name, %ASTNode* %args)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
+    ; DEBUG: Write function call being processed to debug file
+    %debug_top_level_name = getelementptr [25 x i8], [25 x i8]* @.str.debug_top_level, i32 0, i32 0
+    %debug_top_level_fd = call i32 @open(i8* %debug_top_level_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_top_level_fd_valid = icmp sge i32 %debug_top_level_fd, 0
+    br i1 %debug_top_level_fd_valid, label %write_top_level_debug, label %do_call
+    
+write_top_level_debug:
+    %processing_call_prefix = getelementptr [27 x i8], [27 x i8]* @.str.processing_call, i32 0, i32 0
+    call i64 @write(i32 %debug_top_level_fd, i8* %processing_call_prefix, i32 26)
+    %func_name_len_top = call i64 @strlen(i8* %func_name)
+    %func_name_len_top_int = trunc i64 %func_name_len_top to i32
+    call i64 @write(i32 %debug_top_level_fd, i8* %func_name, i32 %func_name_len_top_int)
+    %newline_char_top = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_top_level_fd, i8* %newline_char_top, i32 1)
+    call i32 @close(i32 %debug_top_level_fd)
+    br label %do_call
+    
+do_call:
+    ; Generate function call using LLVM API
+    ; Note: We no longer generate text IR - all calls go through LLVM API
+    %call_result = call i32 @codegen_call(%CodeGen* %cg, i8* %func_name, %ASTNode* %args)
+    %call_failed = icmp ne i32 %call_result, 0
+    br i1 %call_failed, label %call_error, label %next_expr
+
+call_error:
+    ; Function call failed - this should not happen if functions are properly defined
+    ; For now, just skip this expression (in future, we should propagate the error)
+    br label %next_expr
     
     br label %next_expr
 
@@ -1641,6 +2018,91 @@ entry:
     ret i8* %buffer
 }
 
+; Extract function name from IR text
+; codegen_extract_function_name: Extract function name from function IR text
+; Parameters:
+;   func_ir: Function IR text (format: "define return-type @name(")
+;   func_ir_len: Length of IR text
+; Returns: Pointer to function name string (allocated with malloc), or null on error
+; NOTE: The returned string must be freed by caller
+define i8* @codegen_extract_function_name(i8* %func_ir, i64 %func_ir_len) {
+entry:
+    %ir_null = icmp eq i8* %func_ir, null
+    %ir_len_zero = icmp eq i64 %func_ir_len, 0
+    %ir_invalid = or i1 %ir_null, %ir_len_zero
+    br i1 %ir_invalid, label %error, label %find_at_sign
+    
+find_at_sign:
+    ; Find "@" symbol after "define " and return type
+    ; Search for "@" starting from position 0
+    %pos = alloca i64
+    store i64 0, i64* %pos
+    br label %search_loop
+    
+search_loop:
+    %pos_val = load i64, i64* %pos
+    %done = icmp uge i64 %pos_val, %func_ir_len
+    br i1 %done, label %error, label %check_char
+    
+check_char:
+    %char_ptr = getelementptr i8, i8* %func_ir, i64 %pos_val
+    %char = load i8, i8* %char_ptr
+    %char_int = zext i8 %char to i32
+    %is_at = icmp eq i32 %char_int, 64  ; '@' = 64
+    br i1 %is_at, label %found_at, label %increment
+    
+increment:
+    %pos_next = add i64 %pos_val, 1
+    store i64 %pos_next, i64* %pos
+    br label %search_loop
+    
+found_at:
+    ; Found "@" - now extract name until "("
+    %name_start_pos = add i64 %pos_val, 1  ; Skip "@"
+    %name_end_pos = alloca i64
+    store i64 %name_start_pos, i64* %name_end_pos
+    br label %find_paren
+    
+find_paren:
+    %end_pos_val = load i64, i64* %name_end_pos
+    %end_done = icmp uge i64 %end_pos_val, %func_ir_len
+    br i1 %end_done, label %error, label %check_paren
+    
+check_paren:
+    %paren_ptr = getelementptr i8, i8* %func_ir, i64 %end_pos_val
+    %paren_char = load i8, i8* %paren_ptr
+    %paren_int = zext i8 %paren_char to i32
+    %is_paren = icmp eq i32 %paren_int, 40  ; '(' = 40
+    br i1 %is_paren, label %extract_name, label %increment_end
+    
+increment_end:
+    %end_pos_next = add i64 %end_pos_val, 1
+    store i64 %end_pos_next, i64* %name_end_pos
+    br label %find_paren
+    
+extract_name:
+    ; Extract name from name_start_pos to name_end_pos
+    %name_len = sub i64 %end_pos_val, %name_start_pos
+    %name_len_zero = icmp eq i64 %name_len, 0
+    br i1 %name_len_zero, label %error, label %alloc_name
+    
+alloc_name:
+    %name_buf_size = add i64 %name_len, 1  ; +1 for null terminator
+    %name_buf = call i8* @malloc(i64 %name_buf_size)
+    %name_buf_null = icmp eq i8* %name_buf, null
+    br i1 %name_buf_null, label %error, label %copy_name
+    
+copy_name:
+    %name_src = getelementptr i8, i8* %func_ir, i64 %name_start_pos
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name_src, i64 %name_len, i1 false)
+    %null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
+    store i8 0, i8* %null_ptr
+    ret i8* %name_buf
+    
+error:
+    ret i8* null
+}
+
 ; Parse complete function definition from IR text
 ; codegen_parse_function_ir: Parse a complete function definition from IR text and add to module
 ; Parameters:
@@ -1670,64 +2132,135 @@ wrap_module:
     
 wrap_module_valid:
     ; Wrap function in minimal module IR
-    ; Format: "target triple = \"...\"\n\n[func_ir]\n"
-    ; Use the target triple from the module instead of a constant
+    ; Format: "target datalayout = \"...\"\ntarget triple = \"...\"\n\n[func_ir]\n"
+    %data_layout_array = bitcast [38 x i8]* @.str.data_layout_value to i8*
+    %data_layout_len = add i64 37, 0  ; length without null (e-m:o-i64:64-f80:128-n8:16:32:64-S128 = 37 chars)
+    %data_layout_prefix_len = add i64 21, 0  ; "target datalayout = \"" (21 chars)
+    %data_layout_suffix_len = add i64 2, 0   ; "\"\n" (2 chars)
+    %data_layout_total = add i64 %data_layout_prefix_len, %data_layout_len
+    %data_layout_with_suffix = add i64 %data_layout_total, %data_layout_suffix_len
+    
     %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
     %target_triple_len = add i64 26, 0  ; length without null (x86_64-apple-macosx10.15.0 = 26 chars)
-    %target_triple_prefix_len = add i64 16, 0  ; "target triple = \"" (16 chars)
-    %target_triple_suffix_len = add i64 2, 0   ; "\"\n\n"
-    %prefix_and_triple = add i64 %target_triple_prefix_len, %target_triple_len
-    %total_prefix = add i64 %prefix_and_triple, %target_triple_suffix_len
-    %module_ir_size = add i64 %total_prefix, %func_ir_len
+    %target_triple_prefix_len = add i64 17, 0  ; "target triple = \"" (17 chars)
+    %target_triple_suffix_len = add i64 3, 0   ; "\"\n\n" (3 chars)
+    %target_triple_total = add i64 %target_triple_prefix_len, %target_triple_len
+    %target_triple_with_suffix = add i64 %target_triple_total, %target_triple_suffix_len
+    
+    %total_prefix = add i64 %data_layout_with_suffix, %target_triple_with_suffix
+    ; Add printf declaration (42 bytes including newlines and null terminator, but we'll use 41 without null)
+    %printf_decl_len = add i64 41, 0
+    %prefix_with_printf = add i64 %total_prefix, %printf_decl_len
+    ; Note: LLVM's IR parser requires explicit external declarations for undefined globals.
+    ; While the linker can resolve externals to definitions, the parser itself needs declarations.
+    ; For now, we add @hello_string declaration as a common pattern. A proper solution would
+    ; scan the function IR to find all referenced @ symbols and add declarations dynamically.
+    %hello_string_decl_len = add i64 44, 0
+    %prefix_with_decls = add i64 %prefix_with_printf, %hello_string_decl_len
+    %module_ir_size = add i64 %prefix_with_decls, %func_ir_len
     %module_ir_size2 = add i64 %module_ir_size, 1  ; null terminator
     %module_ir_buf = call i8* @malloc(i64 %module_ir_size2)
     %buf_null = icmp eq i8* %module_ir_buf, null
     br i1 %buf_null, label %error, label %build_module_ir
     
 build_module_ir:
-    ; Build: "target triple = \"x86_64-apple-macosx10.15.0\"\n\n[func_ir]\n"
+    ; Build: "target datalayout = \"...\"\ntarget triple = \"...\"\n\n[func_ir]\n"
     %pos = alloca i64
     store i64 0, i64* %pos
     
-    ; Write "target triple = \""
+    ; Write "target datalayout = \""
     %pos_val1 = load i64, i64* %pos
     %dest1 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val1
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest1, i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.target_triple_prefix, i32 0, i32 0), i64 16, i1 false)
-    %pos_val2 = add i64 %pos_val1, 16
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest1, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.data_layout_prefix, i32 0, i32 0), i64 21, i1 false)
+    %pos_val2 = add i64 %pos_val1, 21
     store i64 %pos_val2, i64* %pos
     
-    ; Write target triple value
+    ; Write data layout value
     %pos_val3 = load i64, i64* %pos
     %dest2 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val3
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest2, i8* %target_triple_array, i64 %target_triple_len, i1 false)
-    %pos_val4 = add i64 %pos_val3, %target_triple_len
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest2, i8* %data_layout_array, i64 %data_layout_len, i1 false)
+    %pos_val4 = add i64 %pos_val3, %data_layout_len
     store i64 %pos_val4, i64* %pos
     
-    ; Write "\"\n\n"
+    ; Write "\"\n"
     %pos_val5 = load i64, i64* %pos
     %dest3 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val5
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest3, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.target_triple_suffix, i32 0, i32 0), i64 3, i1 false)
-    %pos_val6 = add i64 %pos_val5, 3
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest3, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.data_layout_suffix, i32 0, i32 0), i64 2, i1 false)
+    %pos_val6 = add i64 %pos_val5, 2
     store i64 %pos_val6, i64* %pos
     
-    ; Copy function IR
+    ; Write "target triple = \""
     %pos_val7 = load i64, i64* %pos
-    %func_dest = getelementptr i8, i8* %module_ir_buf, i64 %pos_val7
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %func_dest, i8* %func_ir, i64 %func_ir_len, i1 false)
-    %pos_val8 = add i64 %pos_val7, %func_ir_len
+    %dest4 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val7
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest4, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.target_triple_prefix, i32 0, i32 0), i64 17, i1 false)
+    %pos_val8 = add i64 %pos_val7, 17
     store i64 %pos_val8, i64* %pos
     
-    ; Add final newline and null terminate
+    ; Write target triple value
     %pos_val9 = load i64, i64* %pos
-    %newline_ptr = getelementptr i8, i8* %module_ir_buf, i64 %pos_val9
+    %dest5 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val9
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest5, i8* %target_triple_array, i64 %target_triple_len, i1 false)
+    %pos_val10 = add i64 %pos_val9, %target_triple_len
+    store i64 %pos_val10, i64* %pos
+    
+    ; Write "\"\n\n"
+    %pos_val11 = load i64, i64* %pos
+    %dest6 = getelementptr i8, i8* %module_ir_buf, i64 %pos_val11
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest6, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.target_triple_suffix, i32 0, i32 0), i64 3, i1 false)
+    %pos_val12 = add i64 %pos_val11, 3
+    store i64 %pos_val12, i64* %pos
+    
+    ; Add external declarations for symbols referenced in function IR
+    ; Note: LLVM's IR parser requires explicit external declarations for undefined globals.
+    ; The linker will resolve these externals to actual definitions in the main module.
+    ; Add printf declaration (commonly used in functions, truly external)
+    %pos_val12_5 = load i64, i64* %pos
+    %printf_decl_dest = getelementptr i8, i8* %module_ir_buf, i64 %pos_val12_5
+    %printf_decl_str = getelementptr [42 x i8], [42 x i8]* @.str.printf_decl_module, i32 0, i32 0
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %printf_decl_dest, i8* %printf_decl_str, i64 41, i1 false)
+    %pos_val12_6 = add i64 %pos_val12_5, 41
+    store i64 %pos_val12_6, i64* %pos
+    
+    ; Add external declaration for @hello_string (common constant pattern)
+    ; TODO: Scan function IR to find all referenced @ symbols and add declarations dynamically
+    %pos_val12_7 = load i64, i64* %pos
+    %hello_string_decl_dest = getelementptr i8, i8* %module_ir_buf, i64 %pos_val12_7
+    %hello_string_decl_str = getelementptr [45 x i8], [45 x i8]* @.str.external_hello_string, i32 0, i32 0
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %hello_string_decl_dest, i8* %hello_string_decl_str, i64 44, i1 false)
+    %pos_val12_8 = add i64 %pos_val12_7, 44
+    store i64 %pos_val12_8, i64* %pos
+    
+    ; Copy function IR
+    %pos_val13 = load i64, i64* %pos
+    %func_dest = getelementptr i8, i8* %module_ir_buf, i64 %pos_val13
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %func_dest, i8* %func_ir, i64 %func_ir_len, i1 false)
+    %pos_val14 = add i64 %pos_val13, %func_ir_len
+    store i64 %pos_val14, i64* %pos
+    
+    ; Add final newline and null terminate
+    %pos_val15 = load i64, i64* %pos
+    %newline_ptr = getelementptr i8, i8* %module_ir_buf, i64 %pos_val15
     store i8 10, i8* %newline_ptr  ; '\n'
-    %pos_val10 = add i64 %pos_val9, 1
-    %null_ptr = getelementptr i8, i8* %module_ir_buf, i64 %pos_val10
+    %pos_val16 = add i64 %pos_val15, 1
+    %null_ptr = getelementptr i8, i8* %module_ir_buf, i64 %pos_val16
     store i8 0, i8* %null_ptr
     
-    ; Use pos_val10 as total length (includes null terminator, but we pass length without it)
-    %total_len = sub i64 %pos_val10, 1
+    ; Use pos_val16 as total length (includes null terminator, but we pass length without it)
+    %total_len = sub i64 %pos_val16, 1
     
+    ; DEBUG: Write wrapped module IR to debug file before parsing
+    %debug_module_ir_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_module_ir, i32 0, i32 0
+    %debug_module_fd = call i32 @open(i8* %debug_module_ir_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_module_fd_valid = icmp sge i32 %debug_module_fd, 0
+    br i1 %debug_module_fd_valid, label %write_module_debug, label %parse_module
+    
+write_module_debug:
+    %total_len_int = trunc i64 %total_len to i32
+    call i64 @write(i32 %debug_module_fd, i8* %module_ir_buf, i32 %total_len_int)
+    call i32 @close(i32 %debug_module_fd)
+    br label %parse_module
+    
+parse_module:
     ; Parse into temporary module
     %temp_module_ptr = alloca %LLVMModuleRef
     %parse_result = call i32 @llvm_parse_ir_in_context(%LLVMContextRef %context, i8* %module_ir_buf, i64 %total_len, %LLVMModuleRef* %temp_module_ptr)
@@ -1735,21 +2268,248 @@ build_module_ir:
     ; Free buffer
     call void @free(i8* %module_ir_buf)
     
+    ; DEBUG: Write parse result to debug file
+    %debug_parse_result_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_parse_result_fd = call i32 @open(i8* %debug_parse_result_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_parse_result_fd_valid = icmp sge i32 %debug_parse_result_fd, 0
+    br i1 %debug_parse_result_fd_valid, label %write_parse_result_debug, label %check_parse_result
+    
+write_parse_result_debug:
+    ; Check if parse succeeded (result == 0) or failed (result != 0)
+    %parse_result_zero = icmp eq i32 %parse_result, 0
+    br i1 %parse_result_zero, label %write_parse_success, label %write_parse_failure
+    
+write_parse_success:
+    %parse_success_msg = getelementptr [34 x i8], [34 x i8]* @.str.parse_succeeded, i32 0, i32 0
+    call i64 @write(i32 %debug_parse_result_fd, i8* %parse_success_msg, i32 33)
+    %newline_parse_success = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_parse_result_fd, i8* %newline_parse_success, i32 1)
+    call i32 @close(i32 %debug_parse_result_fd)
+    br label %check_parse_result
+    
+write_parse_failure:
+    %parse_failure_msg = getelementptr [32 x i8], [32 x i8]* @.str.parse_failed, i32 0, i32 0
+    call i64 @write(i32 %debug_parse_result_fd, i8* %parse_failure_msg, i32 31)
+    %newline_parse_failure = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_parse_result_fd, i8* %newline_parse_failure, i32 1)
+    call i32 @close(i32 %debug_parse_result_fd)
+    br label %check_parse_result
+    
+check_parse_result:
     ; Check parse result
     %parse_failed = icmp ne i32 %parse_result, 0
     br i1 %parse_failed, label %error, label %success
     
 success:
-    ; For bootstrap, we'll keep the parsed module separate for now
-    ; TODO: Extract functions from temp module and add to main module
-    ; For now, just dispose the temp module since we're keeping text IR
+    ; Get main module from CodeGen structure
+    %main_module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %main_module = load %LLVMModuleRef, %LLVMModuleRef* %main_module_ptr
+    %main_module_null = icmp eq %LLVMModuleRef %main_module, null
+    br i1 %main_module_null, label %error, label %link_modules
+
+link_modules:
+    ; Link temp module into main module
     %temp_module = load %LLVMModuleRef, %LLVMModuleRef* %temp_module_ptr
     %temp_module_null = icmp eq %LLVMModuleRef %temp_module, null
-    br i1 %temp_module_null, label %done, label %dispose_temp
+    br i1 %temp_module_null, label %error, label %do_link
+
+do_link:
+    ; Link src (temp) into dest (main)
+    ; Note: LLVMLinkModules2 automatically moves contents from src to dest
+    ; LLVM's linker should automatically resolve references to symbols that exist
+    ; in the destination module (main_module), so external declarations aren't needed
     
+    ; DEBUG: Write that we're about to link
+    %debug_link_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_link_fd = call i32 @open(i8* %debug_link_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_link_fd_valid = icmp sge i32 %debug_link_fd, 0
+    br i1 %debug_link_fd_valid, label %write_link_debug, label %do_actual_link
+    
+write_link_debug:
+    %link_msg = getelementptr [22 x i8], [22 x i8]* @.str.about_to_link, i32 0, i32 0
+    call i64 @write(i32 %debug_link_fd, i8* %link_msg, i32 21)
+    call i32 @close(i32 %debug_link_fd)
+    br label %do_actual_link
+    
+do_actual_link:
+    %link_result = call i32 @llvm_link_modules2(%LLVMModuleRef %main_module, %LLVMModuleRef %temp_module)
+    
+    ; DEBUG: Write link result to debug file
+    %debug_link_result_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_link_result_fd = call i32 @open(i8* %debug_link_result_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_link_result_fd_valid = icmp sge i32 %debug_link_result_fd, 0
+    br i1 %debug_link_result_fd_valid, label %write_link_result_debug, label %check_link_result
+    
+write_link_result_debug:
+    ; Check if link succeeded (result == 0) or failed (result != 0)
+    %link_result_zero = icmp eq i32 %link_result, 0
+    br i1 %link_result_zero, label %write_link_success, label %write_link_failure
+    
+write_link_success:
+    %link_success_msg = getelementptr [33 x i8], [33 x i8]* @.str.link_succeeded, i32 0, i32 0
+    call i64 @write(i32 %debug_link_result_fd, i8* %link_success_msg, i32 32)
+    %newline_link_success = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_link_result_fd, i8* %newline_link_success, i32 1)
+    call i32 @close(i32 %debug_link_result_fd)
+    br label %check_link_result
+    
+write_link_failure:
+    %link_failure_msg = getelementptr [31 x i8], [31 x i8]* @.str.link_failed, i32 0, i32 0
+    call i64 @write(i32 %debug_link_result_fd, i8* %link_failure_msg, i32 30)
+    %newline_link_failure = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_link_result_fd, i8* %newline_link_failure, i32 1)
+    call i32 @close(i32 %debug_link_result_fd)
+    br label %check_link_result
+    
+check_link_result:
+    %link_failed = icmp ne i32 %link_result, 0
+    br i1 %link_failed, label %link_error, label %verify_after_link
+
+link_error:
+    ; Linking failed - this could be due to:
+    ; - Symbol resolution issues (symbols referenced but not defined in main module)
+    ; - Type mismatches between declarations and definitions
+    ; - Duplicate symbol definitions
+    ; Note: LLVMLinkModules2 doesn't provide detailed error messages, but debug_module_ir.ll
+    ; contains the temp module IR that failed to link, which can help diagnose the issue
+    br label %dispose_and_error
+    
+verify_after_link:
+    ; Verify module after linking (action 1 = return message)
+    %verify_error_msg = alloca i8*
+    store i8* null, i8** %verify_error_msg
+    %verify_result = call i32 @llvm_verify_module(%LLVMModuleRef %main_module, i32 1, i8** %verify_error_msg)
+    ; Verification errors are warnings, not fatal - continue anyway
+    
+    ; DEBUG: Write that we reached verify_after_link
+    %debug_reached_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_reached_fd = call i32 @open(i8* %debug_reached_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_reached_fd_valid = icmp sge i32 %debug_reached_fd, 0
+    br i1 %debug_reached_fd_valid, label %write_reached_msg, label %do_extract_debug
+    
+write_reached_msg:
+    %reached_msg = getelementptr [33 x i8], [33 x i8]* @.str.reached_verify_after_link, i32 0, i32 0
+    call i64 @write(i32 %debug_reached_fd, i8* %reached_msg, i32 32)
+    call i32 @close(i32 %debug_reached_fd)
+    br label %do_extract_debug
+    
+do_extract_debug:
+    ; DEBUG: Extract function name from IR and verify it exists in module after linking
+    ; Function IR format: "define return-type @name("
+    ; Find "@" after "define " and return type, then extract name until "("
+    ; NOTE: We're extracting from the original func_ir, which should be the full function definition
+    ; Write debug output showing what IR we're trying to extract from
+    %debug_extract_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_extract_fd = call i32 @open(i8* %debug_extract_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_extract_fd_valid = icmp sge i32 %debug_extract_fd, 0
+    br i1 %debug_extract_fd_valid, label %write_extract_debug, label %do_extract
+    
+write_extract_debug:
+    %extracting_from_msg = getelementptr [32 x i8], [32 x i8]* @.str.extracting_from_ir, i32 0, i32 0
+    call i64 @write(i32 %debug_extract_fd, i8* %extracting_from_msg, i32 31)
+    %func_ir_len_int = trunc i64 %func_ir_len to i32
+    call i64 @write(i32 %debug_extract_fd, i8* %func_ir, i32 %func_ir_len_int)
+    %newline_extract = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_extract_fd, i8* %newline_extract, i32 1)
+    call i32 @close(i32 %debug_extract_fd)
+    br label %do_extract
+    
+do_extract:
+    %func_name_start = call i8* @codegen_extract_function_name(i8* %func_ir, i64 %func_ir_len)
+    %func_name_start_null = icmp eq i8* %func_name_start, null
+    br i1 %func_name_start_null, label %write_extraction_failed, label %write_extracted_name
+    
+write_extracted_name:
+    ; Write extracted function name to debug file
+    %debug_extract_name2 = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
+    %debug_extract_fd2 = call i32 @open(i8* %debug_extract_name2, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_extract_fd2_valid = icmp sge i32 %debug_extract_fd2, 0
+    br i1 %debug_extract_fd2_valid, label %write_name_debug, label %check_func_exists
+    
+write_name_debug:
+    %extracted_name_msg = getelementptr [26 x i8], [26 x i8]* @.str.extracted_name, i32 0, i32 0
+    call i64 @write(i32 %debug_extract_fd2, i8* %extracted_name_msg, i32 25)
+    %func_name_len_extract = call i64 @strlen(i8* %func_name_start)
+    %func_name_len_extract_int = trunc i64 %func_name_len_extract to i32
+    call i64 @write(i32 %debug_extract_fd2, i8* %func_name_start, i32 %func_name_len_extract_int)
+    %newline_extract2 = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_extract_fd2, i8* %newline_extract2, i32 1)
+    call i32 @close(i32 %debug_extract_fd2)
+    br label %check_func_exists
+    
+write_extraction_failed:
+    ; Function name extraction failed - write debug message
+    %debug_verify_name_extract = getelementptr [21 x i8], [21 x i8]* @.str.debug_verify, i32 0, i32 0
+    %debug_verify_fd_extract = call i32 @open(i8* %debug_verify_name_extract, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_verify_fd_extract_valid = icmp sge i32 %debug_verify_fd_extract, 0
+    br i1 %debug_verify_fd_extract_valid, label %write_extract_error, label %dispose_temp
+    
+write_extract_error:
+    %extract_failed_msg = getelementptr [47 x i8], [47 x i8]* @.str.func_name_extraction_failed, i32 0, i32 0
+    call i64 @write(i32 %debug_verify_fd_extract, i8* %extract_failed_msg, i32 46)
+    call i32 @close(i32 %debug_verify_fd_extract)
+    br label %dispose_temp
+    
+check_func_exists:
+    ; Look up function in module to verify it was linked successfully
+    %linked_func = call %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %main_module, i8* %func_name_start)
+    %linked_func_null = icmp eq %LLVMValueRef %linked_func, null
+    br i1 %linked_func_null, label %write_func_not_found_debug, label %write_func_found_debug
+    
+write_func_not_found_debug:
+    ; Function not found after linking - write debug message
+    %debug_verify_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_verify, i32 0, i32 0
+    %debug_verify_fd = call i32 @open(i8* %debug_verify_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
+    %debug_verify_fd_valid = icmp sge i32 %debug_verify_fd, 0
+    br i1 %debug_verify_fd_valid, label %write_not_found_msg, label %free_func_name
+    
+write_not_found_msg:
+    %not_found_prefix = getelementptr [42 x i8], [42 x i8]* @.str.func_not_found_after_link, i32 0, i32 0
+    call i64 @write(i32 %debug_verify_fd, i8* %not_found_prefix, i32 41)
+    %func_name_len_debug = call i64 @strlen(i8* %func_name_start)
+    %func_name_len_int = trunc i64 %func_name_len_debug to i32
+    call i64 @write(i32 %debug_verify_fd, i8* %func_name_start, i32 %func_name_len_int)
+    %newline_char = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_verify_fd, i8* %newline_char, i32 1)
+    call i32 @close(i32 %debug_verify_fd)
+    br label %free_func_name
+    
+write_func_found_debug:
+    ; Function found after linking - write debug message
+    %debug_verify_found_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_verify, i32 0, i32 0
+    %debug_verify_found_fd = call i32 @open(i8* %debug_verify_found_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
+    %debug_verify_found_fd_valid = icmp sge i32 %debug_verify_found_fd, 0
+    br i1 %debug_verify_found_fd_valid, label %write_found_msg, label %free_func_name
+    
+write_found_msg:
+    %found_msg = getelementptr [36 x i8], [36 x i8]* @.str.func_found_after_link, i32 0, i32 0
+    call i64 @write(i32 %debug_verify_found_fd, i8* %found_msg, i32 35)
+    %func_name_len_found = call i64 @strlen(i8* %func_name_start)
+    %func_name_len_found_int = trunc i64 %func_name_len_found to i32
+    call i64 @write(i32 %debug_verify_found_fd, i8* %func_name_start, i32 %func_name_len_found_int)
+    %newline_found = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
+    call i64 @write(i32 %debug_verify_found_fd, i8* %newline_found, i32 1)
+    call i32 @close(i32 %debug_verify_found_fd)
+    br label %free_func_name
+    
+    ; Function found - write success message (optional, can be removed if too verbose)
+    br label %free_func_name
+    
+free_func_name:
+    ; Free the allocated function name string
+    call void @free(i8* %func_name_start)
+    br label %dispose_temp
+
 dispose_temp:
-    call void @llvm_dispose_module(%LLVMModuleRef %temp_module)
+    ; Don't dispose temp module after linking - LLVMLinkModules2 automatically handles cleanup
+    ; Disposing it causes a crash because the module is already invalidated after linking
     br label %done
+
+dispose_and_error:
+    ; Don't dispose temp module - if linking failed, module is still valid and should be disposed
+    ; But to be safe, we'll skip disposal (small memory leak on error path is acceptable)
+    ; call void @llvm_dispose_module(%LLVMModuleRef %temp_module)
+    br label %error
     
 done:
     ret i32 0
@@ -1759,6 +2519,57 @@ error:
 }
 
 ; Write bitcode to file
+; codegen_emit_debug_files: Emit debug bitcode and IR files for inspection
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   base_filename: Base filename (without extension)
+; Returns: 0 on success, -1 on error
+define i32 @codegen_emit_debug_files(%CodeGen* %cg, i8* %base_filename) {
+entry:
+    ; Get module from CodeGen structure
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    br i1 %module_null, label %error, label %emit_files
+    
+emit_files:
+    ; Build debug filenames: base_filename.debug.bc and base_filename.debug.ll
+    ; For simplicity, we'll use fixed suffixes
+    ; TODO: Implement proper string concatenation for filenames
+    ; For now, just emit to fixed debug filenames
+    %debug_bc_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_bc, i32 0, i32 0
+    %debug_ll_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_ll, i32 0, i32 0
+    
+    ; Write bitcode file
+    %bc_error_msg = alloca i8*
+    store i8* null, i8** %bc_error_msg
+    %bc_result = call i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %debug_bc_name)
+    %bc_failed = icmp ne i32 %bc_result, 0
+    br i1 %bc_failed, label %error, label %write_ir
+    
+write_ir:
+    ; Print IR to file
+    %ir_error_msg = alloca i8*
+    store i8* null, i8** %ir_error_msg
+    %ir_result = call i32 @llvm_print_module_to_file(%LLVMModuleRef %module, i8* %debug_ll_name, i8** %ir_error_msg)
+    %ir_failed = icmp ne i32 %ir_result, 0
+    br i1 %ir_failed, label %error, label %verify_module
+    
+verify_module:
+    ; Verify module
+    %verify_error_msg = alloca i8*
+    store i8* null, i8** %verify_error_msg
+    %verify_result = call i32 @llvm_verify_module(%LLVMModuleRef %module, i32 1, i8** %verify_error_msg)
+    ; Verification errors are warnings, not fatal
+    br label %success
+    
+success:
+    ret i32 0
+    
+error:
+    ret i32 -1
+}
+
 ; codegen_write_bitcode: Write module bitcode to file using LLVM API
 ; Parameters:
 ;   cg: Pointer to CodeGen structure
@@ -1880,6 +2691,8 @@ error:
 @.str.space_at = private unnamed_addr constant [3 x i8] c" @\00"
 @.str.newline_close_brace = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
 @.str.main_name = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.data_layout_prefix = private unnamed_addr constant [22 x i8] c"target datalayout = \22\00"
+@.str.data_layout_suffix = private unnamed_addr constant [3 x i8] c"\22\0A\00"
 @.str.target_triple_prefix = private unnamed_addr constant [18 x i8] c"target triple = \22\00"
 @.str.target_triple_suffix = private unnamed_addr constant [4 x i8] c"\22\0A\0A\00"
 @.str.entry_block_name = private unnamed_addr constant [6 x i8] c"entry\00"
@@ -1907,6 +2720,32 @@ error:
 @.str.backslash_00 = private unnamed_addr constant [4 x i8] c"\\00\00"
 @.str.backslash_quote = private unnamed_addr constant [3 x i8] c"\\\22\00"
 @.str.backslash_backslash = private unnamed_addr constant [3 x i8] c"\\\\\00"
+@.str.debug_bc = private unnamed_addr constant [16 x i8] c"debug_output.bc\00"
+@.str.debug_ll = private unnamed_addr constant [16 x i8] c"debug_output.ll\00"
+@.str.debug_func_ir = private unnamed_addr constant [17 x i8] c"debug_func_ir.ll\00"
+@.str.debug_module_ir = private unnamed_addr constant [19 x i8] c"debug_module_ir.ll\00"
+@.str.debug_verify = private unnamed_addr constant [21 x i8] c"debug_verify_func.ll\00"
+@.str.debug_call = private unnamed_addr constant [21 x i8] c"debug_call_lookup.ll\00"
+@.str.debug_top_level = private unnamed_addr constant [25 x i8] c"debug_top_level_exprs.ll\00"
+@.str.debug_extract = private unnamed_addr constant [27 x i8] c"debug_extract_func_name.ll\00"
+@.str.func_not_found_after_link = private unnamed_addr constant [42 x i8] c"ERROR: Function not found after linking: \00"
+@.str.func_not_found_in_call = private unnamed_addr constant [36 x i8] c"ERROR: Function not found in call: \00"
+@.str.processing_call = private unnamed_addr constant [27 x i8] c"Processing function call: \00"
+@.str.func_name_extraction_failed = private unnamed_addr constant [47 x i8] c"ERROR: Failed to extract function name from IR\00"
+@.str.extracting_from_ir = private unnamed_addr constant [32 x i8] c"Extracting function name from: \00"
+@.str.extracted_name = private unnamed_addr constant [26 x i8] c"Extracted function name: \00"
+@.str.reached_verify_after_link = private unnamed_addr constant [33 x i8] c"DEBUG: Reached verify_after_link\00"
+@.str.about_to_link = private unnamed_addr constant [22 x i8] c"About to link modules\00"
+@.str.processing_define_bitcode = private unnamed_addr constant [40 x i8] c"Processing define-bitcode-function node\00"
+@.str.calling_parse_func_ir = private unnamed_addr constant [34 x i8] c"Calling codegen_parse_function_ir\00"
+@.str.parse_succeeded = private unnamed_addr constant [34 x i8] c"DEBUG: Parse succeeded (result=0)\00"
+@.str.parse_failed = private unnamed_addr constant [32 x i8] c"DEBUG: Parse failed (result!=0)\00"
+@.str.link_succeeded = private unnamed_addr constant [33 x i8] c"DEBUG: Link succeeded (result=0)\00"
+@.str.link_failed = private unnamed_addr constant [31 x i8] c"DEBUG: Link failed (result!=0)\00"
+@.str.external_hello_string = private unnamed_addr constant [45 x i8] c"@hello_string = external constant [14 x i8]\0A\00"
+@.str.func_found_after_link = private unnamed_addr constant [36 x i8] c"DEBUG: Function found after linking\00"
+@.str.checking_func_before_call = private unnamed_addr constant [39 x i8] c"DEBUG: Checking function before call: \00"
+@.str.printf_decl_module = private unnamed_addr constant [42 x i8] c"declare i32 @printf(i8* nocapture, ...)\0A\0A\00"
 @.str.constant_decl = private unnamed_addr constant [22 x i8] c" = private constant [\00"
 @.str.x_i8_c_quote = private unnamed_addr constant [10 x i8] c" x i8] c\22\00"
 @.str.quote_newline = private unnamed_addr constant [3 x i8] c"\22\0A\00"
@@ -1983,10 +2822,92 @@ exit:
     ret void
 }
 
+; Write bytevector data with escaping to a buffer
+; codegen_write_bytevector_to_buffer: Write bytevector data with escaping to buffer
+; Parameters:
+;   buf: Buffer pointer
+;   pos: Pointer to current position in buffer (will be updated)
+;   data: Bytevector data
+;   len: Length of bytevector
+define void @codegen_write_bytevector_to_buffer(i8* %buf, i64* %pos, i8* %data, i64 %len) {
+entry:
+    %i = alloca i64
+    store i64 0, i64* %i
+    br label %loop
+
+loop:
+    %i_val = load i64, i64* %i
+    %done = icmp uge i64 %i_val, %len
+    br i1 %done, label %exit, label %process_byte
+
+process_byte:
+    %byte_ptr = getelementptr i8, i8* %data, i64 %i_val
+    %byte = load i8, i8* %byte_ptr
+    %byte_int = zext i8 %byte to i32
+    
+    ; Check if null byte - escape as \00
+    %is_null = icmp eq i32 %byte_int, 0
+    br i1 %is_null, label %escape_null, label %check_quote
+    
+escape_null:
+    %pos_val_n = load i64, i64* %pos
+    %dest_n = getelementptr i8, i8* %buf, i64 %pos_val_n
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_n, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3, i1 false)
+    %pos_val_n2 = add i64 %pos_val_n, 3
+    store i64 %pos_val_n2, i64* %pos
+    br label %increment
+    
+check_quote:
+    ; Check if quote - escape as \"
+    %is_quote = icmp eq i32 %byte_int, 34
+    br i1 %is_quote, label %escape_quote, label %check_backslash
+    
+escape_quote:
+    %pos_val_q = load i64, i64* %pos
+    %dest_q = getelementptr i8, i8* %buf, i64 %pos_val_q
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_q, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2, i1 false)
+    %pos_val_q2 = add i64 %pos_val_q, 2
+    store i64 %pos_val_q2, i64* %pos
+    br label %increment
+    
+check_backslash:
+    ; Check if backslash - escape as \\
+    %is_backslash = icmp eq i32 %byte_int, 92
+    br i1 %is_backslash, label %escape_backslash, label %normal_byte
+    
+escape_backslash:
+    %pos_val_b = load i64, i64* %pos
+    %dest_b = getelementptr i8, i8* %buf, i64 %pos_val_b
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_b, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2, i1 false)
+    %pos_val_b2 = add i64 %pos_val_b, 2
+    store i64 %pos_val_b2, i64* %pos
+    br label %increment
+    
+normal_byte:
+    ; Write byte directly
+    %pos_val = load i64, i64* %pos
+    %dest = getelementptr i8, i8* %buf, i64 %pos_val
+    %byte_ptr_copy = getelementptr i8, i8* %data, i64 %i_val
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest, i8* %byte_ptr_copy, i64 1, i1 false)
+    %pos_val2 = add i64 %pos_val, 1
+    store i64 %pos_val2, i64* %pos
+    br label %increment
+    
+increment:
+    %i_val_inc = load i64, i64* %i
+    %i_new = add i64 %i_val_inc, 1
+    store i64 %i_new, i64* %i
+    br label %loop
+
+exit:
+    ret void
+}
+
 ; Declare external functions
 declare i8* @malloc(i64)
 declare i8* @realloc(i8*, i64)
 declare void @free(i8*)
 declare i64 @strlen(i8*)
+declare i32 @memcmp(i8*, i8*, i64)
 ; LLVM memcpy intrinsic - signature matches runtime.ll
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)

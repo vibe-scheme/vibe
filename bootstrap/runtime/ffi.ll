@@ -280,6 +280,10 @@ declare %LLVMTypeRef @LLVMArrayType(%LLVMTypeRef, i32)
 declare %LLVMTypeRef @LLVMStructTypeInContext(%LLVMContextRef, %LLVMTypeRef*, i32, i32)
 declare %LLVMTypeRef @LLVMFunctionType(%LLVMTypeRef, %LLVMTypeRef*, i32, i32)
 
+; Type introspection
+declare %LLVMTypeRef @LLVMTypeOf(%LLVMValueRef)
+declare %LLVMTypeRef @LLVMGetElementType(%LLVMTypeRef)
+
 ; Constant creation
 declare %LLVMValueRef @LLVMConstStringInContext(%LLVMContextRef, i8*, i32, i32)
 declare %LLVMValueRef @LLVMConstInt(%LLVMTypeRef, i64, i32)
@@ -318,6 +322,15 @@ declare void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef)
 ; Bitcode writing
 declare i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef, i8*)
 
+; Module verification and debugging
+declare i32 @LLVMVerifyModule(%LLVMModuleRef, i32, i8**)
+declare i32 @LLVMPrintModuleToFile(%LLVMModuleRef, i8*, i8**)
+
+; Standard library functions for debugging
+declare i32 @printf(i8*, ...)
+declare i32 @fprintf(%struct.__sFILE*, i8*, ...)
+%struct.__sFILE = type opaque
+
 ; TargetMachine API
 ; Native target initialization functions (must be called before using TargetMachine API)
 ; These are X86-specific initialization functions (for x86_64 target)
@@ -338,6 +351,9 @@ declare %LLVMValueRef @LLVMGetNamedFunction(%LLVMModuleRef, i8*)
 
 ; Global variable lookup
 declare %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef, i8*)
+
+; Module linking
+declare i32 @LLVMLinkModules2(%LLVMModuleRef, %LLVMModuleRef)
 
 ; Initialize native target
 ; llvm_initialize_native_target: Initialize native target for TargetMachine API
@@ -482,6 +498,28 @@ define %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %element_type, i32 %addr
 entry:
     %ptr_type = call %LLVMTypeRef @LLVMPointerType(%LLVMTypeRef %element_type, i32 %address_space)
     ret %LLVMTypeRef %ptr_type
+}
+
+; Get type of a value
+; llvm_type_of: Get the type of an LLVM value
+; Parameters:
+;   value: LLVMValueRef
+; Returns: LLVMTypeRef for the value's type
+define %LLVMTypeRef @llvm_type_of(%LLVMValueRef %value) {
+entry:
+    %type = call %LLVMTypeRef @LLVMTypeOf(%LLVMValueRef %value)
+    ret %LLVMTypeRef %type
+}
+
+; Get element type of a pointer type
+; llvm_get_element_type: Get the element type of a pointer type
+; Parameters:
+;   ptr_type: LLVMTypeRef for pointer type
+; Returns: LLVMTypeRef for element type
+define %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %ptr_type) {
+entry:
+    %element_type = call %LLVMTypeRef @LLVMGetElementType(%LLVMTypeRef %ptr_type)
+    ret %LLVMTypeRef %element_type
 }
 
 ; Create array type
@@ -764,29 +802,26 @@ parse:
     store i8* null, i8** %error_msg
     %parse_result = call i32 @LLVMParseIRInContext(%LLVMContextRef %context, %LLVMMemoryBufferRef %buffer, %LLVMModuleRef* %module, i8** %error_msg)
     
-    ; Check parse result before disposing buffer
+    ; Check parse result
     %parse_failed = icmp ne i32 %parse_result, 0
-    br i1 %parse_failed, label %dispose_and_error, label %dispose_and_success
+    br i1 %parse_failed, label %error_no_dispose, label %success_dispose
     
-dispose_and_success:
-    ; Dispose buffer only if parsing succeeded
-    ; Note: LLVMParseIRInContext does NOT take ownership, we must dispose
-    ; Double-check buffer is not null before disposing
-    %buffer_check = icmp ne %LLVMMemoryBufferRef %buffer, null
-    br i1 %buffer_check, label %dispose_success, label %success
+success_dispose:
+    ; Dispose buffer on success (LLVMParseIRInContext does NOT take ownership)
+    ; NOTE: Disposing the buffer immediately after parsing causes a segfault
+    ; The buffer appears to be used internally by LLVM even after parsing completes
+    ; For now, we skip disposal to avoid crashes - this causes a small memory leak
+    ; TODO: Investigate if buffer can be safely disposed after module is fully linked/used
+    ; call void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef %buffer)
+    ret i32 0
     
-dispose_success:
-    call void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef %buffer)
-    br label %success
-    
-dispose_and_error:
-    ; Dispose buffer even on error, but check it's not null
-    %buffer_check_err = icmp ne %LLVMMemoryBufferRef %buffer, null
-    br i1 %buffer_check_err, label %dispose_error, label %error
-    
-dispose_error:
-    call void @LLVMDisposeMemoryBuffer(%LLVMMemoryBufferRef %buffer)
-    br label %error
+error_no_dispose:
+    ; On error, don't dispose buffer - it may be corrupted
+    ; This causes a memory leak, but prevents crash
+    ; TODO: Investigate why buffer gets corrupted on parse error
+    ; Note: error_msg contains the error message, but we can't easily print it from LLVM IR
+    ; The caller should check the return value and handle errors appropriately
+    ret i32 -1
     
 success:
     ret i32 0
@@ -893,3 +928,44 @@ entry:
     %global = call %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef %module, i8* %name)
     ret %LLVMValueRef %global
 }
+
+; Link modules
+; llvm_link_modules2: Link source module into destination module
+; Parameters:
+;   dest: Destination module (main module)
+;   src: Source module (temp module with parsed function)
+; Returns: 0 on success, non-zero on error
+; Note: In LLVM 21, LLVMLinkModules2 automatically moves contents from src to dest
+; The source module becomes empty but should still be disposed
+define i32 @llvm_link_modules2(%LLVMModuleRef %dest, %LLVMModuleRef %src) {
+entry:
+    %result = call i32 @LLVMLinkModules2(%LLVMModuleRef %dest, %LLVMModuleRef %src)
+    ret i32 %result
+}
+
+; Module verification
+; llvm_verify_module: Verify a module for correctness
+; Parameters:
+;   module: Module to verify
+;   action: Verification action (0 = abort on error, 1 = return message, 2 = print to stderr)
+;   error_msg: Pointer to i8* for error message (output parameter)
+; Returns: 0 if valid, non-zero if invalid
+define i32 @llvm_verify_module(%LLVMModuleRef %module, i32 %action, i8** %error_msg) {
+entry:
+    %result = call i32 @LLVMVerifyModule(%LLVMModuleRef %module, i32 %action, i8** %error_msg)
+    ret i32 %result
+}
+
+; Print module to file
+; llvm_print_module_to_file: Print module IR to a file
+; Parameters:
+;   module: Module to print
+;   filename: Output filename (null-terminated string)
+;   error_msg: Pointer to i8* for error message (output parameter)
+; Returns: 0 on success, non-zero on error
+define i32 @llvm_print_module_to_file(%LLVMModuleRef %module, i8* %filename, i8** %error_msg) {
+entry:
+    %result = call i32 @LLVMPrintModuleToFile(%LLVMModuleRef %module, i8* %filename, i8** %error_msg)
+    ret i32 %result
+}
+
