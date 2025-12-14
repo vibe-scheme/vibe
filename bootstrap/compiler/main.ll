@@ -136,7 +136,17 @@ handle_constant:
     br label %parse_loop
     
 check_function:
-    ; Check for define-bitcode-function
+    ; Check for define-llvm-function (new DSL-based form)
+    %is_llvm_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_llvm_function, i32 0, i32 0), i64 20)
+    %is_llvm_function_bool = icmp ne i32 %is_llvm_function, 0
+    br i1 %is_llvm_function_bool, label %handle_llvm_function, label %check_bitcode_function
+    
+handle_llvm_function:
+    call i32 @codegen_define_llvm_function(%CodeGen* %codegen, %ASTNode* %ast)
+    br label %parse_loop
+    
+check_bitcode_function:
+    ; Check for define-bitcode-function (old IR string form)
     %is_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.define_bitcode_function, i32 0, i32 0), i64 23)
     %is_function_bool = icmp ne i32 %is_function, 0
     br i1 %is_function_bool, label %handle_function, label %check_legacy
@@ -418,6 +428,7 @@ no_match:
 @.str.dash_o = private unnamed_addr constant [3 x i8] c"-o\00"
 @.str.define_bitcode_type = private unnamed_addr constant [20 x i8] c"define-bitcode-type\00"
 @.str.define_bitcode_constant = private unnamed_addr constant [24 x i8] c"define-bitcode-constant\00"
+@.str.define_llvm_function = private unnamed_addr constant [21 x i8] c"define-llvm-function\00"
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 @.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"
@@ -436,6 +447,7 @@ declare i32 @strncmp(i8*, i8*, i32)
 declare i32 @codegen_define_bitcode_type(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_llvm_function(%CodeGen*, %ASTNode*)
 declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
 declare i32 @codegen_write_object_file(%CodeGen*, i8*)

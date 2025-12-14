@@ -349,6 +349,13 @@ declare void @LLVMDisposeTargetMachine(%LLVMTargetMachineRef)
 ; Function lookup
 declare %LLVMValueRef @LLVMGetNamedFunction(%LLVMModuleRef, i8*)
 
+; Function iteration
+declare %LLVMValueRef @LLVMGetFirstFunction(%LLVMModuleRef)
+declare %LLVMValueRef @LLVMGetNextFunction(%LLVMValueRef)
+
+; Note: LLVMCloneFunctionInto and LLVMValueIsAFunction are not available in LLVM 21 C API
+; We'll use module linking instead, which handles symbol resolution automatically
+
 ; Global variable lookup
 declare %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef, i8*)
 
@@ -789,6 +796,10 @@ entry:
 ;   ir_len: Length of IR text
 ;   module: Pointer to LLVMModuleRef (output parameter)
 ; Returns: 0 on success, non-zero on error
+; NOTE: LLVMParseIRInContext can parse IR with undeclared symbols. The function
+; structure will be created, and references to undeclared symbols will remain
+; unresolved until the module is linked to the main module where those symbols
+; are already defined.
 define i32 @llvm_parse_ir_in_context(%LLVMContextRef %context, i8* %ir_text, i64 %ir_len, %LLVMModuleRef* %module) {
 entry:
     ; Create memory buffer from IR text
@@ -797,7 +808,7 @@ entry:
     br i1 %buffer_null, label %error, label %parse
     
 parse:
-    ; Parse IR from buffer
+    ; Parse IR from buffer (handles undeclared symbols gracefully)
     %error_msg = alloca i8*
     store i8* null, i8** %error_msg
     %parse_result = call i32 @LLVMParseIRInContext(%LLVMContextRef %context, %LLVMMemoryBufferRef %buffer, %LLVMModuleRef* %module, i8** %error_msg)
@@ -916,6 +927,9 @@ entry:
     %func = call %LLVMValueRef @LLVMGetNamedFunction(%LLVMModuleRef %module, i8* %name)
     ret %LLVMValueRef %func
 }
+
+; Note: Function cloning APIs (LLVMCloneFunctionInto, LLVMValueIsAFunction) are not available
+; in LLVM 21 C API. We use module linking instead, which automatically resolves symbols.
 
 ; Get named global
 ; llvm_get_named_global: Get a global variable by name from module
