@@ -152,6 +152,8 @@ entry:
     %token = call %Token* @parse_current(%Parser* %parser)
     %node = call %ASTNode* @parse_create_atom(%Token* %token)
     call void @parse_advance(%Parser* %parser)
+    ; Debug logging
+    call void @parse_debug_log_ast_node(%ASTNode* %node)
     ret %ASTNode* %node
 }
 
@@ -304,6 +306,8 @@ check_quasiquote:
 
 list:
     %list_node = call %ASTNode* @parse_list(%Parser* %parser)
+    ; Debug logging - check if this is define-llvm-function
+    call void @parse_debug_check_define_llvm_function(%ASTNode* %list_node)
     ret %ASTNode* %list_node
 
 atom:
@@ -324,6 +328,86 @@ entry:
     ret %ASTNode* null
 }
 
+; Debug logging helpers
+; parse_debug_log_ast_node: Print AST node information
+; Parameters:
+;   node: Pointer to ASTNode
+define void @parse_debug_log_ast_node(%ASTNode* %node) {
+entry:
+    %node_null = icmp eq %ASTNode* %node, null
+    br i1 %node_null, label %done, label %log_node
+    
+log_node:
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 1
+    %atom_type = load i32, i32* %atom_type_ptr
+    
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_ast_node_fmt, i32 0, i32 0), i32 %type, i32 %atom_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %done
+    
+done:
+    ret void
+}
+
+; parse_debug_check_define_llvm_function: Check if list is define-llvm-function and log
+; Parameters:
+;   node: Pointer to ASTNode (should be a list)
+define void @parse_debug_check_define_llvm_function(%ASTNode* %node) {
+entry:
+    %node_null = icmp eq %ASTNode* %node, null
+    br i1 %node_null, label %done, label %check_list
+    
+check_list:
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %is_list = icmp eq i32 %type, 1  ; AST_LIST
+    br i1 %is_list, label %check_car, label %done
+    
+check_car:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 4
+    %car = load %ASTNode*, %ASTNode** %car_ptr
+    %car_null = icmp eq %ASTNode* %car, null
+    br i1 %car_null, label %done, label %check_atom
+    
+check_atom:
+    %car_type_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 0
+    %car_type = load i32, i32* %car_type_ptr
+    %is_atom = icmp eq i32 %car_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %check_name, label %done
+    
+check_name:
+    %car_val_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 2
+    %car_val = load i8*, i8** %car_val_ptr
+    %car_len_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 3
+    %car_len = load i64, i64* %car_len_ptr
+    
+    ; Check if name matches "define-llvm-function" (length 22)
+    %len_match = icmp eq i64 %car_len, 22
+    br i1 %len_match, label %compare_name, label %done
+    
+compare_name:
+    ; Simple check - just print if it might be define-llvm-function
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([33 x i8], [33 x i8]* @.str.debug_define_llvm_function, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %done
+    
+done:
+    ret void
+}
+
+; String literals for debug logging
+@.str.debug_prefix_parser = private unnamed_addr constant [10 x i8] c"[PARSER] \00"
+@.str.debug_ast_node_fmt = private unnamed_addr constant [30 x i8] c"AST node type=%d atom_type=%d\00"
+@.str.debug_newline = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.debug_define_llvm_function = private unnamed_addr constant [34 x i8] c"Parsing define-llvm-function form\00"
+@.str.empty = private unnamed_addr constant [1 x i8] c"\00"
+
 ; Declare external functions
 declare i8* @malloc(i64)
 declare void @free(i8*)
+declare i32 @printf(i8*, ...)
+declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)

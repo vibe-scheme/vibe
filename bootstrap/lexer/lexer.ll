@@ -642,6 +642,10 @@ eof:
     %eof_token_ptr = bitcast i8* %eof_token to %Token*
     %type_ptr_eof = getelementptr %Token, %Token* %eof_token_ptr, i32 0, i32 0
     store i32 0, i32* %type_ptr_eof  ; TOKEN_EOF
+    ; Debug logging
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.debug_prefix_lexer, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_eof_token, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret %Token* %eof_token_ptr
 
 not_eof:
@@ -664,6 +668,8 @@ check_string:
 
 string:
     %str_token = call %Token* @lex_read_string(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %str_token)
     ret %Token* %str_token
 
 check_vertical_bar:
@@ -672,6 +678,8 @@ check_vertical_bar:
 
 vertical_bar_symbol:
     %vbar_token = call %Token* @lex_read_vertical_bar_symbol(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %vbar_token)
     ret %Token* %vbar_token
 
 check_hash:
@@ -699,6 +707,8 @@ check_u8_lparen:
 
 bytevector:
     %bytevec_token = call %Token* @lex_read_bytevector(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %bytevec_token)
     ret %Token* %bytevec_token
 
 check_lparen:
@@ -711,6 +721,8 @@ lparen:
     %type_ptr_lparen = getelementptr %Token, %Token* %lparen_token_ptr, i32 0, i32 0
     store i32 5, i32* %type_ptr_lparen  ; TOKEN_LPAREN
     call void @lex_advance(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %lparen_token_ptr)
     ret %Token* %lparen_token_ptr
 
 check_rparen:
@@ -723,6 +735,8 @@ rparen:
     %type_ptr_rparen = getelementptr %Token, %Token* %rparen_token_ptr, i32 0, i32 0
     store i32 6, i32* %type_ptr_rparen  ; TOKEN_RPAREN
     call void @lex_advance(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %rparen_token_ptr)
     ret %Token* %rparen_token_ptr
 
 check_quote_char:
@@ -735,6 +749,8 @@ quote:
     %type_ptr_quote = getelementptr %Token, %Token* %quote_token_ptr, i32 0, i32 0
     store i32 7, i32* %type_ptr_quote  ; TOKEN_QUOTE
     call void @lex_advance(%Lexer* %lexer)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %quote_token_ptr)
     ret %Token* %quote_token_ptr
 
 identifier:
@@ -755,6 +771,8 @@ continue_id:
 
 done_id:
     %id_token = call %Token* @lex_read_identifier(%Lexer* %lexer, i64 %start_pos, i64 0)
+    ; Debug logging
+    call void @lex_debug_log_token(%Token* %id_token)
     ret %Token* %id_token
 }
 
@@ -817,7 +835,69 @@ entry:
 @.str.unclosed_vbar = private unnamed_addr constant [29 x i8] c"Unclosed vertical bar symbol\00"
 @.str.invalid_bytevector = private unnamed_addr constant [26 x i8] c"Invalid bytevector syntax\00"
 
+; Debug logging helper
+; lex_debug_log_token: Print token information for debugging
+; Parameters:
+;   token: Pointer to Token structure
+define void @lex_debug_log_token(%Token* %token) {
+entry:
+    %token_null = icmp eq %Token* %token, null
+    br i1 %token_null, label %done, label %log_token
+    
+log_token:
+    ; Get token type
+    %type_ptr = getelementptr %Token, %Token* %token, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    
+    ; Get token value
+    %value_ptr = getelementptr %Token, %Token* %token, i32 0, i32 1
+    %value = load i8*, i8** %value_ptr
+    %len_ptr = getelementptr %Token, %Token* %token, i32 0, i32 2
+    %len = load i64, i64* %len_ptr
+    
+    ; Get position
+    %line_ptr = getelementptr %Token, %Token* %token, i32 0, i32 3
+    %line = load i32, i32* %line_ptr
+    %col_ptr = getelementptr %Token, %Token* %token, i32 0, i32 4
+    %col = load i32, i32* %col_ptr
+    
+    ; Print prefix
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.debug_prefix_lexer, i32 0, i32 0))
+    
+    ; Print token info
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_token_fmt, i32 0, i32 0), i32 %type, i32 %line, i32 %col)
+    
+    ; Print value if present
+    %has_value = icmp ne i8* %value, null
+    %has_len = icmp ne i64 %len, 0
+    %should_print = and i1 %has_value, %has_len
+    br i1 %should_print, label %print_value, label %done
+    
+print_value:
+    ; Create null-terminated string for printing
+    %buf_size = add i64 %len, 1
+    %buf = call i8* @malloc(i64 %buf_size)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %value, i64 %len, i1 false)
+    %null_ptr = getelementptr i8, i8* %buf, i64 %len
+    store i8 0, i8* %null_ptr
+    call i32 (i8*, ...) @printf(i8* %buf)
+    call void @free(i8* %buf)
+    br label %done
+    
+done:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    ret void
+}
+
+; String literals for debug logging
+@.str.debug_prefix_lexer = private unnamed_addr constant [9 x i8] c"[LEXER] \00"
+@.str.debug_token_fmt = private unnamed_addr constant [31 x i8] c"Token type=%d line=%d col=%d: \00"
+@.str.debug_newline = private unnamed_addr constant [2 x i8] c"\0A\00"
+@.str.empty = private unnamed_addr constant [1 x i8] c"\00"
+@.str.debug_eof_token = private unnamed_addr constant [11 x i8] c"EOF token\0A\00"
+
 ; Declare external functions
 declare i8* @malloc(i64)
 declare void @free(i8*)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare i32 @printf(i8*, ...)
