@@ -208,6 +208,10 @@ set_target:
     ; This ensures printf is treated as an external function declaration
     call void @llvm_set_linkage(%LLVMValueRef %printf_func, i32 0)
     
+    ; Store printf function type for later retrieval when calling
+    %printf_name_len = add i64 6, 0  ; "printf" = 6 chars
+    call void @codegen_store_function_type(%CodeGen* %cg_ptr, i8* %printf_name, i64 %printf_name_len, %LLVMTypeRef %printf_func_type)
+    
     ; Write printf declaration (41 bytes without null terminator) - text IR approach (backward compatibility)
     call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([42 x i8], [42 x i8]* @.str.printf_decl, i32 0, i32 0), i64 41)
     
@@ -559,13 +563,12 @@ exit:
 }
 
 ; Handle define-bitcode-type AST node
-; codegen_define_llvm_type: Generate LLVM type definition
+; codegen_define_llvm_type: Generate LLVM type definition using direct LLVM API
 ; Parameters:
 ;   cg: Pointer to CodeGen structure
 ;   node: AST node for define-llvm-type form
 ; Returns: 0 on success, -1 on error
 ; Syntax: (define-llvm-type TypeName (field1 type1) (field2 type2) ...)
-; TODO: Future version will use llvm_create_struct_type() via FFI instead of text IR
 define i32 @codegen_define_llvm_type(%CodeGen* %cg, %ASTNode* %node) {
 entry:
     ; AST structure: LIST { ATOM: "define-llvm-type", ATOM: "TypeName", LIST: fields, ... }
@@ -577,32 +580,49 @@ entry:
     %type_name_val_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 2
     %type_name = load i8*, i8** %type_name_val_ptr
     
-    ; Get fields list (third element)
-    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
-    %fields_list = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
-    
     ; Get type name length
     %type_name_len_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 3
     %type_name_len = load i64, i64* %type_name_len_ptr
     
-    ; Generate: %TypeName = type { type1, type2, ... }
+    ; Get fields list (third element)
+    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %fields_list = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
+    
+    ; Get LLVM context
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    %context_null = icmp eq %LLVMContextRef %context, null
+    br i1 %context_null, label %error, label %collect_fields
+    
+collect_fields:
+    ; Allocate array for field types (max 64 fields)
+    %types_array = alloca %LLVMTypeRef, i32 64
+    %field_count = call i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields_list, %LLVMTypeRef* %types_array, i32 64)
+    %field_count_zero = icmp eq i32 %field_count, 0
+    br i1 %field_count_zero, label %error, label %create_struct
+    
+create_struct:
+    ; Create struct type using LLVM API
+    ; llvm_get_struct_type(context, types_array, field_count, packed)
+    %struct_type = call %LLVMTypeRef @llvm_get_struct_type(%LLVMContextRef %context, %LLVMTypeRef* %types_array, i32 %field_count, i32 0)
+    %struct_type_null = icmp eq %LLVMTypeRef %struct_type, null
+    br i1 %struct_type_null, label %error, label %store_type
+    
+store_type:
+    ; Store type for later lookup
+    call void @codegen_store_type(%CodeGen* %cg, i8* %type_name, i64 %type_name_len, %LLVMTypeRef %struct_type)
+    
+    ; Also generate text IR for backward compatibility
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* %type_name, i64 %type_name_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.type_equals, i32 0, i32 0), i64 7)
     call void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields_list)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
     
-    ; Resolve type string to LLVMTypeRef and store it
-    %type_ref = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_name, i64 %type_name_len)
-    %type_ref_null = icmp eq %LLVMTypeRef %type_ref, null
-    br i1 %type_ref_null, label %skip_store_type, label %store_type
-    
-store_type:
-    call void @codegen_store_type(%CodeGen* %cg, i8* %type_name, i64 %type_name_len, %LLVMTypeRef %type_ref)
-    br label %skip_store_type
-    
-skip_store_type:
     ret i32 0
+    
+error:
+    ret i32 -1
 }
 
 ; Append type fields to IR
@@ -733,7 +753,7 @@ check_bytevector:
     br i1 %is_bytevector, label %format_bytevector, label %not_bytevector
     
 format_bytevector:
-    ; Get LLVM context and module for parsing
+    ; Get LLVM context and module for direct API usage
     %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
     %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
     %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
@@ -742,208 +762,76 @@ format_bytevector:
     %context_null = icmp eq %LLVMContextRef %context, null
     %module_null = icmp eq %LLVMModuleRef %module, null
     %either_null = or i1 %context_null, %module_null
-    ; Parse if both context and module are non-null, otherwise fall back to text IR
-    br i1 %either_null, label %text_only_constant, label %parse_constant
+    ; Use LLVM API if both context and module are non-null, otherwise fall back to text IR
+    br i1 %either_null, label %text_only_constant, label %create_constant_direct
     
-parse_constant:
-    ; Build constant IR text in a buffer for parsing
-    ; Estimate buffer size: module header (~100) + constant definition
-    ; Account for escaped bytevector data (can be up to 3x original size for null bytes)
-    ; Add extra padding for safety
-    %value_len_escaped = mul i64 %value_len, 3  ; Worst case: all null bytes
-    %const_ir_size = add i64 500, %name_len  ; Increased base size
-    %const_ir_size2 = add i64 %const_ir_size, %type_len
-    %const_ir_size3 = add i64 %const_ir_size2, %value_len_escaped
-    %const_ir_size4 = add i64 %const_ir_size3, 100  ; Extra padding
-    %const_ir_buf = call i8* @malloc(i64 %const_ir_size4)
-    %buf_null_const = icmp eq i8* %const_ir_buf, null
-    br i1 %buf_null_const, label %text_only_constant, label %build_constant_ir
+create_constant_direct:
+    ; Debug: Creating constant
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_creating_constant, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %name)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-build_constant_ir:
-    ; Build module IR with constant: "target datalayout = \"...\"\ntarget triple = \"...\"\n\n@name = constant type c\"...\"\n"
-    %pos_const = alloca i64
-    store i64 0, i64* %pos_const
+    ; Create constant directly using LLVM API
+    ; Resolve type string to LLVMTypeRef
+    %constant_type_ref = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type, i64 %type_len)
+    %constant_type_ref_null = icmp eq %LLVMTypeRef %constant_type_ref, null
+    br i1 %constant_type_ref_null, label %text_only_constant, label %create_string_constant
     
-    ; Write data layout and target triple (reuse logic from codegen_parse_function_ir)
-    %data_layout_array = bitcast [38 x i8]* @.str.data_layout_value to i8*
-    %data_layout_len = add i64 37, 0
-    %data_layout_prefix_len = add i64 21, 0
-    %data_layout_suffix_len = add i64 2, 0
-    %data_layout_total = add i64 %data_layout_prefix_len, %data_layout_len
-    %data_layout_with_suffix = add i64 %data_layout_total, %data_layout_suffix_len
+create_string_constant:
+    ; Create constant string from bytevector
+    ; Get i8 type for array element
+    %i8_type_const = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
+    %i8_type_const_null = icmp eq %LLVMTypeRef %i8_type_const, null
+    br i1 %i8_type_const_null, label %text_only_constant, label %create_const_str
     
-    %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
-    %target_triple_len = add i64 26, 0
-    %target_triple_prefix_len = add i64 17, 0
-    %target_triple_suffix_len = add i64 3, 0
-    %target_triple_total = add i64 %target_triple_prefix_len, %target_triple_len
-    %target_triple_with_suffix = add i64 %target_triple_total, %target_triple_suffix_len
+create_const_str:
+    ; Create constant string value (with null terminator)
+    %value_len_int_const = trunc i64 %value_len to i32
+    %const_str_value = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %value, i32 %value_len_int_const, i32 0)
+    %const_str_value_null = icmp eq %LLVMValueRef %const_str_value, null
+    br i1 %const_str_value_null, label %text_only_constant, label %create_global
     
-    %module_prefix_len = add i64 %data_layout_with_suffix, %target_triple_with_suffix
+create_global:
+    ; Create null-terminated name for global
+    %name_buf_size = add i64 %name_len, 1
+    %name_buf = call i8* @malloc(i64 %name_buf_size)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
+    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
+    store i8 0, i8* %name_null_ptr
     
-    ; Write data layout
-    %pos_val_c1 = load i64, i64* %pos_const
-    %dest_c1 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c1
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c1, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.data_layout_prefix, i32 0, i32 0), i64 21, i1 false)
-    %pos_val_c2 = add i64 %pos_val_c1, 21
-    store i64 %pos_val_c2, i64* %pos_const
+    ; Add global variable with the constant name
+    %global_const = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %constant_type_ref, i8* %name_buf)
+    call void @free(i8* %name_buf)
     
-    %pos_val_c3 = load i64, i64* %pos_const
-    %dest_c2 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c3
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c2, i8* %data_layout_array, i64 %data_layout_len, i1 false)
-    %pos_val_c4 = add i64 %pos_val_c3, %data_layout_len
-    store i64 %pos_val_c4, i64* %pos_const
+    %global_const_null = icmp eq %LLVMValueRef %global_const, null
+    br i1 %global_const_null, label %text_only_constant, label %set_initializer
     
-    %pos_val_c5 = load i64, i64* %pos_const
-    %dest_c3 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c5
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c3, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.data_layout_suffix, i32 0, i32 0), i64 2, i1 false)
-    %pos_val_c6 = add i64 %pos_val_c5, 2
-    store i64 %pos_val_c6, i64* %pos_const
+set_initializer:
+    ; Set initializer
+    call void @llvm_set_initializer(%LLVMValueRef %global_const, %LLVMValueRef %const_str_value)
     
-    ; Write target triple
-    %pos_val_c7 = load i64, i64* %pos_const
-    %dest_c4 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c7
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c4, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.target_triple_prefix, i32 0, i32 0), i64 17, i1 false)
-    %pos_val_c8 = add i64 %pos_val_c7, 17
-    store i64 %pos_val_c8, i64* %pos_const
+    ; Set as constant
+    call void @llvm_set_global_constant(%LLVMValueRef %global_const, i32 1)
     
-    %pos_val_c9 = load i64, i64* %pos_const
-    %dest_c5 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c9
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c5, i8* %target_triple_array, i64 %target_triple_len, i1 false)
-    %pos_val_c10 = add i64 %pos_val_c9, %target_triple_len
-    store i64 %pos_val_c10, i64* %pos_const
+    ; Set linkage to private
+    call void @llvm_set_linkage(%LLVMValueRef %global_const, i32 0)
     
-    %pos_val_c11 = load i64, i64* %pos_const
-    %dest_c6 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c11
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c6, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.target_triple_suffix, i32 0, i32 0), i64 3, i1 false)
-    %pos_val_c12 = add i64 %pos_val_c11, 3
-    store i64 %pos_val_c12, i64* %pos_const
+    ; Debug: Constant created
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([28 x i8], [28 x i8]* @.str.debug_constant_created, i32 0, i32 0))
+    %global_const_ptr = bitcast %LLVMValueRef %global_const to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %global_const_ptr)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-    ; Write constant definition: "@name = constant type c\"...\"\n"
-    %pos_val_c13 = load i64, i64* %pos_const
-    %dest_c7 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c13
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c7, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1, i1 false)
-    %pos_val_c14 = add i64 %pos_val_c13, 1
-    store i64 %pos_val_c14, i64* %pos_const
+    ; Store constant for later lookup
+    call void @codegen_store_constant(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %global_const)
     
-    %pos_val_c15 = load i64, i64* %pos_const
-    %dest_c8 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c15
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c8, i8* %name, i64 %name_len, i1 false)
-    %pos_val_c16 = add i64 %pos_val_c15, %name_len
-    store i64 %pos_val_c16, i64* %pos_const
-    
-    %pos_val_c17 = load i64, i64* %pos_const
-    %dest_c9 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c17
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c9, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11, i1 false)
-    %pos_val_c18 = add i64 %pos_val_c17, 11
-    store i64 %pos_val_c18, i64* %pos_const
-    
-    %pos_val_c19 = load i64, i64* %pos_const
-    %dest_c10 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c19
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c10, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1, i1 false)
-    %pos_val_c20 = add i64 %pos_val_c19, 1
-    store i64 %pos_val_c20, i64* %pos_const
-    
-    %pos_val_c21 = load i64, i64* %pos_const
-    %dest_c11 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c21
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c11, i8* %type, i64 %type_len, i1 false)
-    %pos_val_c22 = add i64 %pos_val_c21, %type_len
-    store i64 %pos_val_c22, i64* %pos_const
-    
-    %pos_val_c23 = load i64, i64* %pos_const
-    %dest_c12 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c23
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c12, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1, i1 false)
-    %pos_val_c24 = add i64 %pos_val_c23, 1
-    store i64 %pos_val_c24, i64* %pos_const
-    
-    %pos_val_c25 = load i64, i64* %pos_const
-    %dest_c13 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c25
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c13, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.c_quote_open, i32 0, i32 0), i64 2, i1 false)
-    %pos_val_c26 = add i64 %pos_val_c25, 2
-    store i64 %pos_val_c26, i64* %pos_const
-    
-    ; Append bytevector data with escaping using helper function
-    call void @codegen_write_bytevector_to_buffer(i8* %const_ir_buf, i64* %pos_const, i8* %value, i64 %value_len)
-    %pos_val_c28 = load i64, i64* %pos_const
-    
-    %pos_val_c29 = load i64, i64* %pos_const
-    %dest_c15 = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c29
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_c15, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.quote, i32 0, i32 0), i64 1, i1 false)
-    %pos_val_c30 = add i64 %pos_val_c29, 1
-    store i64 %pos_val_c30, i64* %pos_const
-    
-    %pos_val_c31 = load i64, i64* %pos_const
-    %newline_ptr_const = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c31
-    store i8 10, i8* %newline_ptr_const
-    %pos_val_c32 = add i64 %pos_val_c31, 1
-    %null_ptr_const = getelementptr i8, i8* %const_ir_buf, i64 %pos_val_c32
-    store i8 0, i8* %null_ptr_const
-    
-    ; Parse constant IR into module
-    %total_len_const = sub i64 %pos_val_c32, 1
-    %temp_module_ptr_const = alloca %LLVMModuleRef
-    %parse_result_const = call i32 @llvm_parse_ir_in_context(%LLVMContextRef %context, i8* %const_ir_buf, i64 %total_len_const, %LLVMModuleRef* %temp_module_ptr_const)
-    
-    ; Free buffer
-    call void @free(i8* %const_ir_buf)
-    
-    ; Check parse result
-    %parse_failed_const = icmp ne i32 %parse_result_const, 0
-    br i1 %parse_failed_const, label %text_only_constant, label %link_constant
-    
-link_constant:
-    ; Link temp module into main module
-    %temp_module_const = load %LLVMModuleRef, %LLVMModuleRef* %temp_module_ptr_const
-    %temp_module_null_const = icmp eq %LLVMModuleRef %temp_module_const, null
-    br i1 %temp_module_null_const, label %text_only_constant, label %do_link_const
-    
-do_link_const:
-    %link_result_const = call i32 @llvm_link_modules2(%LLVMModuleRef %module, %LLVMModuleRef %temp_module_const)
-    %link_failed_const = icmp ne i32 %link_result_const, 0
-    br i1 %link_failed_const, label %dispose_and_error_const, label %verify_after_link_const
-    
-verify_after_link_const:
-    ; Verify module after linking (action 2 = print to stderr, but we'll just check return value)
-    %verify_error_msg_const = alloca i8*
-    store i8* null, i8** %verify_error_msg_const
-    %verify_result_const = call i32 @llvm_verify_module(%LLVMModuleRef %module, i32 1, i8** %verify_error_msg_const)
-    ; Verification errors are warnings, not fatal - continue anyway
-    br label %dispose_temp_const
-    
-dispose_temp_const:
-    ; Don't dispose temp module after linking - LLVMLinkModules2 automatically handles cleanup
-    ; Disposing it causes a crash because the module is already invalidated after linking
-    ; Linking succeeded - constant is now in main module
-    
-    ; Get the constant value from the module and store it
-    %const_name_null_term = call i8* @malloc(i64 %name_len)
-    %const_name_null_term_plus1 = add i64 %name_len, 1
-    %const_name_buf = call i8* @malloc(i64 %const_name_null_term_plus1)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %const_name_buf, i8* %name, i64 %name_len, i1 false)
-    %const_name_null = getelementptr i8, i8* %const_name_buf, i64 %name_len
-    store i8 0, i8* %const_name_null
-    %const_value = call %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef %module, i8* %const_name_buf)
-    call void @free(i8* %const_name_buf)
-    
-    ; Store constant if we got a valid value
-    %const_value_null = icmp eq %LLVMValueRef %const_value, null
-    br i1 %const_value_null, label %skip_store, label %store_constant
-    
-store_constant:
-    call void @codegen_store_constant(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %const_value)
-    br label %skip_store
-    
-skip_store:
-    ret i32 0
-    
-dispose_and_error_const:
-    ; Don't dispose temp module - if linking failed, module is still valid and should be disposed
-    ; But to be safe, we'll skip disposal (small memory leak on error path is acceptable)
-    ; call void @llvm_dispose_module(%LLVMModuleRef %temp_module_const)
+    ; Also generate text IR for backward compatibility
     br label %text_only_constant
     
 text_only_constant:
-    ; Also generate text IR for backward compatibility
+    ; Generate text IR for backward compatibility (or fallback if LLVM API unavailable)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
     call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
     call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
@@ -969,6 +857,18 @@ not_bytevector:
     
     ret i32 0
 }
+
+; OLD PARSING CODE REMOVED - Now using direct LLVM API
+; The following code was removed as it's no longer needed:
+; - parse_constant_old and all its IR building code
+; - link_constant and module linking code  
+; - All the old parsing/linking infrastructure
+; We now create constants directly using:
+; - codegen_resolve_type_string to get LLVMTypeRef
+; - llvm_create_constant_string to create the constant value
+; - llvm_add_global to create the global
+; - llvm_set_initializer, llvm_set_global_constant, llvm_set_linkage to configure it
+; - codegen_store_constant to store it for later lookup
 
 ; Create AST node to store a pointer value (for LLVMValueRef, LLVMTypeRef, etc.)
 ; codegen_create_pointer_node: Create an AST node that stores a pointer value
@@ -1014,11 +914,18 @@ entry:
 ;   value: LLVMValueRef for the constant
 define void @codegen_store_constant(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %value) {
 entry:
+    ; Debug: Storing constant
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_storing_constant, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %name)
+    %value_ptr_cast = bitcast %LLVMValueRef %value to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr_cast)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ; Create name node
     %name_node = call %ASTNode* @codegen_create_string_node(i8* %name, i64 %name_len)
     
     ; Create value node (pointer node)
-    %value_ptr_cast = bitcast %LLVMValueRef %value to i8*
     %value_node = call %ASTNode* @codegen_create_pointer_node(i8* %value_ptr_cast)
     
     ; Create pair: (name . value)
@@ -1034,6 +941,12 @@ entry:
     ; Store updated list
     store %ASTNode* %new_constants, %ASTNode** %constants_ptr
     
+    ; Debug: Constant stored successfully
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([27 x i8], [27 x i8]* @.str.debug_constant_stored, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr_cast)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ret void
 }
 
@@ -1046,6 +959,12 @@ entry:
 ; Returns: LLVMValueRef for the constant, or null if not found
 define %LLVMValueRef @codegen_get_constant(%CodeGen* %cg, i8* %name, i64 %name_len) {
 entry:
+    ; Debug: Looking up constant
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([27 x i8], [27 x i8]* @.str.debug_looking_up_constant, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %name)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ; Get constants list
     %constants_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 12
     %constants = load %ASTNode*, %ASTNode** %constants_ptr
@@ -1112,6 +1031,13 @@ cast_back:
     %value_ptr_field = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 2
     %value_ptr = load i8*, i8** %value_ptr_field
     %value_ref = bitcast i8* %value_ptr to %LLVMValueRef
+    
+    ; Debug: Constant found
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.debug_constant_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ret %LLVMValueRef %value_ref
     
 next:
@@ -1122,8 +1048,139 @@ next:
     br label %iterate
     
 not_found:
+    ; Debug: Constant not found
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.debug_constant_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %name)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ret %LLVMValueRef null
 }
+
+; Check if a type is an array type
+; codegen_is_array_type: Check if an LLVMTypeRef is an array type
+; Parameters:
+;   type: LLVMTypeRef to check
+; Returns: i32 (1 if array, 0 otherwise)
+; Note: This uses a heuristic - if the type is a pointer and its element type
+;       has an element type (i.e., is itself an array), then it's an array.
+define i32 @codegen_is_array_type(%LLVMTypeRef %type) {
+entry:
+    %type_null = icmp eq %LLVMTypeRef %type, null
+    br i1 %type_null, label %not_array, label %get_element_type
+    
+get_element_type:
+    ; Get the element type of the pointer (globals are pointers)
+    %element_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %type)
+    %element_null = icmp eq %LLVMTypeRef %element_type, null
+    br i1 %element_null, label %not_array, label %check_array_element
+    
+check_array_element:
+    ; If the element type itself has an element type, it's an array
+    ; Arrays have element types (e.g., [11 x i8] has element type i8)
+    %array_element_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %element_type)
+    %is_array = icmp ne %LLVMTypeRef %array_element_type, null
+    br i1 %is_array, label %return_array, label %not_array
+    
+return_array:
+    ret i32 1
+    
+not_array:
+    ret i32 0
+}
+
+; codegen_eval_dsl_expr: Evaluate DSL expressions (llvm-call, llvm-get-function, etc.)
+; This function is defined later in the file (around line 4004)
+
+; Helper function to collect field types for struct type creation
+; codegen_collect_field_types: Collect field types from AST list into array
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   fields: AST node list of (field-name type) pairs
+;   types_array: Pre-allocated array to store LLVMTypeRef values
+;   max_fields: Maximum number of fields (array size)
+; Returns: i32 count of fields collected
+define i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields, %LLVMTypeRef* %types_array, i32 %max_fields) {
+entry:
+    %count = alloca i32
+    store i32 0, i32* %count
+    
+    %fields_null = icmp eq %ASTNode* %fields, null
+    br i1 %fields_null, label %done, label %collect_loop
+    
+collect_loop:
+    %current_fields = phi %ASTNode* [ %fields, %entry ], [ %next_fields, %continue_collect ]
+    %current_count = load i32, i32* %count
+    %at_max = icmp uge i32 %current_count, %max_fields
+    br i1 %at_max, label %done, label %get_field_pair
+    
+get_field_pair:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %current_fields, i32 0, i32 4
+    %field_pair = load %ASTNode*, %ASTNode** %car_ptr
+    %field_pair_null = icmp eq %ASTNode* %field_pair, null
+    br i1 %field_pair_null, label %done, label %get_field_type
+    
+get_field_type:
+    ; field_pair is (field-name type)
+    ; Get type from cdr
+    %field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %field_pair, i32 0, i32 5
+    %field_cdr = load %ASTNode*, %ASTNode** %field_cdr_ptr
+    %field_cdr_null = icmp eq %ASTNode* %field_cdr, null
+    br i1 %field_cdr_null, label %done, label %get_type_node
+    
+get_type_node:
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %field_cdr, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_node_null = icmp eq %ASTNode* %type_node, null
+    br i1 %type_node_null, label %done, label %resolve_type
+    
+resolve_type:
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_str = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+    
+    ; Resolve type string to LLVMTypeRef
+    %field_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
+    %field_type_null = icmp eq %LLVMTypeRef %field_type, null
+    br i1 %field_type_null, label %done, label %store_type
+    
+store_type:
+    ; Store type in array
+    %count_val = load i32, i32* %count
+    %array_idx = getelementptr %LLVMTypeRef, %LLVMTypeRef* %types_array, i32 %count_val
+    store %LLVMTypeRef %field_type, %LLVMTypeRef* %array_idx
+    
+    ; Increment count
+    %new_count = add i32 %count_val, 1
+    store i32 %new_count, i32* %count
+    br label %continue_collect
+    
+continue_collect:
+    ; Move to next field
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %current_fields, i32 0, i32 5
+    %next_fields = load %ASTNode*, %ASTNode** %cdr_ptr
+    %has_more = icmp ne %ASTNode* %next_fields, null
+    br i1 %has_more, label %collect_loop, label %done
+    
+done:
+    %final_count = load i32, i32* %count
+    ret i32 %final_count
+}
+
+; DUPLICATE codegen_define_llvm_type REMOVED - the correct version is at line 568
+; DUPLICATE codegen_append_type_fields REMOVED - the correct version is at line 629
+
+; OLD PARSING CODE REMOVED - All the old IR building, parsing, and linking code has been deleted
+; This code was replaced with direct LLVM API calls:
+; - For constants: llvm_create_constant_string, llvm_add_global, llvm_set_initializer, etc.
+; - For types: llvm_get_struct_type with field types collected via codegen_collect_field_types
+
+; DUPLICATE codegen_create_pointer_node REMOVED - the correct version is at line 861
+; DUPLICATE codegen_store_constant REMOVED - the correct version is at line 898
+; DUPLICATE codegen_get_constant REMOVED - the correct version is at line 936
+; DUPLICATE codegen_is_array_type REMOVED - the correct version is at line 1024
+; All duplicate functions removed - continuing with rest of file...
 
 ; Store type in types list
 ; codegen_store_type: Store a type name and LLVMTypeRef pair
@@ -3115,6 +3172,20 @@ declare i32 @printf(i8*, ...)
 @.str.debug_looking_up_global = private unnamed_addr constant [20 x i8] c"Looking up global: \00"
 @.str.debug_global_not_found = private unnamed_addr constant [25 x i8] c"ERROR: Global not found!\00"
 @.str.debug_global_found = private unnamed_addr constant [17 x i8] c"Global found: OK\00"
+@.str.debug_creating_constant = private unnamed_addr constant [25 x i8] c"Creating constant: name=\00"
+@.str.debug_constant_created = private unnamed_addr constant [28 x i8] c"Constant created, pointer: \00"
+@.str.debug_storing_constant = private unnamed_addr constant [24 x i8] c"Storing constant: name=\00"
+@.str.debug_constant_stored = private unnamed_addr constant [27 x i8] c"Constant stored, pointer: \00"
+@.str.debug_looking_up_constant = private unnamed_addr constant [27 x i8] c"Looking up constant: name=\00"
+@.str.debug_constant_found = private unnamed_addr constant [26 x i8] c"Constant found, pointer: \00"
+@.str.debug_constant_not_found = private unnamed_addr constant [26 x i8] c"Constant not found: name=\00"
+@.str.debug_pointer_value = private unnamed_addr constant [13 x i8] c", pointer=%p\00"
+@.str.debug_checking_builder = private unnamed_addr constant [19 x i8] c"Checking builder: \00"
+@.str.debug_checking_func_type = private unnamed_addr constant [21 x i8] c"Checking func_type: \00"
+@.str.debug_checking_func = private unnamed_addr constant [16 x i8] c"Checking func: \00"
+@.str.debug_checking_args_array = private unnamed_addr constant [22 x i8] c"Checking args_array: \00"
+@.str.debug_first_arg_value = private unnamed_addr constant [18 x i8] c"First arg value: \00"
+@.str.debug_arg_value_at = private unnamed_addr constant [18 x i8] c"Arg value at %d: \00"
 @.str.debug_index_out_of_range = private unnamed_addr constant [54 x i8] c"ERROR: Index %d out of range (function has %d params)\00"
 @.str.debug_getting_index_node = private unnamed_addr constant [22 x i8] c"Getting index node...\00"
 @.str.debug_checking_pair_cdr = private unnamed_addr constant [21 x i8] c"Checking pair cdr...\00"
@@ -3712,11 +3783,104 @@ return_param_ok:
     
 try_constant:
     ; Try to resolve as constant name
+    ; Debug: Looking up constant
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.debug_resolving_param, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %atom_val)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     %constant_value = call %LLVMValueRef @codegen_get_constant(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
     %constant_not_null = icmp ne %LLVMValueRef %constant_value, null
-    br i1 %constant_not_null, label %return_constant, label %try_local
+    br i1 %constant_not_null, label %return_constant, label %constant_not_found
+    
+constant_not_found:
+    ; Debug: Constant not found
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_global_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %try_local
     
 return_constant:
+    ; Check if constant is an array type and convert to pointer if needed
+    ; Get the type of the constant (globals are pointers)
+    %constant_type = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %constant_value)
+    %constant_type_null = icmp eq %LLVMTypeRef %constant_type, null
+    br i1 %constant_type_null, label %return_constant_as_is, label %check_if_array
+    
+check_if_array:
+    ; Check if the constant type is an array
+    %is_array = call i32 @codegen_is_array_type(%LLVMTypeRef %constant_type)
+    %is_array_bool = icmp eq i32 %is_array, 1
+    br i1 %is_array_bool, label %create_gep, label %return_constant_as_is
+    
+create_gep:
+    ; Get builder from CodeGen structure
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %return_constant_as_is, label %get_context_for_gep
+    
+get_context_for_gep:
+    ; Get context to create constant integers
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    %context_null = icmp eq %LLVMContextRef %context, null
+    br i1 %context_null, label %return_constant_as_is, label %create_indices
+    
+create_indices:
+    ; Get i32 type for indices
+    %i32_type = call %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %context)
+    %i32_type_null = icmp eq %LLVMTypeRef %i32_type, null
+    br i1 %i32_type_null, label %return_constant_as_is, label %create_zero_const
+    
+create_zero_const:
+    ; Create constant zero for indices [0, 0]
+    %zero_const = call %LLVMValueRef @llvm_create_constant_int(%LLVMTypeRef %i32_type, i64 0, i32 0)
+    %zero_const_null = icmp eq %LLVMValueRef %zero_const, null
+    br i1 %zero_const_null, label %return_constant_as_is, label %allocate_indices_array
+    
+allocate_indices_array:
+    ; Allocate array for two indices [0, 0]
+    %indices_array = call i8* @malloc(i64 16)  ; 2 * 8 bytes for LLVMValueRef
+    %indices_ptr = bitcast i8* %indices_array to %LLVMValueRef*
+    
+    ; Store first zero index
+    %zero_idx0 = getelementptr %LLVMValueRef, %LLVMValueRef* %indices_ptr, i32 0
+    store %LLVMValueRef %zero_const, %LLVMValueRef* %zero_idx0
+    
+    ; Store second zero index
+    %zero_idx1 = getelementptr %LLVMValueRef, %LLVMValueRef* %indices_ptr, i32 1
+    store %LLVMValueRef %zero_const, %LLVMValueRef* %zero_idx1
+    
+    ; Get the element type of the pointer (the array type)
+    %array_element_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %constant_type)
+    %array_element_type_null = icmp eq %LLVMTypeRef %array_element_type, null
+    br i1 %array_element_type_null, label %free_indices_and_return, label %build_gep
+    
+build_gep:
+    ; Build GEP instruction: getelementptr array_element_type, constant_type* %constant_value, [0, 0]
+    ; Use empty string for name
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %constant_gep_result = call %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %array_element_type, %LLVMValueRef %constant_value, %LLVMValueRef* %indices_ptr, i32 2, i8* %empty_str)
+    
+    ; Free indices array
+    call void @free(i8* %indices_array)
+    
+    ; Check if GEP succeeded
+    %constant_gep_null = icmp eq %LLVMValueRef %constant_gep_result, null
+    br i1 %constant_gep_null, label %return_constant_as_is, label %return_gep
+    
+free_indices_and_return:
+    ; Free indices array if we couldn't get element type
+    call void @free(i8* %indices_array)
+    br label %return_constant_as_is
+    
+return_gep:
+    ; Return the GEP result (pointer to first element of array)
+    ret %LLVMValueRef %constant_gep_result
+    
+return_constant_as_is:
+    ; Return constant value as-is (not an array or GEP failed)
     ret %LLVMValueRef %constant_value
     
 try_local:
@@ -4606,34 +4770,28 @@ print_func_done:
     br i1 %func_null, label %error, label %get_func_type
     
 get_func_type:
-    ; Debug logging - function is not null
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_getting_func_type, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Get function type from function value
-    ; For external functions, LLVMTypeOf should return the function type directly
-    %func_type_raw = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %func)
-    
-    ; Debug logging - function type result
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.debug_func_type_result, i32 0, i32 0))
-    %func_type_raw_null = icmp eq %LLVMTypeRef %func_type_raw, null
-    br i1 %func_type_raw_null, label %print_type_null, label %print_type_ok
-    
-print_type_null:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.debug_null, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %func_type_error
-    
-print_type_ok:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_not_null, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %use_func_type
+    ; The function value comes from llvm-get-function, which should have stored
+    ; both the function value and type. However, we don't have easy access to
+    ; the function name here to look it up. 
+    ; 
+    ; The issue is that LLVMTypeOf on a function value might return a pointer type,
+    ; not the function type. But actually, in LLVM C API, LLVMTypeOf should return
+    ; the function type directly for function values.
+    ;
+    ; However, based on the C example, we should use the exact function type that
+    ; was used to create the function. Since we stored it in codegen_init for printf,
+    ; and llvm-get-function should have stored it, we need to retrieve it.
+    ;
+    ; For now, use LLVMTypeOf as a fallback - but this might be the root cause
+    ; of the segfault if it's returning the wrong type.
+    %func_type_from_value = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %func)
+    %func_type_from_value_null = icmp eq %LLVMTypeRef %func_type_from_value, null
+    br i1 %func_type_from_value_null, label %func_type_error, label %use_func_type
     
 use_func_type:
-    ; Use the function type directly (LLVMTypeOf on a function returns the function type)
-    %func_type = phi %LLVMTypeRef [ %func_type_raw, %print_type_ok ]
+    ; Use function type from LLVMTypeOf
+    ; Note: In LLVM C API, LLVMTypeOf on a function value returns the function type directly
+    %func_type = phi %LLVMTypeRef [ %func_type_from_value, %get_func_type ]
     
     ; Check if function type is null (shouldn't be if we got here, but be safe)
     %func_type_null = icmp eq %LLVMTypeRef %func_type, null
@@ -4774,9 +4932,58 @@ call_with_no_args:
 call_with_args:
     ; Debug logging before call
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_building_call, i32 0, i32 0), i32 %arg_count)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([27 x i8], [27 x i8]* @.str.debug_building_call, i32 0, i32 0), i32 %arg_count)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
+    ; Debug: Check all parameters before call
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.debug_checking_builder, i32 0, i32 0))
+    %builder_ptr_debug = bitcast %LLVMBuilderRef %builder to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %builder_ptr_debug)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_checking_func_type, i32 0, i32 0))
+    %func_type_ptr_debug = bitcast %LLVMTypeRef %func_type to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %func_type_ptr_debug)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.debug_checking_func, i32 0, i32 0))
+    %func_ptr_debug = bitcast %LLVMValueRef %func to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %func_ptr_debug)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.debug_checking_args_array, i32 0, i32 0))
+    %args_array_ptr_debug = bitcast %LLVMValueRef* %args_array_ptr to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %args_array_ptr_debug)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    ; Debug: Check all arguments
+    %arg_idx_debug = alloca i32
+    store i32 0, i32* %arg_idx_debug
+    br label %debug_args_loop
+    
+debug_args_loop:
+    %arg_idx_val = load i32, i32* %arg_idx_debug
+    %done_debug = icmp uge i32 %arg_idx_val, %arg_count
+    br i1 %done_debug, label %call_after_debug, label %debug_arg
+    
+debug_arg:
+    %arg_ptr_debug = getelementptr %LLVMValueRef, %LLVMValueRef* %args_array_ptr, i32 %arg_idx_val
+    %arg_val_debug = load %LLVMValueRef, %LLVMValueRef* %arg_ptr_debug
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_arg_value_at, i32 0, i32 0), i32 %arg_idx_val)
+    %arg_ptr_debug_cast = bitcast %LLVMValueRef %arg_val_debug to i8*
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %arg_ptr_debug_cast)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    %arg_idx_next = add i32 %arg_idx_val, 1
+    store i32 %arg_idx_next, i32* %arg_idx_debug
+    br label %debug_args_loop
+    
+call_after_debug:
     %call_result = call %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %func_type, %LLVMValueRef %func, %LLVMValueRef* %args_array_ptr, i32 %arg_count, i8* %name_phi_call)
     
     ; Free args array
@@ -4978,12 +5185,37 @@ print_not_null:
 print_done:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
+    ; Check if function was found
+    %func_found = icmp ne %LLVMValueRef %func, null
+    br i1 %func_found, label %store_func_type, label %func_not_found
+    
+store_func_type:
+    ; Store function and its type for later use in llvm-call
+    ; Get function type from stored mapping (if available) or from LLVMTypeOf
+    %stored_func_type = call %LLVMTypeRef @codegen_get_function_type(%CodeGen* %cg, i8* %name_buf, i64 %name_len)
+    %has_stored_type = icmp ne %LLVMTypeRef %stored_func_type, null
+    br i1 %has_stored_type, label %use_stored_type, label %get_type_from_func
+    
+use_stored_type:
+    ; Use stored function type
+    br label %store_both
+    
+get_type_from_func:
+    ; Fallback: get type from function value using LLVMTypeOf
+    %func_type_from_value = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %func)
+    br label %store_both
+    
+store_both:
+    ; Use phi to select between stored type and type from function value
+    %func_type_to_store = phi %LLVMTypeRef [ %stored_func_type, %use_stored_type ], [ %func_type_from_value, %get_type_from_func ]
+    
+    ; Store both function value and type for llvm-call to use
+    call void @codegen_store_llvm_function(%CodeGen* %cg, i8* %name_buf, i64 %name_len, %LLVMValueRef %func, %LLVMTypeRef %func_type_to_store)
+    
     ; Free name buffer
     call void @free(i8* %name_buf)
     
-    ; Check if function was found
-    %func_found = icmp ne %LLVMValueRef %func, null
-    br i1 %func_found, label %return_func, label %func_not_found
+    ret %LLVMValueRef %func
     
 func_not_found:
     ; Function not found - this is an error
@@ -4991,10 +5223,7 @@ func_not_found:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_func_not_found_error, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %error
-    
-return_func:
-    ret %LLVMValueRef %func
+    ret %LLVMValueRef null
     
 error:
     ret %LLVMValueRef null

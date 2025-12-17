@@ -127,7 +127,7 @@ handle_type:
     
 check_constant:
     ; Check for define-llvm-constant
-    %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.define_llvm_constant, i32 0, i32 0), i64 21)
+    %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_llvm_constant, i32 0, i32 0), i64 20)
     %is_constant_bool = icmp ne i32 %is_constant, 0
     br i1 %is_constant_bool, label %handle_constant, label %check_function
     
