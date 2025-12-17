@@ -1,10 +1,10 @@
 ; Example Vibe program demonstrating new bitcode primitives
 
 ; Define a type (using vertical bar delimited symbols for LLVM types)
-(define-bitcode-type Point (x |i32|) (y |i32|))
+(define-llvm-type Point (x |i32|) (y |i32|))
 
 ; Define a constant (using vertical bar for type, bytevector for value)
-(define-bitcode-constant hello_string |[14 x i8]| #u8(72 101 108 108 111 44 32 87 111 114 108 100 33 0))
+(define-llvm-constant hello_string |[14 x i8]| #u8(72 101 108 108 111 44 32 87 111 114 108 100 33 0))
 
 ; Define a function with typed parameters using DSL (new approach)
 ; Note: For now, we inline the GEP in the call since we don't have let binding yet

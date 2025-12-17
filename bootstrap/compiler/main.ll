@@ -116,23 +116,23 @@ check_name:
     %car_len_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 3
     %car_len = load i64, i64* %car_len_ptr
     
-    ; Check for define-bitcode-type
-    %is_type = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.define_bitcode_type, i32 0, i32 0), i64 19)
+    ; Check for define-llvm-type
+    %is_type = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.define_llvm_type, i32 0, i32 0), i64 16)
     %is_type_bool = icmp ne i32 %is_type, 0
     br i1 %is_type_bool, label %handle_type, label %check_constant
     
 handle_type:
-    call i32 @codegen_define_bitcode_type(%CodeGen* %codegen, %ASTNode* %ast)
+    call i32 @codegen_define_llvm_type(%CodeGen* %codegen, %ASTNode* %ast)
     br label %parse_loop
     
 check_constant:
-    ; Check for define-bitcode-constant
-    %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.define_bitcode_constant, i32 0, i32 0), i64 23)
+    ; Check for define-llvm-constant
+    %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.define_llvm_constant, i32 0, i32 0), i64 21)
     %is_constant_bool = icmp ne i32 %is_constant, 0
     br i1 %is_constant_bool, label %handle_constant, label %check_function
     
 handle_constant:
-    call i32 @codegen_define_bitcode_constant(%CodeGen* %codegen, %ASTNode* %ast)
+    call i32 @codegen_define_llvm_constant(%CodeGen* %codegen, %ASTNode* %ast)
     br label %parse_loop
     
 check_function:
@@ -426,8 +426,8 @@ no_match:
 @.str.parse_error = private unnamed_addr constant [13 x i8] c"Parse error\0A\00"
 @.str.write_error = private unnamed_addr constant [20 x i8] c"Error writing file\0A\00"
 @.str.dash_o = private unnamed_addr constant [3 x i8] c"-o\00"
-@.str.define_bitcode_type = private unnamed_addr constant [20 x i8] c"define-bitcode-type\00"
-@.str.define_bitcode_constant = private unnamed_addr constant [24 x i8] c"define-bitcode-constant\00"
+@.str.define_llvm_type = private unnamed_addr constant [17 x i8] c"define-llvm-type\00"
+@.str.define_llvm_constant = private unnamed_addr constant [21 x i8] c"define-llvm-constant\00"
 @.str.define_llvm_function = private unnamed_addr constant [21 x i8] c"define-llvm-function\00"
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
@@ -444,8 +444,8 @@ declare i32 @close(i32)
 declare %Token* @parse_current(%Parser*)
 declare i32 @strcmp(i8*, i8*)
 declare i32 @strncmp(i8*, i8*, i32)
-declare i32 @codegen_define_bitcode_type(%CodeGen*, %ASTNode*)
-declare i32 @codegen_define_bitcode_constant(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_llvm_type(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_llvm_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_llvm_function(%CodeGen*, %ASTNode*)
 declare void @codegen_dispose(%CodeGen*)

@@ -5,6 +5,14 @@
 target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
 target triple = "x86_64-apple-macosx10.15.0"
 
+; LLVM opaque types (pointers to LLVM structures)
+%LLVMContextRef = type i8*
+%LLVMModuleRef = type i8*
+%LLVMTypeRef = type i8*
+%LLVMValueRef = type i8*
+%LLVMBasicBlockRef = type i8*
+%LLVMBuilderRef = type i8*
+
 ; Token structure
 ; struct Token {
 ;     i32 type;           // Token type
@@ -110,8 +118,18 @@ target triple = "x86_64-apple-macosx10.15.0"
 ;     i64 buffer_pos;       // Current position in buffer
 ;     i32 string_counter;   // Counter for unique string constant names
 ;     i32 label_counter;    // Counter for unique label names
+;     %LLVMContextRef context;  // LLVM context
+;     %LLVMModuleRef module;    // LLVM module
+;     %LLVMBuilderRef builder;  // LLVM builder
+;     %LLVMValueRef current_function;  // Current function being generated (for DSL)
+;     %ASTNode* param_names;    // List of (name . param_value) pairs for DSL parameter resolution
+;     %ASTNode* local_values;   // List of (name . value) pairs for DSL local value tracking
+;     %ASTNode* function_types; // List of (name . type) pairs for function type tracking
+;     %ASTNode* constants;      // List of (name . LLVMValueRef) pairs for constant tracking
+;     %ASTNode* types;          // List of (name . LLVMTypeRef) pairs for type tracking
+;     %ASTNode* llvm_functions; // List of (name . (func_value . func_type)) pairs for function tracking
 ; }
-%CodeGen = type { i8*, i64, i64, i32, i32 }
+%CodeGen = type { i8*, i64, i64, i32, i32, %LLVMContextRef, %LLVMModuleRef, %LLVMBuilderRef, %LLVMValueRef, %ASTNode*, %ASTNode*, %ASTNode*, %ASTNode*, %ASTNode*, %ASTNode* }
 
 ; FFI types (from ffi.ll)
 ; Library handle (opaque pointer)

@@ -291,6 +291,7 @@ declare %LLVMValueRef @LLVMConstNull(%LLVMTypeRef)
 
 ; Function management
 declare %LLVMValueRef @LLVMAddFunction(%LLVMModuleRef, i8*, %LLVMTypeRef)
+declare i32 @LLVMCountParams(%LLVMValueRef)
 declare %LLVMValueRef @LLVMGetParam(%LLVMValueRef, i32)
 declare void @LLVMSetValueName(%LLVMValueRef, i8*)
 
@@ -618,6 +619,17 @@ define %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %name, %LLVM
 entry:
     %func = call %LLVMValueRef @LLVMAddFunction(%LLVMModuleRef %module, i8* %name, %LLVMTypeRef %function_type)
     ret %LLVMValueRef %func
+}
+
+; Count function parameters
+; llvm_count_params: Count the number of parameters in a function
+; Parameters:
+;   func: LLVMValueRef for function
+; Returns: Number of parameters (i32)
+define i32 @llvm_count_params(%LLVMValueRef %func) {
+entry:
+    %count = call i32 @LLVMCountParams(%LLVMValueRef %func)
+    ret i32 %count
 }
 
 ; Get function parameter
