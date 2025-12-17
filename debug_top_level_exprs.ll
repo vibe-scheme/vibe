@@ -1,1 +1,2 @@
-Processing function call: define-llvm-constant
+Processing function call: hello
+-llvm-constant

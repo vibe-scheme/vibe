@@ -139,10 +139,20 @@ check_function:
     ; Check for define-llvm-function (new DSL-based form)
     %is_llvm_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_llvm_function, i32 0, i32 0), i64 20)
     %is_llvm_function_bool = icmp ne i32 %is_llvm_function, 0
-    br i1 %is_llvm_function_bool, label %handle_llvm_function, label %check_bitcode_function
+    br i1 %is_llvm_function_bool, label %handle_llvm_function, label %check_ffi_function
     
 handle_llvm_function:
     call i32 @codegen_define_llvm_function(%CodeGen* %codegen, %ASTNode* %ast)
+    br label %parse_loop
+    
+check_ffi_function:
+    ; Check for define-llvm-ffi-function (FFI-based form)
+    %is_ffi_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.define_llvm_ffi_function, i32 0, i32 0), i64 24)
+    %is_ffi_function_bool = icmp ne i32 %is_ffi_function, 0
+    br i1 %is_ffi_function_bool, label %handle_ffi_function, label %check_bitcode_function
+    
+handle_ffi_function:
+    call i32 @codegen_define_llvm_ffi_function(%CodeGen* %codegen, %ASTNode* %ast)
     br label %parse_loop
     
 check_bitcode_function:
@@ -429,6 +439,7 @@ no_match:
 @.str.define_llvm_type = private unnamed_addr constant [17 x i8] c"define-llvm-type\00"
 @.str.define_llvm_constant = private unnamed_addr constant [21 x i8] c"define-llvm-constant\00"
 @.str.define_llvm_function = private unnamed_addr constant [21 x i8] c"define-llvm-function\00"
+@.str.define_llvm_ffi_function = private unnamed_addr constant [25 x i8] c"define-llvm-ffi-function\00"
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 @.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"
@@ -448,6 +459,7 @@ declare i32 @codegen_define_llvm_type(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_llvm_constant(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_bitcode_function(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_llvm_function(%CodeGen*, %ASTNode*)
+declare i32 @codegen_define_llvm_ffi_function(%CodeGen*, %ASTNode*)
 declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
 declare i32 @codegen_write_object_file(%CodeGen*, i8*)

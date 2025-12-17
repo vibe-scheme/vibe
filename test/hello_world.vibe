@@ -6,9 +6,14 @@
 ; Define a constant (using vertical bar for type, bytevector for value)
 (define-llvm-constant hello-string |[11 x i8]| #u8(72 101 108 108 111 44 32 37 115 33 0))
 
+; Define printf via FFI (external C library function)
+; On macOS, printf is in libSystem, so we use the library path
+; Syntax: (define-llvm-ffi-function (name (param1 type1) ...) return-type (library-name symbol-name) [is-vararg])
+(define-llvm-ffi-function (printf (fmt-string |i8*|)) |i32| ("/usr/lib/libSystem.B.dylib" "printf") #t)
+
 ; Define a function with typed parameters using DSL (new approach)
 (define-llvm-function (hello (name |i8*|)) |void|
-  (llvm-call (llvm-get-function "printf") (list hello-string name) "")
+  (llvm-call printf (llvm-array hello-string name) "")
   (llvm-ret-void))
 
 ; Call the function
