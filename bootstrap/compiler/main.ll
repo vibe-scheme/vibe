@@ -116,7 +116,7 @@ check_name:
     %car_len_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 3
     %car_len = load i64, i64* %car_len_ptr
     
-    ; Check for define-llvm-type
+    ; Check for llvm:define-type
     %is_type = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.define_llvm_type, i32 0, i32 0), i64 16)
     %is_type_bool = icmp ne i32 %is_type, 0
     br i1 %is_type_bool, label %handle_type, label %check_constant
@@ -126,7 +126,7 @@ handle_type:
     br label %parse_loop
     
 check_constant:
-    ; Check for define-llvm-constant
+    ; Check for llvm:define-constant
     %is_constant = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_llvm_constant, i32 0, i32 0), i64 20)
     %is_constant_bool = icmp ne i32 %is_constant, 0
     br i1 %is_constant_bool, label %handle_constant, label %check_function
@@ -136,7 +136,7 @@ handle_constant:
     br label %parse_loop
     
 check_function:
-    ; Check for define-llvm-function (new DSL-based form)
+    ; Check for llvm:define-function (new DSL-based form)
     %is_llvm_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([21 x i8], [21 x i8]* @.str.define_llvm_function, i32 0, i32 0), i64 20)
     %is_llvm_function_bool = icmp ne i32 %is_llvm_function, 0
     br i1 %is_llvm_function_bool, label %handle_llvm_function, label %check_ffi_function
@@ -146,7 +146,7 @@ handle_llvm_function:
     br label %parse_loop
     
 check_ffi_function:
-    ; Check for define-llvm-ffi-function (FFI-based form)
+    ; Check for llvm:define-ffi-function (FFI-based form)
     %is_ffi_function = call i32 @check_identifier(i8* %car_val, i64 %car_len, i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.define_llvm_ffi_function, i32 0, i32 0), i64 24)
     %is_ffi_function_bool = icmp ne i32 %is_ffi_function, 0
     br i1 %is_ffi_function_bool, label %handle_ffi_function, label %check_bitcode_function
@@ -436,10 +436,10 @@ no_match:
 @.str.parse_error = private unnamed_addr constant [13 x i8] c"Parse error\0A\00"
 @.str.write_error = private unnamed_addr constant [20 x i8] c"Error writing file\0A\00"
 @.str.dash_o = private unnamed_addr constant [3 x i8] c"-o\00"
-@.str.define_llvm_type = private unnamed_addr constant [17 x i8] c"define-llvm-type\00"
-@.str.define_llvm_constant = private unnamed_addr constant [21 x i8] c"define-llvm-constant\00"
-@.str.define_llvm_function = private unnamed_addr constant [21 x i8] c"define-llvm-function\00"
-@.str.define_llvm_ffi_function = private unnamed_addr constant [25 x i8] c"define-llvm-ffi-function\00"
+@.str.define_llvm_type = private unnamed_addr constant [17 x i8] c"llvm:define-type\00"
+@.str.define_llvm_constant = private unnamed_addr constant [21 x i8] c"llvm:define-constant\00"
+@.str.define_llvm_function = private unnamed_addr constant [21 x i8] c"llvm:define-function\00"
+@.str.define_llvm_ffi_function = private unnamed_addr constant [25 x i8] c"llvm:define-ffi-function\00"
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 @.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"

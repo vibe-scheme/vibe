@@ -7,9 +7,19 @@ BUILD_DIR="${PROJECT_ROOT}/build"
 
 cd "$PROJECT_ROOT"
 
+# Determine which compiler to use
+if [ -f "${BUILD_DIR}/bin/vibe_kernel" ]; then
+    COMPILER="${BUILD_DIR}/bin/vibe_kernel"
+elif [ -f "${BUILD_DIR}/bin/bootstrap_compiler" ]; then
+    COMPILER="${BUILD_DIR}/bin/bootstrap_compiler"
+else
+    echo "FAIL: No compiler found (neither vibe_kernel nor bootstrap_compiler)"
+    exit 1
+fi
+
 # Compile test program directly to object file
-echo "Compiling hello_world.vibe..."
-"${BUILD_DIR}/bin/bootstrap_compiler" test/hello_world.vibe -o test/hello_world.o
+echo "Compiling hello_world.vibe using $COMPILER..."
+"${COMPILER}" test/hello_world.vibe -o test/hello_world.o
 
 # Verify object file was generated
 if [ ! -f test/hello_world.o ]; then

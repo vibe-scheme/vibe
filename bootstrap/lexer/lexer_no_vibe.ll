@@ -23,42 +23,14 @@ target triple = "x86_64-apple-macosx10.15.0"
 
 ; Forward declarations from types.ll
 ; Types are defined in bootstrap/types/types.ll and linked via llvm-link
+
+; Forward declarations from lexer.vibe
+; Types and lex_init function are now defined in lexer.vibe
 %Token = type { i32, i8*, i64, i32, i32 }
 %Lexer = type { i8*, i64, i64, i32, i32 }
 
-; Initialize lexer with source string
-; lex_init: Initialize a lexer with source code
-; Parameters:
-;   source: Pointer to source code string
-;   source_len: Length of source code string
-; Returns: Pointer to initialized Lexer structure
-; NOTE: This function is also defined in lexer.vibe for second bootstrap.
-; For initial bootstrap, this definition is used. For second bootstrap,
-; the lexer.vibe version will be used (and this can be removed).
-define %Lexer* @lex_init(i8* %source, i64 %source_len) {
-entry:
-    ; Allocate memory for Lexer structure
-    %lexer = call i8* @malloc(i64 40)
-    %lexer_ptr = bitcast i8* %lexer to %Lexer*
-    
-    ; Initialize lexer fields
-    %source_ptr = getelementptr %Lexer, %Lexer* %lexer_ptr, i32 0, i32 0
-    store i8* %source, i8** %source_ptr
-    
-    %len_ptr = getelementptr %Lexer, %Lexer* %lexer_ptr, i32 0, i32 1
-    store i64 %source_len, i64* %len_ptr
-    
-    %pos_ptr = getelementptr %Lexer, %Lexer* %lexer_ptr, i32 0, i32 2
-    store i64 0, i64* %pos_ptr
-    
-    %line_ptr = getelementptr %Lexer, %Lexer* %lexer_ptr, i32 0, i32 3
-    store i32 1, i32* %line_ptr
-    
-    %col_ptr = getelementptr %Lexer, %Lexer* %lexer_ptr, i32 0, i32 4
-    store i32 1, i32* %col_ptr
-    
-    ret %Lexer* %lexer_ptr
-}
+; Forward declaration from lexer.vibe
+declare %Lexer* @lex_init(i8*, i64)
 
 ; Check if we've reached end of input
 ; lex_is_eof: Check if lexer has reached end of source

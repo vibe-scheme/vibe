@@ -1,0 +1,38 @@
+; Bootstrap Lexer for Vibe - Partially migrated to Vibe DSL
+; This file contains type definitions and first function migrated from lexer.ll
+
+; Declare FFI functions
+(llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
+(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+
+; Define Token type
+(llvm:define-type Token
+  (type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; Define Lexer type
+(llvm:define-type Lexer
+  (source |i8*|)
+  (source_len |i64|)
+  (pos |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; Initialize lexer with source string
+(llvm:define-function (lex_init (source |i8*|) (source_len |i64|)) |%Lexer*|
+  (let* ((lexer (llvm:call malloc (llvm:const-int |i64| 40)))
+         (lexer_ptr (llvm:bitcast lexer |%Lexer*|))
+         (source_ptr (llvm:gep lexer_ptr 0 0))
+         (len_ptr (llvm:gep lexer_ptr 0 1))
+         (pos_ptr (llvm:gep lexer_ptr 0 2))
+         (line_ptr (llvm:gep lexer_ptr 0 3))
+         (col_ptr (llvm:gep lexer_ptr 0 4)))
+    (llvm:store source source_ptr)
+    (llvm:store source_len len_ptr)
+    (llvm:store (llvm:const-int |i64| 0) pos_ptr)
+    (llvm:store (llvm:const-int |i32| 1) line_ptr)
+    (llvm:store (llvm:const-int |i32| 1) col_ptr)
+    (llvm:ret lexer_ptr)))

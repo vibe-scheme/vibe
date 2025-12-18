@@ -278,6 +278,8 @@ declare %LLVMTypeRef @LLVMVoidTypeInContext(%LLVMContextRef)
 declare %LLVMTypeRef @LLVMPointerType(%LLVMTypeRef, i32)
 declare %LLVMTypeRef @LLVMArrayType(%LLVMTypeRef, i32)
 declare %LLVMTypeRef @LLVMStructTypeInContext(%LLVMContextRef, %LLVMTypeRef*, i32, i32)
+declare %LLVMTypeRef @LLVMStructCreateNamed(%LLVMContextRef, i8*)
+declare void @LLVMStructSetBody(%LLVMTypeRef, %LLVMTypeRef*, i32, i32)
 declare %LLVMTypeRef @LLVMFunctionType(%LLVMTypeRef, %LLVMTypeRef*, i32, i32)
 
 ; Type introspection
@@ -308,6 +310,8 @@ declare %LLVMValueRef @LLVMBuildRetVoid(%LLVMBuilderRef)
 declare %LLVMValueRef @LLVMBuildRet(%LLVMBuilderRef, %LLVMValueRef)
 declare %LLVMValueRef @LLVMBuildCall2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
 declare %LLVMValueRef @LLVMBuildGEP2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
+declare %LLVMValueRef @LLVMBuildBitCast(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
+declare void @LLVMBuildStore(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef)
 
 ; Global variable management
 declare %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef, %LLVMTypeRef, i8*)
@@ -556,6 +560,29 @@ entry:
     ret %LLVMTypeRef %struct_type
 }
 
+; llvm_create_named_struct_type: Create a named struct type (opaque initially)
+; Parameters:
+;   context: LLVMContextRef
+;   name: Type name (null-terminated string)
+; Returns: LLVMTypeRef for struct type, or null on error
+define %LLVMTypeRef @llvm_create_named_struct_type(%LLVMContextRef %context, i8* %name) {
+entry:
+    %struct_type = call %LLVMTypeRef @LLVMStructCreateNamed(%LLVMContextRef %context, i8* %name)
+    ret %LLVMTypeRef %struct_type
+}
+
+; llvm_set_struct_body: Set the body of a struct type
+; Parameters:
+;   struct_type: LLVMTypeRef for the struct type
+;   field_types: Array of LLVMTypeRef for field types
+;   field_count: Number of fields
+;   packed: 1 if packed, 0 otherwise
+define void @llvm_set_struct_body(%LLVMTypeRef %struct_type, %LLVMTypeRef* %field_types, i32 %field_count, i32 %packed) {
+entry:
+    call void @LLVMStructSetBody(%LLVMTypeRef %struct_type, %LLVMTypeRef* %field_types, i32 %field_count, i32 %packed)
+    ret void
+}
+
 ; Create function type
 ; llvm_create_function_type: Create a function type
 ; Parameters:
@@ -752,6 +779,31 @@ define %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %typ
 entry:
     %gep = call %LLVMValueRef @LLVMBuildGEP2(%LLVMBuilderRef %builder, %LLVMTypeRef %type, %LLVMValueRef %pointer, %LLVMValueRef* %indices, i32 %index_count, i8* %name)
     ret %LLVMValueRef %gep
+}
+
+; llvm_build_bitcast: Build a bitcast instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   value: LLVMValueRef to cast
+;   target_type: LLVMTypeRef for target type
+;   name: Name for the instruction
+; Returns: LLVMValueRef for bitcast instruction
+define %LLVMValueRef @llvm_build_bitcast(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name) {
+entry:
+    %bitcast = call %LLVMValueRef @LLVMBuildBitCast(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name)
+    ret %LLVMValueRef %bitcast
+}
+
+; llvm_build_store: Build a store instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   value: LLVMValueRef to store
+;   pointer: LLVMValueRef for the pointer to store to
+; Returns: void (store instruction has no return value)
+define void @llvm_build_store(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMValueRef %pointer) {
+entry:
+    call void @LLVMBuildStore(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMValueRef %pointer)
+    ret void
 }
 
 ; Add global variable

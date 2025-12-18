@@ -86,6 +86,23 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
+# Build mode: BOOTSTRAP (uses .ll files) or KERNEL (uses .vibe + _no_vibe.ll files)
+if(NOT DEFINED BUILD_MODE)
+    set(BUILD_MODE "BOOTSTRAP" CACHE STRING "Build mode: BOOTSTRAP or KERNEL")
+endif()
+
+message(STATUS "Build mode: ${BUILD_MODE}")
+
+if(BUILD_MODE STREQUAL "BOOTSTRAP")
+    set(USE_VIBE_FILES OFF)
+    set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll)
+elseif(BUILD_MODE STREQUAL "KERNEL")
+    set(USE_VIBE_FILES ON)
+    set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll)
+else()
+    message(FATAL_ERROR "Invalid BUILD_MODE: ${BUILD_MODE}. Must be BOOTSTRAP or KERNEL")
+endif()
+
 # Shared Types - LLVM bitcode module (must be built first)
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_types.bc
@@ -97,21 +114,68 @@ add_custom_command(
 add_custom_target(bootstrap_types DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc)
 
 # Bootstrap Lexer - LLVM bitcode module
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll
-    COMMENT "Assembling lexer bitcode (temp)"
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-    COMMENT "Linking lexer with types"
-)
-
-add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
+if(USE_VIBE_FILES)
+    # KERNEL mode: Use _no_vibe.ll + compile .vibe files
+    # Note: bootstrap_compiler must exist (build.sh checks this)
+    # Step 1: Assemble lexer_no_vibe.ll to bitcode
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll
+        COMMENT "Assembling lexer_no_vibe bitcode (temp)"
+    )
+    
+    # Step 2: Compile lexer.vibe to bitcode (requires bootstrap_compiler)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+        COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
+            ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+        COMMENT "Compiling lexer.vibe to bitcode"
+    )
+    
+    # Step 3: Create final lexer.bc (with Vibe code)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+        COMMENT "Linking lexer with types and Vibe code"
+    )
+    
+    add_custom_target(bootstrap_lexer_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc)
+    add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
+    add_dependencies(bootstrap_lexer bootstrap_lexer_vibe_temp)
+else()
+    # BOOTSTRAP mode: Use .ll files only
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll
+        COMMENT "Assembling lexer bitcode (temp)"
+    )
+    
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
+        COMMENT "Linking lexer with types"
+    )
+    
+    add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
+endif()
 
 # Bootstrap Parser - LLVM bitcode module
 add_custom_command(
@@ -197,41 +261,66 @@ add_custom_command(
     COMMENT "Linking compiler main with types"
 )
 
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-    COMMAND ${LLVM_LINK}
-        ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-    DEPENDS
-        ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-    COMMENT "Linking bootstrap compiler bitcode modules"
-)
-
-# Compile linked bitcode to object file
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
-    COMMAND ${LLC} -filetype=obj ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
-    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-    COMMENT "Compiling bitcode to object file"
-)
-
-# Create native executable from object file
-# Note: The bootstrap compiler links against LLVM C API libraries via FFI.
-# FFI is used to call LLVM C API functions at runtime for bitcode generation.
-# The executable needs standard C libraries (libc), dynamic library loading
-# (libdl on Linux), and LLVM C API libraries.
-add_executable(bootstrap_compiler ${CMAKE_BINARY_DIR}/bootstrap_compiler.o)
-set_target_properties(bootstrap_compiler PROPERTIES LINKER_LANGUAGE C)
+if(USE_VIBE_FILES)
+    # KERNEL mode: Build vibe_kernel
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+            -o ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        COMMENT "Linking Vibe kernel bitcode modules"
+    )
+    
+    # Compile kernel bitcode to object file
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel.o
+        COMMAND ${LLC} -filetype=obj ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc -o ${CMAKE_BINARY_DIR}/vibe_kernel.o
+        DEPENDS ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+        COMMENT "Compiling kernel bitcode to object file"
+    )
+    
+    # Create kernel executable
+    add_executable(vibe_kernel ${CMAKE_BINARY_DIR}/vibe_kernel.o)
+    set_target_properties(vibe_kernel PROPERTIES LINKER_LANGUAGE C)
+    target_link_libraries(vibe_kernel ${LLVM_LIBS})
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(vibe_kernel dl)
+    endif()
+    add_dependencies(vibe_kernel bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_runtime bootstrap_ffi bootstrap_codegen)
+else()
+    # BOOTSTRAP mode: Build bootstrap_compiler
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_runtime.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        COMMENT "Linking bootstrap compiler bitcode modules"
+    )
+endif()
 
 # Link against LLVM C API libraries
 # Map LLVM components to library names
@@ -251,38 +340,71 @@ llvm_map_components_to_libnames(LLVM_LIBS
     nativecodegen
 )
 
-# Link LLVM libraries
-target_link_libraries(bootstrap_compiler ${LLVM_LIBS})
-
-# Link dynamic library loading (for FFI)
-if(UNIX AND NOT APPLE)
-    target_link_libraries(bootstrap_compiler dl)
-elseif(APPLE)
-    # macOS doesn't need separate dl library (dlopen is in libc)
-    # No additional libraries needed
+if(NOT USE_VIBE_FILES)
+    # BOOTSTRAP mode: Compile bootstrap_compiler
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
+        COMMAND ${LLC} -filetype=obj ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
+        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
+        COMMENT "Compiling bitcode to object file"
+    )
+    
+    # Create native executable from object file
+    # Note: The bootstrap compiler links against LLVM C API libraries via FFI.
+    # FFI is used to call LLVM C API functions at runtime for bitcode generation.
+    # The executable needs standard C libraries (libc), dynamic library loading
+    # (libdl on Linux), and LLVM C API libraries.
+    add_executable(bootstrap_compiler ${CMAKE_BINARY_DIR}/bootstrap_compiler.o)
+    set_target_properties(bootstrap_compiler PROPERTIES LINKER_LANGUAGE C)
+    
+    # Link LLVM libraries
+    target_link_libraries(bootstrap_compiler ${LLVM_LIBS})
+    
+    # Link dynamic library loading (for FFI)
+    if(UNIX AND NOT APPLE)
+        target_link_libraries(bootstrap_compiler dl)
+    elseif(APPLE)
+        # macOS doesn't need separate dl library (dlopen is in libc)
+        # No additional libraries needed
+    endif()
+    
+    # Make bootstrap_compiler depend on all bitcode modules
+    add_dependencies(bootstrap_compiler bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_runtime bootstrap_ffi bootstrap_codegen)
 endif()
-
-# Make bootstrap_compiler depend on all bitcode modules
-add_dependencies(bootstrap_compiler bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_runtime bootstrap_ffi bootstrap_codegen)
 
 # Testing
 enable_testing()
 
-# Custom test target
-add_custom_target(run_tests
-    COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
-    DEPENDS bootstrap_compiler
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running bootstrap compiler tests"
-)
-
-# Add test
-add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
+if(USE_VIBE_FILES)
+    # KERNEL mode: Use vibe_kernel for tests
+    add_custom_target(run_tests
+        COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
+        DEPENDS vibe_kernel
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running Vibe kernel tests"
+    )
+    add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
+else()
+    # BOOTSTRAP mode: Use bootstrap_compiler for tests
+    add_custom_target(run_tests
+        COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
+        DEPENDS bootstrap_compiler
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running bootstrap compiler tests"
+    )
+    add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
+endif()
 
 # Install targets
-install(TARGETS bootstrap_compiler
-    RUNTIME DESTINATION bin
-)
+if(USE_VIBE_FILES)
+    install(TARGETS vibe_kernel
+        RUNTIME DESTINATION bin
+    )
+else()
+    install(TARGETS bootstrap_compiler
+        RUNTIME DESTINATION bin
+    )
+endif()
 
 install(FILES
     ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc

@@ -37,33 +37,71 @@ case "$COMMAND" in
         print_info "Clean complete."
         ;;
     
-    build)
-        print_info "Building Vibe bootstrap compiler..."
+    bootstrap)
+        print_info "Building bootstrap compiler (using .ll files only)..."
         
         # Create build directory
         mkdir -p "${BUILD_DIR}"
         
-        # Configure CMake
-        print_info "Configuring CMake..."
+        # Configure CMake for bootstrap
+        print_info "Configuring CMake for bootstrap..."
         cd "${BUILD_DIR}"
-        cmake "${SCRIPT_DIR}" || {
+        cmake "${SCRIPT_DIR}" -DBUILD_MODE=BOOTSTRAP || {
             print_error "CMake configuration failed."
             exit 1
         }
         
-        # Build
-        print_info "Building..."
-        cmake --build . || {
-            print_error "Build failed."
+        # Build bootstrap compiler
+        print_info "Building bootstrap compiler..."
+        cmake --build . --target bootstrap_compiler || {
+            print_error "Bootstrap build failed."
             exit 1
         }
         
-        print_info "Build complete!"
+        print_info "Bootstrap build complete!"
         print_info "Executable: ${BUILD_DIR}/bin/bootstrap_compiler"
+        ;;
+    
+    build)
+        print_info "Building Vibe kernel (using .vibe files + _no_vibe.ll files)..."
+        
+        # Ensure bootstrap compiler exists
+        if [ ! -f "${BUILD_DIR}/bin/bootstrap_compiler" ]; then
+            print_warn "Bootstrap compiler not found. Running bootstrap first..."
+            "$0" bootstrap
+        fi
+        
+        # Create build directory
+        mkdir -p "${BUILD_DIR}"
+        
+        # Configure CMake for kernel build
+        print_info "Configuring CMake for kernel build..."
+        cd "${BUILD_DIR}"
+        cmake "${SCRIPT_DIR}" -DBUILD_MODE=KERNEL || {
+            print_error "CMake configuration failed."
+            exit 1
+        }
+        
+        # Build kernel
+        print_info "Building kernel..."
+        cmake --build . --target vibe_kernel || {
+            print_error "Kernel build failed."
+            exit 1
+        }
+        
+        print_info "Kernel build complete!"
+        print_info "Executable: ${BUILD_DIR}/bin/vibe_kernel"
         ;;
     
     test)
         print_info "Running tests..."
+        
+        # Ensure kernel exists
+        if [ ! -f "${BUILD_DIR}/bin/vibe_kernel" ]; then
+            print_warn "Kernel not found. Running build first..."
+            "$0" build
+        fi
+        
         cd "${BUILD_DIR}"
         cmake --build . --target run_tests || {
             print_error "Tests failed."
@@ -83,13 +121,14 @@ case "$COMMAND" in
         ;;
     
     *)
-        echo "Usage: $0 {clean|build|test|install}"
+        echo "Usage: $0 {clean|bootstrap|build|test|install}"
         echo ""
         echo "Commands:"
-        echo "  clean   - Remove build directory"
-        echo "  build   - Build the project (default)"
-        echo "  test    - Run tests"
-        echo "  install - Install the project"
+        echo "  clean     - Remove build directory"
+        echo "  bootstrap - Build bootstrap compiler using .ll files only"
+        echo "  build     - Build Vibe kernel using .vibe files + _no_vibe.ll files (default)"
+        echo "  test      - Run tests using vibe_kernel"
+        echo "  install   - Install the project"
         exit 1
         ;;
 esac
