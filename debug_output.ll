@@ -9,4 +9,6 @@ declare void @free(ptr)
 
 define ptr @lex_init(ptr %0, i64 %1) {
 entry:
+  %2 = call ptr @malloc(i64 0)
+  ret ptr %2
 }

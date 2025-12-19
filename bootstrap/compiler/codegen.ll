@@ -3205,6 +3205,8 @@ declare i32 @printf(i8*, ...)
 @.str.debug_looking_up_global = private unnamed_addr constant [20 x i8] c"Looking up global: \00"
 @.str.debug_local = private unnamed_addr constant [8 x i8] c"local: \00"
 @.str.debug_global_not_found = private unnamed_addr constant [25 x i8] c"ERROR: Global not found!\00"
+@.str.debug_name_colon_space = private unnamed_addr constant [8 x i8] c" name: \00"
+@.str.debug_local_not_found = private unnamed_addr constant [18 x i8] c"Local not found: \00"
 @.str.debug_global_found = private unnamed_addr constant [17 x i8] c"Global found: OK\00"
 @.str.debug_creating_constant = private unnamed_addr constant [25 x i8] c"Creating constant: name=\00"
 @.str.debug_constant_created = private unnamed_addr constant [28 x i8] c"Constant created, pointer: \00"
@@ -3216,6 +3218,20 @@ declare i32 @printf(i8*, ...)
 @.str.debug_let_star_recognized = private unnamed_addr constant [8 x i8] c"let* OK\00"
 @.str.debug_processing_binding = private unnamed_addr constant [19 x i8] c"Processing binding\00"
 @.str.debug_extracted_name = private unnamed_addr constant [17 x i8] c"Extracted name: \00"
+@.str.debug_binding_local_value = private unnamed_addr constant [22 x i8] c"Binding local value: \00"
+@.str.debug_no_more_bindings = private unnamed_addr constant [34 x i8] c"No more bindings, evaluating body\00"
+@.str.debug_processing_bindings_list = private unnamed_addr constant [28 x i8] c"Processing bindings list...\00"
+@.str.debug_binding_pair_null = private unnamed_addr constant [22 x i8] c"Binding pair is null!\00"
+@.str.debug_binding_type_check = private unnamed_addr constant [28 x i8] c"Binding type check: type=%d\00"
+@.str.debug_binding_not_list = private unnamed_addr constant [32 x i8] c"Binding is not a list, skipping\00"
+@.str.debug_binding_name_null = private unnamed_addr constant [22 x i8] c"Binding name is null!\00"
+@.str.debug_name_type_check = private unnamed_addr constant [25 x i8] c"Name type check: type=%d\00"
+@.str.debug_name_not_atom = private unnamed_addr constant [26 x i8] c"Binding name is not atom!\00"
+@.str.debug_binding_val_type = private unnamed_addr constant [27 x i8] c"binding_val type check: %d\00"
+@.str.debug_bindings_list_type = private unnamed_addr constant [34 x i8] c"bindings_list type check: type=%d\00"
+@.str.debug_value_expr_type = private unnamed_addr constant [31 x i8] c"value_expr type check: type=%d\00"
+@.str.debug_binding_val_car_type = private unnamed_addr constant [36 x i8] c"binding_val.car type check: type=%d\00"
+@.str.debug_value_wrapper_type = private unnamed_addr constant [34 x i8] c"value_wrapper type check: type=%d\00"
 @.str.debug_constant_found = private unnamed_addr constant [26 x i8] c"Constant found, pointer: \00"
 @.str.debug_constant_not_found = private unnamed_addr constant [26 x i8] c"Constant not found: name=\00"
 @.str.debug_pointer_value = private unnamed_addr constant [13 x i8] c", pointer=%p\00"
@@ -3901,10 +3917,25 @@ handle_atom:
     ; For now, we'll treat identifiers as symbols (primitives or parameters)
     ; Strings and numbers would need special handling
     
-    ; Try to resolve as parameter name first
+    ; Resolution order per R7RS: let* bindings shadow parameters
+    ; 1. Local values (let* bindings) - most local scope
+    ; 2. Parameters - function parameters
+    ; 3. Constants - module-level constants
+    ; 4. Functions - module-level functions
+    
+    ; Try to resolve as local value name first (let* bindings shadow parameters)
+    %local_value_first = call %LLVMValueRef @codegen_dsl_resolve_local(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
+    %local_not_null_first = icmp ne %LLVMValueRef %local_value_first, null
+    br i1 %local_not_null_first, label %return_local_first, label %try_param
+    
+return_local_first:
+    ret %LLVMValueRef %local_value_first
+    
+try_param:
+    ; Try to resolve as parameter name (after checking locals)
     %param_value = call %LLVMValueRef @codegen_dsl_resolve_param(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
     %param_not_null = icmp ne %LLVMValueRef %param_value, null
-    br i1 %param_not_null, label %return_param, label %try_local_first
+    br i1 %param_not_null, label %return_param, label %try_constant
     
 return_param:
     ; Debug: Returning parameter value from codegen_eval_dsl_expr
@@ -3923,15 +3954,6 @@ return_param_ok:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret %LLVMValueRef %param_value
     
-try_local_first:
-    ; Try to resolve as local value name (check current scope before globals)
-    %local_value_first = call %LLVMValueRef @codegen_dsl_resolve_local(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
-    %local_not_null_first = icmp ne %LLVMValueRef %local_value_first, null
-    br i1 %local_not_null_first, label %return_local_first, label %try_constant
-    
-return_local_first:
-    ret %LLVMValueRef %local_value_first
-    
 try_constant:
     ; Try to resolve as constant name (after checking locals)
     ; Debug: Looking up constant
@@ -3948,6 +3970,8 @@ constant_not_found:
     ; Debug: Constant not found (locals were already checked, so try function)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_global_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.debug_name_colon_space, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %atom_val)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     br label %try_function
     
@@ -4730,6 +4754,11 @@ next_cons:
     br label %search_loop
     
 not_found:
+    ; Debug: Local not found
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_local_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* %name)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret %LLVMValueRef null
 }
 
@@ -4951,100 +4980,62 @@ entry:
     br i1 %builder_null, label %error, label %get_args
     
 get_args:
-    ; Extract arguments: type, pointer, indices, name
+    ; Extract arguments: pointer, indices, name (type is inferred from pointer)
     %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %get_type
-    
-get_type:
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_str = load i8*, i8** %type_val_ptr
-    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
-    %type_len = load i64, i64* %type_len_ptr
-    
-    ; Resolve type
-    %gep_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
-    %gep_type_null = icmp eq %LLVMTypeRef %gep_type, null
-    br i1 %gep_type_null, label %error, label %get_pointer
+    br i1 %args_null, label %error, label %get_pointer
     
 get_pointer:
-    ; Get pointer argument (second element)
-    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
-    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
-    %pointer_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    ; Get pointer argument (first element)
+    %pointer_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
     %pointer_node = load %ASTNode*, %ASTNode** %pointer_node_ptr
     
+    ; Check if pointer node is null
+    %pointer_node_null = icmp eq %ASTNode* %pointer_node, null
+    br i1 %pointer_node_null, label %error, label %eval_pointer
+    
+eval_pointer:
     ; Evaluate pointer expression
     %pointer = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %pointer_node)
     %pointer_null = icmp eq %LLVMValueRef %pointer, null
-    br i1 %pointer_null, label %error, label %get_indices
+    br i1 %pointer_null, label %error, label %get_type_from_pointer
+    
+get_type_from_pointer:
+    ; Get pointer type
+    %pointer_type = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %pointer)
+    %pointer_type_null = icmp eq %LLVMTypeRef %pointer_type, null
+    br i1 %pointer_type_null, label %error, label %get_element_type
+    
+get_element_type:
+    ; Get element type from pointer type (for GEP, we need the pointee type)
+    %gep_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %pointer_type)
+    %gep_type_null = icmp eq %LLVMTypeRef %gep_type, null
+    br i1 %gep_type_null, label %error, label %get_indices
     
 get_indices:
-    ; Get indices list (third element)
-    %args_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 5
-    %indices_list_node = load %ASTNode*, %ASTNode** %args_cdr_cdr_ptr
-    %indices_list_ptr = getelementptr %ASTNode, %ASTNode* %indices_list_node, i32 0, i32 4
-    %indices_list_raw = load %ASTNode*, %ASTNode** %indices_list_ptr
+    ; Get indices list (second element = args.cdr)
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %indices_list_node = load %ASTNode*, %ASTNode** %args_cdr_ptr
     
-    ; Check if indices_list is a "list" form - if so, get its arguments
-    %indices_is_list = icmp ne %ASTNode* %indices_list_raw, null
-    br i1 %indices_is_list, label %check_list_form, label %eval_indices
-    
-check_list_form:
-    ; Check if first element is "list"
-    %indices_car_ptr = getelementptr %ASTNode, %ASTNode* %indices_list_raw, i32 0, i32 4
-    %indices_car = load %ASTNode*, %ASTNode** %indices_car_ptr
-    %indices_car_type_ptr = getelementptr %ASTNode, %ASTNode* %indices_car, i32 0, i32 0
-    %indices_car_type = load i32, i32* %indices_car_type_ptr
-    %is_atom_check = icmp eq i32 %indices_car_type, 0
-    br i1 %is_atom_check, label %check_list_name, label %eval_indices
-    
-check_list_name:
-    %list_name_ptr = getelementptr %ASTNode, %ASTNode* %indices_car, i32 0, i32 2
-    %list_name = load i8*, i8** %list_name_ptr
-    %list_name_len_ptr = getelementptr %ASTNode, %ASTNode* %indices_car, i32 0, i32 3
-    %list_name_len = load i64, i64* %list_name_len_ptr
-    %is_list_form = call i32 @codegen_dsl_check_primitive(i8* %list_name, i64 %list_name_len, i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.dsl_list, i32 0, i32 0), i64 4)
-    %is_list_form_bool = icmp ne i32 %is_list_form, 0
-    br i1 %is_list_form_bool, label %get_list_args, label %eval_indices
-    
-get_list_args:
-    ; Get arguments of list form
-    %indices_cdr_ptr = getelementptr %ASTNode, %ASTNode* %indices_list_raw, i32 0, i32 5
-    %list_args = load %ASTNode*, %ASTNode** %indices_cdr_ptr
-    br label %eval_indices
+    ; Check if indices_list_node is null (no indices provided)
+    %indices_is_null = icmp eq %ASTNode* %indices_list_node, null
+    br i1 %indices_is_null, label %error, label %eval_indices
     
 eval_indices:
     ; Evaluate indices list to array of LLVMValueRef
-    ; Use the list (either direct or from list form)
-    %indices_to_eval = phi %ASTNode* [ %indices_list_raw, %get_indices ], [ %indices_list_raw, %check_list_form ], [ %indices_list_raw, %check_list_name ], [ %list_args, %get_list_args ]
+    ; indices_list_node is the list (0 0) or similar
     
     ; Allocate array (max 10 indices)
     %indices_array = call i8* @malloc(i64 80)  ; 10 * 8 bytes
     %indices_array_ptr = bitcast i8* %indices_array to %LLVMValueRef*
     
     ; Count and evaluate indices
-    %index_count = call i32 @codegen_eval_dsl_list(%CodeGen* %cg, %ASTNode* %indices_to_eval, %LLVMValueRef* %indices_array_ptr, i32 10)
+    %index_count = call i32 @codegen_eval_dsl_list(%CodeGen* %cg, %ASTNode* %indices_list_node, %LLVMValueRef* %indices_array_ptr, i32 10)
     
-    ; Get name (fourth element, optional)
-    %args_cdr_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 5
-    %args_cdr_cdr_cdr = load %ASTNode*, %ASTNode** %args_cdr_cdr_cdr_ptr
-    %name_list_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr_cdr_cdr, i32 0, i32 4
-    %name_list = load %ASTNode*, %ASTNode** %name_list_node_ptr
+    ; For now, always use empty string for name (name support can be added later)
     %name_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
-    %has_name = icmp ne %ASTNode* %name_list, null
-    br i1 %has_name, label %get_name, label %build_gep
-    
-get_name:
-    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %name_list, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
-    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
-    %name_str_val = load i8*, i8** %name_val_ptr
     br label %build_gep
     
 build_gep:
-    %name_phi = phi i8* [ %name_str, %eval_indices ], [ %name_str_val, %get_name ]
     
     ; Validate GEP type before using it
     %gep_type_valid = icmp eq %LLVMTypeRef %gep_type, null
@@ -5052,25 +5043,7 @@ build_gep:
     
 build_gep_inst:
     %index_count_int = zext i32 %index_count to i64
-    %gep_result = call %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %gep_type, %LLVMValueRef %pointer, %LLVMValueRef* %indices_array_ptr, i32 %index_count, i8* %name_phi)
-    
-    ; If name is provided and not empty, bind the result to that name
-    %name_is_not_empty_str = icmp ne i8* %name_phi, %name_str
-    %name_is_not_null = icmp ne i8* %name_phi, null
-    %should_bind = and i1 %name_is_not_empty_str, %name_is_not_null
-    br i1 %should_bind, label %bind_value, label %free_array
-    
-bind_value:
-    ; Bind GEP result to name (if name is not empty string)
-    ; Get name length by checking if it's the empty string
-    %name_first_char = load i8, i8* %name_phi
-    %name_is_empty = icmp eq i8 %name_first_char, 0
-    br i1 %name_is_empty, label %free_array, label %do_bind
-    
-do_bind:
-    ; Calculate name length (simplified - would need proper strlen)
-    %name_len_approx = add i64 10, 0  ; Approximate - in real impl would call strlen
-    call void @codegen_dsl_bind_local(%CodeGen* %cg, i8* %name_phi, i64 %name_len_approx, %LLVMValueRef %gep_result)
+    %gep_result = call %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef %builder, %LLVMTypeRef %gep_type, %LLVMValueRef %pointer, %LLVMValueRef* %indices_array_ptr, i32 %index_count, i8* %name_str)
     br label %free_array
     
 free_array:
@@ -5160,11 +5133,10 @@ func_type_error:
     br label %error
     
 get_args_list:
-    ; Get args list (third element)
+    ; Get args list (cdr of args, which contains all arguments after the function name)
+    ; args is (func-name arg1 arg2 ...), so args.cdr is (arg1 arg2 ...)
     %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
-    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
-    %args_list_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
-    %args_list_raw = load %ASTNode*, %ASTNode** %args_list_node_ptr
+    %args_list_raw = load %ASTNode*, %ASTNode** %args_cdr_ptr
     
     ; Debug: Log args list extraction
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
@@ -5228,15 +5200,17 @@ eval_args:
     %args_array_ptr = bitcast i8* %args_array to %LLVMValueRef*
     %arg_count = call i32 @codegen_eval_dsl_list(%CodeGen* %cg, %ASTNode* %args_to_eval, %LLVMValueRef* %args_array_ptr, i32 10)
     
-    ; Get name (fourth element, optional)
-    %args_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 5
-    %name_list = load %ASTNode*, %ASTNode** %args_cdr_cdr_ptr
+    ; Get name (optional, would be after arguments if present)
+    ; For now, we don't support optional names in llvm:call, so use empty string
+    %name_list = alloca %ASTNode*
+    store %ASTNode* null, %ASTNode** %name_list
+    %name_list_val = load %ASTNode*, %ASTNode** %name_list
     %name_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
-    %has_name = icmp ne %ASTNode* %name_list, null
+    %has_name = icmp ne %ASTNode* %name_list_val, null
     br i1 %has_name, label %get_name_call, label %build_call
     
 get_name_call:
-    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %name_list, i32 0, i32 4
+    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %name_list_val, i32 0, i32 4
     %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
     %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
     %name_str_val = load i8*, i8** %name_val_ptr
@@ -5825,118 +5799,193 @@ entry:
     br i1 %expr_null, label %error, label %get_bindings
     
 get_bindings:
-    ; Extract bindings list (second element, cdr of expr)
+    ; Extract bindings list and body from expr
     ; The parser creates: (let* bindings-list body)
-    ;   - expr cdr = bindings-list = ((lexer ...) (lexer_ptr ...) ...)
-    ;   - bindings-list cdr = ((lexer_ptr ...) ...) (rest of bindings)
-    ;   - body is the cdr of bindings-list after we've consumed all binding pairs
-    ;   Actually, wait - the parser creates: (let* ((lexer ...) (lexer_ptr ...) ...) (llvm:store ...) (llvm:ret ...))
-    ;   So the structure is: (let* bindings-list body)
-    ;   - let* - car
-    ;   - bindings-list - cdr = ((lexer ...) (lexer_ptr ...) ...)
-    ;   - body - cdr of cdr = (llvm:store ...) (llvm:ret ...)
-    ;   So bindings_list is ((lexer ...) (lexer_ptr ...) ...), and body is the cdr of bindings_list's cdr
-    ;   But that's not right either - bindings_list cdr is ((lexer_ptr ...) ...), not the body
-    ;   
-    ;   Actually, I think the parser creates it as a flat list:
-    ;   (let* (lexer ...) (lexer_ptr ...) ... (llvm:store ...) (llvm:ret ...))
-    ;   So we need to distinguish binding pairs from body expressions
+    ;   Structure: (let* . (bindings-list . body))
+    ;   - expr.cdr = (bindings-list . body) = cons cell
+    ;   - expr.cdr.car = bindings-list = ((var1 val1) (var2 val2) ...)
+    ;   - expr.cdr.cdr = body = ((body-expr1) (body-expr2) ...)
     %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
-    %bindings_list = load %ASTNode*, %ASTNode** %expr_cdr_ptr
+    %expr_cdr = load %ASTNode*, %ASTNode** %expr_cdr_ptr
+    %expr_cdr_null = icmp eq %ASTNode* %expr_cdr, null
+    br i1 %expr_cdr_null, label %error, label %extract_bindings_list
+    
+extract_bindings_list:
+    ; Extract bindings list from expr.cdr.car
+    %bindings_list_car_ptr = getelementptr %ASTNode, %ASTNode* %expr_cdr, i32 0, i32 4
+    %bindings_list = load %ASTNode*, %ASTNode** %bindings_list_car_ptr
+    
+    ; Debug: Check bindings_list type
+    %bindings_list_type_ptr = getelementptr %ASTNode, %ASTNode* %bindings_list, i32 0, i32 0
+    %bindings_list_type = load i32, i32* %bindings_list_type_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.debug_bindings_list_type, i32 0, i32 0), i32 %bindings_list_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     %bindings_null = icmp eq %ASTNode* %bindings_list, null
-    br i1 %bindings_null, label %error, label %check_bindings_structure
+    br i1 %bindings_null, label %error, label %extract_body_from_expr
     
-check_bindings_structure:
-    ; The parser should create: (let* ((lexer ...) (lexer_ptr ...) ...) (llvm:store ...) (llvm:ret ...))
-    ; So bindings_list is ((lexer ...) (lexer_ptr ...) ...)
-    ; We should iterate through bindings_list, getting each binding pair
-    ; The body will be extracted after we've processed all bindings
-    ; For now, let's assume bindings_list is a nested list of binding pairs
-    br label %setup_iteration
+extract_body_from_expr:
+    ; Extract body from expr.cdr.cdr (body comes after bindings-list)
+    %body_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr_cdr, i32 0, i32 5
+    %body = load %ASTNode*, %ASTNode** %body_cdr_ptr
     
-nested_bindings:
-    ; Case 1: bindings_list is ((lexer ...) (lexer_ptr ...) ...)
-    ; The parser creates: (let* bindings-list body)
-    ;   - bindings-list = ((lexer ...) (lexer_ptr ...) ...)
-    ;   - body = (llvm:store ...) (llvm:ret ...)
-    ; The body is the cdr of bindings_list after we've consumed all binding pairs
-    ; Actually, wait - if bindings_list is ((lexer ...) (lexer_ptr ...) ...), then:
-    ;   - bindings_list car = (lexer ...)
-    ;   - bindings_list cdr = ((lexer_ptr ...) ...)
-    ; So the body is NOT the cdr of bindings_list (that's the rest of bindings)
-    ; The body must be extracted differently - it's the cdr of expr's cdr after bindings_list
-    ; Actually, I think the parser creates it as: (let* (lexer ...) (lexer_ptr ...) ... (llvm:store ...) (llvm:ret ...))
-    ; So it's a flat list, and bindings_list is (lexer ...) (lexer_ptr ...) ... (llvm:store ...) (llvm:ret ...)
-    ; We iterate through and stop when we hit a body expression
-    br label %setup_iteration
+    ; Debug: Extracted bindings and body
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_let_star_recognized, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-flat_bindings:
-    ; Case 2: bindings_list is (lexer ...) (lexer_ptr ...) ... (llvm:store ...) (llvm:ret ...)
-    ; We iterate through and stop when we hit a body expression (non-binding-pair)
+    %body_ptr = alloca %ASTNode*
+    store %ASTNode* %body, %ASTNode** %body_ptr
     br label %setup_iteration
     
 setup_iteration:
     ; Process bindings sequentially
-    ; For nested case: bindings_list is ((lexer ...) (lexer_ptr ...) ...), we iterate through it
-    ; For flat case: bindings_list is (lexer ...) (lexer_ptr ...) ... (llvm:store ...) (llvm:ret ...), we iterate and stop at body
+    ; bindings_list is ((var1 val1) (var2 val2) ...) - a list of binding pairs
+    ; We iterate through bindings_list, processing each binding pair
     %current_bindings = alloca %ASTNode*
     store %ASTNode* %bindings_list, %ASTNode** %current_bindings
-    %body_ptr = alloca %ASTNode*
-    store %ASTNode* null, %ASTNode** %body_ptr
     br label %bind_loop
     
 bind_loop:
     ; Get current bindings list
     %bindings_iter = load %ASTNode*, %ASTNode** %current_bindings
     %bindings_iter_null = icmp eq %ASTNode* %bindings_iter, null
-    br i1 %bindings_iter_null, label %eval_body, label %get_binding_pair
+    br i1 %bindings_iter_null, label %debug_no_more_bindings, label %get_binding_pair
+    
+debug_no_more_bindings:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([34 x i8], [34 x i8]* @.str.debug_no_more_bindings, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %eval_body
     
 get_binding_pair:
+    ; Debug: Processing bindings list
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_processing_bindings_list, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ; Get the first element from the current bindings list
+    ; bindings_iter is a cons cell: (binding-pair . rest)
+    ; bindings_iter.car is the binding pair: (name value-expr)
     %binding_pair_car_ptr = getelementptr %ASTNode, %ASTNode* %bindings_iter, i32 0, i32 4
     %binding_val = load %ASTNode*, %ASTNode** %binding_pair_car_ptr
+    
+    ; Debug: Check what binding_val is
+    %binding_val_type_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 0
+    %binding_val_type = load i32, i32* %binding_val_type_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([28 x i8], [28 x i8]* @.str.debug_binding_val_type, i32 0, i32 0), i32 %binding_val_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    ; Debug: Check binding_val.car type (should be atom for name)
+    %binding_val_car_check_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 4
+    %binding_val_car_check = load %ASTNode*, %ASTNode** %binding_val_car_check_ptr
+    %binding_val_car_check_null = icmp eq %ASTNode* %binding_val_car_check, null
+    br i1 %binding_val_car_check_null, label %check_binding_type, label %debug_car_type
+    
+debug_car_type:
+    %binding_val_car_type_ptr = getelementptr %ASTNode, %ASTNode* %binding_val_car_check, i32 0, i32 0
+    %binding_val_car_type = load i32, i32* %binding_val_car_type_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.debug_binding_val_car_type, i32 0, i32 0), i32 %binding_val_car_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %check_binding_type
+    
     %binding_null = icmp eq %ASTNode* %binding_val, null
-    br i1 %binding_null, label %eval_body, label %check_binding_type
+    br i1 %binding_null, label %debug_binding_null, label %check_binding_type
+    
+debug_binding_null:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_binding_pair_null, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %eval_body
     
 check_binding_type:
     ; Check if this is a list (binding pair) or something else
     %binding_type_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 0
     %binding_type = load i32, i32* %binding_type_ptr
     %is_list = icmp eq i32 %binding_type, 1  ; AST_NODE_TYPE_LIST = 1
-    br i1 %is_list, label %check_binding_pair_structure, label %eval_body
+    
+    ; Debug: Check binding type
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_binding_type_check, i32 0, i32 0), i32 %binding_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    br i1 %is_list, label %check_binding_pair_structure, label %debug_not_list
+    
+debug_not_list:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_binding_not_list, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %eval_body
     
 check_binding_pair_structure:
-    ; A binding pair is a list with at least 2 elements: (name value)
-    ; Check if the car is an atom (the binding name)
+    ; A binding pair is: (name value-expr) where name is an atom, value-expr can be atom/literal/list
+    ; The parser creates: (lexer (llvm:call ...))
+    ; So binding_val.car is the name atom, binding_val.cdr is the value expression
+    ; However, if binding_val.car is a list (type 1), we need to unwrap it to get the actual atom
     %binding_val_car_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 4
-    %binding_name = load %ASTNode*, %ASTNode** %binding_val_car_ptr
-    %binding_name_null = icmp eq %ASTNode* %binding_name, null
-    br i1 %binding_name_null, label %eval_body, label %check_name_is_atom
+    %binding_name_wrapper = load %ASTNode*, %ASTNode** %binding_val_car_ptr
+    %binding_name_wrapper_null = icmp eq %ASTNode* %binding_name_wrapper, null
+    br i1 %binding_name_wrapper_null, label %debug_name_null, label %check_wrapper_type
+    
+debug_name_null:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_binding_name_null, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %eval_body
+    
+check_wrapper_type:
+    ; Check if binding_name_wrapper is a list (needs unwrapping) or an atom (direct use)
+    %wrapper_type_ptr = getelementptr %ASTNode, %ASTNode* %binding_name_wrapper, i32 0, i32 0
+    %wrapper_type = load i32, i32* %wrapper_type_ptr
+    %wrapper_is_list = icmp eq i32 %wrapper_type, 1  ; AST_NODE_TYPE_LIST = 1
+    br i1 %wrapper_is_list, label %unwrap_name, label %use_name_directly
+    
+unwrap_name:
+    ; binding_name_wrapper is a list, extract the atom from its car
+    %wrapper_car_ptr = getelementptr %ASTNode, %ASTNode* %binding_name_wrapper, i32 0, i32 4
+    %binding_name_unwrapped = load %ASTNode*, %ASTNode** %wrapper_car_ptr
+    %binding_name_unwrap_null = icmp eq %ASTNode* %binding_name_unwrapped, null
+    br i1 %binding_name_unwrap_null, label %debug_name_null, label %check_name_is_atom
+    
+use_name_directly:
+    ; binding_name_wrapper is already an atom, use it directly
+    br label %check_name_is_atom
     
 check_name_is_atom:
+    ; Get the actual name node (either unwrapped or direct)
+    %binding_name = phi %ASTNode* [%binding_name_unwrapped, %unwrap_name], [%binding_name_wrapper, %use_name_directly]
+    
     ; Check if the name is an atom (identifier)
     %name_type_ptr = getelementptr %ASTNode, %ASTNode* %binding_name, i32 0, i32 0
     %name_type = load i32, i32* %name_type_ptr
+    
+    ; Debug: Check name type
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_name_type_check, i32 0, i32 0), i32 %name_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     %name_is_atom = icmp eq i32 %name_type, 0  ; AST_NODE_TYPE_ATOM = 0
-    br i1 %name_is_atom, label %process_binding, label %eval_body
+    br i1 %name_is_atom, label %process_binding, label %debug_name_not_atom
+    
+debug_name_not_atom:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([28 x i8], [28 x i8]* @.str.debug_name_not_atom, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %eval_body
     
 process_binding:
     ; Debug: Processing binding
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.debug_processing_binding, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    ; binding is a list: (var-name value-expr)
-    ; Get variable name (car of binding)
-    %binding_car_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %binding_car_ptr
-    %name_node_null = icmp eq %ASTNode* %name_node, null
-    br i1 %name_node_null, label %next_binding, label %get_name
-    
-get_name:
-    ; Extract name string
-    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
+    ; binding_name is already extracted and validated as an atom in check_name_is_atom
+    ; Extract name string from the validated atom
+    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %binding_name, i32 0, i32 2
     %name_str = load i8*, i8** %name_val_ptr
-    %name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
+    %name_len_ptr = getelementptr %ASTNode, %ASTNode* %binding_name, i32 0, i32 3
     %name_len = load i64, i64* %name_len_ptr
     
     ; Debug: Extracted name
@@ -5959,16 +6008,32 @@ skip_name_debug:
     br i1 %name_empty, label %eval_body, label %get_value_expr
     
 get_value_expr:
-    ; Get value expression (cdr of binding)
+    ; Get value expression (cdr.car of binding)
+    ; The parser creates: (name value-expr) where name is atom, value-expr can be atom/literal/list
+    ; In cons cell representation: (name . (value-expr . rest))
+    ; So binding_val.cdr is the cons cell for (value-expr . rest)
+    ; The value expression is binding_val.cdr.car (the actual value expression)
     %binding_cdr_ptr = getelementptr %ASTNode, %ASTNode* %binding_val, i32 0, i32 5
-    %value_list = load %ASTNode*, %ASTNode** %binding_cdr_ptr
-    %value_list_null = icmp eq %ASTNode* %value_list, null
-    br i1 %value_list_null, label %next_binding, label %eval_value
+    %value_expr_cons = load %ASTNode*, %ASTNode** %binding_cdr_ptr
+    %value_expr_cons_null = icmp eq %ASTNode* %value_expr_cons, null
+    br i1 %value_expr_cons_null, label %next_binding, label %extract_value_from_cons
+    
+extract_value_from_cons:
+    ; Extract the actual value expression from the cons cell
+    %value_expr_car_ptr = getelementptr %ASTNode, %ASTNode* %value_expr_cons, i32 0, i32 4
+    %value_expr = load %ASTNode*, %ASTNode** %value_expr_car_ptr
+    %value_expr_null = icmp eq %ASTNode* %value_expr, null
+    br i1 %value_expr_null, label %next_binding, label %eval_value
     
 eval_value:
-    ; Get value expression (car of value_list)
-    %value_list_car_ptr = getelementptr %ASTNode, %ASTNode* %value_list, i32 0, i32 4
-    %value_expr = load %ASTNode*, %ASTNode** %value_list_car_ptr
+    ; value_expr is the value expression (atom, literal, or list)
+    
+    ; Debug: Check value_expr type
+    %value_expr_type_ptr = getelementptr %ASTNode, %ASTNode* %value_expr, i32 0, i32 0
+    %value_expr_type = load i32, i32* %value_expr_type_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_value_expr_type, i32 0, i32 0), i32 %value_expr_type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
     ; Debug: Evaluating value expression for binding
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
@@ -6007,6 +6072,19 @@ skip_name_failed:
     
 bind_value:
     ; Bind variable name to value
+    ; Debug: About to bind local value
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_binding_local_value, i32 0, i32 0))
+    %name_str_bind_valid = icmp ne i8* %name_str, null
+    br i1 %name_str_bind_valid, label %print_name_bind, label %skip_name_bind
+    
+print_name_bind:
+    call i32 (i8*, ...) @printf(i8* %name_str)
+    br label %skip_name_bind
+    
+skip_name_bind:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     call void @codegen_dsl_bind_local(%CodeGen* %cg, i8* %name_str, i64 %name_len, %LLVMValueRef %value)
     br label %next_binding
     
@@ -6016,32 +6094,12 @@ next_binding:
     %bindings_iter_cdr_ptr = getelementptr %ASTNode, %ASTNode* %bindings_iter, i32 0, i32 5
     %bindings_iter_cdr = load %ASTNode*, %ASTNode** %bindings_iter_cdr_ptr
     %bindings_iter_cdr_null = icmp eq %ASTNode* %bindings_iter_cdr, null
-    br i1 %bindings_iter_cdr_null, label %extract_body, label %check_if_next_is_binding
-    
-check_if_next_is_binding:
-    ; Check if the next element is a binding pair (list with atom as car) or body expression
-    %next_binding_car_ptr = getelementptr %ASTNode, %ASTNode* %bindings_iter_cdr, i32 0, i32 4
-    %next_binding_car = load %ASTNode*, %ASTNode** %next_binding_car_ptr
-    %next_binding_car_null = icmp eq %ASTNode* %next_binding_car, null
-    br i1 %next_binding_car_null, label %extract_body, label %check_next_is_atom
-    
-check_next_is_atom:
-    ; Check if the car of the next element is an atom (binding name)
-    %next_car_type_ptr = getelementptr %ASTNode, %ASTNode* %next_binding_car, i32 0, i32 0
-    %next_car_type = load i32, i32* %next_car_type_ptr
-    %next_is_atom = icmp eq i32 %next_car_type, 0  ; AST_NODE_TYPE_ATOM = 0
-    br i1 %next_is_atom, label %update_bindings_iter, label %extract_body
+    br i1 %bindings_iter_cdr_null, label %eval_body, label %update_bindings_iter
     
 update_bindings_iter:
     ; Update current_bindings to point to the rest of the bindings list
     store %ASTNode* %bindings_iter_cdr, %ASTNode** %current_bindings
     br label %bind_loop
-    
-extract_body:
-    ; We've reached the end of bindings or encountered a body expression
-    ; The body is the remaining list starting from bindings_iter_cdr
-    store %ASTNode* %bindings_iter_cdr, %ASTNode** %body_ptr
-    br label %eval_body
     
 eval_body:
     ; Load body from body_ptr (extracted after processing bindings)

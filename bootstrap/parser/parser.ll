@@ -152,8 +152,6 @@ entry:
     %token = call %Token* @parse_current(%Parser* %parser)
     %node = call %ASTNode* @parse_create_atom(%Token* %token)
     call void @parse_advance(%Parser* %parser)
-    ; Debug logging
-    call void @parse_debug_log_ast_node(%ASTNode* %node)
     ret %ASTNode* %node
 }
 
@@ -306,8 +304,6 @@ check_quasiquote:
 
 list:
     %list_node = call %ASTNode* @parse_list(%Parser* %parser)
-    ; Debug logging - check if this is define-llvm-function
-    call void @parse_debug_check_define_llvm_function(%ASTNode* %list_node)
     ret %ASTNode* %list_node
 
 atom:
@@ -399,15 +395,342 @@ done:
     ret void
 }
 
+; parse_debug_string_equals: Compare string with atom value
+; Parameters:
+;   atom: Pointer to ASTNode (should be an atom)
+;   str: Pointer to string to compare
+;   len: Length of string to compare
+; Returns: 1 if equal, 0 otherwise
+define i32 @parse_debug_string_equals(%ASTNode* %atom, i8* %str, i64 %len) {
+entry:
+    %atom_null = icmp eq %ASTNode* %atom, null
+    br i1 %atom_null, label %not_equal, label %check_type
+    
+check_type:
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %is_atom = icmp eq i32 %type, 0  ; AST_ATOM
+    br i1 %is_atom, label %check_length, label %not_equal
+    
+check_length:
+    %atom_len_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 3
+    %atom_len = load i64, i64* %atom_len_ptr
+    %len_match = icmp eq i64 %atom_len, %len
+    br i1 %len_match, label %compare_strings, label %not_equal
+    
+compare_strings:
+    %atom_val_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 2
+    %atom_val = load i8*, i8** %atom_val_ptr
+    %cmp_result = call i32 @strncmp(i8* %atom_val, i8* %str, i64 %len)
+    %is_equal = icmp eq i32 %cmp_result, 0
+    %result = zext i1 %is_equal to i32
+    ret i32 %result
+    
+not_equal:
+    ret i32 0
+}
+
+; parse_debug_print_atom: Print atom information
+; Parameters:
+;   atom: Pointer to ASTNode (should be an atom)
+define void @parse_debug_print_atom(%ASTNode* %atom) {
+entry:
+    %atom_null = icmp eq %ASTNode* %atom, null
+    br i1 %atom_null, label %done, label %check_type
+    
+check_type:
+    ; Validate that this is actually an atom
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %is_atom = icmp eq i32 %type, 0  ; AST_ATOM
+    br i1 %is_atom, label %print_atom, label %print_error
+    
+print_error:
+    ; Not an atom - print error message with type
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.debug_atom_name, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_not_atom_error, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_int_fmt, i32 0, i32 0), i32 %type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %done
+    
+print_atom:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.debug_atom_name, i32 0, i32 0))
+    %val_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 2
+    %val = load i8*, i8** %val_ptr
+    %len_ptr = getelementptr %ASTNode, %ASTNode* %atom, i32 0, i32 3
+    %len = load i64, i64* %len_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_colon_space, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_quote, i32 0, i32 0))
+    call void @parse_debug_print_string(i8* %val, i64 %len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_quote, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %done
+    
+done:
+    ret void
+}
+
+; parse_debug_print_string: Print a string with length
+; Parameters:
+;   str: Pointer to string
+;   len: Length of string
+define void @parse_debug_print_string(i8* %str, i64 %len) {
+entry:
+    %str_null = icmp eq i8* %str, null
+    br i1 %str_null, label %done, label %print_loop_init
+    
+print_loop_init:
+    %i_ptr = alloca i64
+    store i64 0, i64* %i_ptr
+    br label %print_loop
+    
+print_loop:
+    %i = load i64, i64* %i_ptr
+    %done_cond = icmp uge i64 %i, %len
+    br i1 %done_cond, label %done, label %print_char
+    
+print_char:
+    %char_ptr = getelementptr i8, i8* %str, i64 %i
+    %char = load i8, i8* %char_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_char_fmt, i32 0, i32 0), i8 %char)
+    %i_next = add i64 %i, 1
+    store i64 %i_next, i64* %i_ptr
+    br label %print_loop
+    
+done:
+    ret void
+}
+
+; parse_debug_print_list_structure: Recursively print list structure
+; Parameters:
+;   node: Pointer to ASTNode (should be a list)
+;   depth: Current depth for indentation
+define void @parse_debug_print_list_structure(%ASTNode* %node, i32 %depth) {
+entry:
+    %node_null = icmp eq %ASTNode* %node, null
+    br i1 %node_null, label %done, label %check_type
+    
+check_type:
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %is_list = icmp eq i32 %type, 1  ; AST_LIST
+    br i1 %is_list, label %print_list, label %print_other
+    
+print_list:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.debug_list_type, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    ; Print car
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_list_car, i32 0, i32 0))
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 4
+    %car = load %ASTNode*, %ASTNode** %car_ptr
+    %car_null = icmp eq %ASTNode* %car, null
+    br i1 %car_null, label %print_cdr, label %print_car_node
+    
+print_car_node:
+    %car_type_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 0
+    %car_type = load i32, i32* %car_type_ptr
+    %car_is_atom = icmp eq i32 %car_type, 0  ; AST_ATOM
+    br i1 %car_is_atom, label %print_car_atom, label %print_car_list
+    
+print_car_atom:
+    call void @parse_debug_print_atom(%ASTNode* %car)
+    br label %print_cdr
+    
+print_car_list:
+    call void @parse_debug_print_list_structure(%ASTNode* %car, i32 %depth)
+    br label %print_cdr
+    
+print_cdr:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_list_cdr, i32 0, i32 0))
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %cdr_null = icmp eq %ASTNode* %cdr, null
+    br i1 %cdr_null, label %done, label %print_cdr_node
+    
+print_cdr_node:
+    %cdr_type_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 0
+    %cdr_type = load i32, i32* %cdr_type_ptr
+    %cdr_is_atom = icmp eq i32 %cdr_type, 0  ; AST_ATOM
+    br i1 %cdr_is_atom, label %print_cdr_atom, label %print_cdr_list
+    
+print_cdr_atom:
+    call void @parse_debug_print_atom(%ASTNode* %cdr)
+    br label %done
+    
+print_cdr_list:
+    call void @parse_debug_print_list_structure(%ASTNode* %cdr, i32 %depth)
+    br label %done
+    
+print_other:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.debug_other_type, i32 0, i32 0), i32 %type)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %done
+    
+done:
+    ret void
+}
+
+; parse_debug_print_binding_pairs: Print each binding pair in bindings list
+; Parameters:
+;   bindings_list: Pointer to ASTNode (list of binding pairs)
+define void @parse_debug_print_binding_pairs(%ASTNode* %bindings_list) {
+entry:
+    %bindings_null = icmp eq %ASTNode* %bindings_list, null
+    br i1 %bindings_null, label %done, label %loop_init
+    
+loop_init:
+    %current_ptr = alloca %ASTNode*
+    store %ASTNode* %bindings_list, %ASTNode** %current_ptr
+    %pair_index_ptr = alloca i32
+    store i32 0, i32* %pair_index_ptr
+    br label %loop
+    
+loop:
+    %current = load %ASTNode*, %ASTNode** %current_ptr
+    %current_null = icmp eq %ASTNode* %current, null
+    br i1 %current_null, label %done, label %print_pair
+    
+print_pair:
+    %pair_index = load i32, i32* %pair_index_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([14 x i8], [14 x i8]* @.str.debug_binding_pair, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_int_fmt, i32 0, i32 0), i32 %pair_index)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_colon_space, i32 0, i32 0))
+    
+    ; Get car (binding pair)
+    %pair_car_ptr = getelementptr %ASTNode, %ASTNode* %current, i32 0, i32 4
+    %pair = load %ASTNode*, %ASTNode** %pair_car_ptr
+    %pair_null = icmp eq %ASTNode* %pair, null
+    br i1 %pair_null, label %next_pair, label %print_pair_structure
+    
+print_pair_structure:
+    ; pair should be a list: (var value)
+    ; Print var (car of pair)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_list_car, i32 0, i32 0))
+    %var_car_ptr = getelementptr %ASTNode, %ASTNode* %pair, i32 0, i32 4
+    %var = load %ASTNode*, %ASTNode** %var_car_ptr
+    call void @parse_debug_print_atom(%ASTNode* %var)
+    
+    ; Print value (cdr of pair, which should be a list with car = value)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_list_cdr, i32 0, i32 0))
+    %value_cdr_ptr = getelementptr %ASTNode, %ASTNode* %pair, i32 0, i32 5
+    %value_list = load %ASTNode*, %ASTNode** %value_cdr_ptr
+    %value_list_null = icmp eq %ASTNode* %value_list, null
+    br i1 %value_list_null, label %next_pair, label %print_value
+    
+print_value:
+    %value_car_ptr = getelementptr %ASTNode, %ASTNode* %value_list, i32 0, i32 4
+    %value = load %ASTNode*, %ASTNode** %value_car_ptr
+    call void @parse_debug_print_list_structure(%ASTNode* %value, i32 0)
+    br label %next_pair
+    
+next_pair:
+    ; Move to next binding pair (cdr of current)
+    %next_cdr_ptr = getelementptr %ASTNode, %ASTNode* %current, i32 0, i32 5
+    %next = load %ASTNode*, %ASTNode** %next_cdr_ptr
+    store %ASTNode* %next, %ASTNode** %current_ptr
+    %pair_index_next = add i32 %pair_index, 1
+    store i32 %pair_index_next, i32* %pair_index_ptr
+    br label %loop
+    
+done:
+    ret void
+}
+
+; parse_debug_check_let_star: Check if list is let* form and log structure
+; Parameters:
+;   node: Pointer to ASTNode (should be a list)
+define void @parse_debug_check_let_star(%ASTNode* %node) {
+entry:
+    %node_null = icmp eq %ASTNode* %node, null
+    br i1 %node_null, label %done, label %check_list
+    
+check_list:
+    %type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 0
+    %type = load i32, i32* %type_ptr
+    %is_list = icmp eq i32 %type, 1  ; AST_LIST
+    br i1 %is_list, label %check_car, label %done
+    
+check_car:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 4
+    %car = load %ASTNode*, %ASTNode** %car_ptr
+    %car_null = icmp eq %ASTNode* %car, null
+    br i1 %car_null, label %done, label %check_atom
+    
+check_atom:
+    %car_type_ptr = getelementptr %ASTNode, %ASTNode* %car, i32 0, i32 0
+    %car_type = load i32, i32* %car_type_ptr
+    %is_atom = icmp eq i32 %car_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %check_name, label %done
+    
+check_name:
+    ; Check if name matches "let*" (length 4)
+    %let_star_str = getelementptr inbounds [5 x i8], [5 x i8]* @.str.let_star, i32 0, i32 0
+    %is_let_star = call i32 @parse_debug_string_equals(%ASTNode* %car, i8* %let_star_str, i64 4)
+    %is_let_star_bool = icmp ne i32 %is_let_star, 0
+    br i1 %is_let_star_bool, label %print_debug, label %done
+    
+print_debug:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.debug_let_star_recognized, i32 0, i32 0))
+    
+    ; Get cdr (should contain bindings list and body)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %cdr_null = icmp eq %ASTNode* %cdr, null
+    br i1 %cdr_null, label %done, label %print_bindings
+    
+print_bindings:
+    ; cdr should be a list with car = bindings list, cdr = body
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([16 x i8], [16 x i8]* @.str.debug_bindings_list, i32 0, i32 0))
+    %bindings_car_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
+    %bindings_list = load %ASTNode*, %ASTNode** %bindings_car_ptr
+    call void @parse_debug_print_list_structure(%ASTNode* %bindings_list, i32 0)
+    
+    ; Count and print binding pairs
+    call void @parse_debug_print_binding_pairs(%ASTNode* %bindings_list)
+    
+    ; Print body start
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.debug_prefix_parser, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.debug_body_start, i32 0, i32 0))
+    %body_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %body = load %ASTNode*, %ASTNode** %body_cdr_ptr
+    call void @parse_debug_print_list_structure(%ASTNode* %body, i32 0)
+    br label %done
+    
+done:
+    ret void
+}
+
 ; String literals for debug logging
 @.str.debug_prefix_parser = private unnamed_addr constant [10 x i8] c"[PARSER] \00"
 @.str.debug_ast_node_fmt = private unnamed_addr constant [30 x i8] c"AST node type=%d atom_type=%d\00"
 @.str.debug_newline = private unnamed_addr constant [2 x i8] c"\0A\00"
 @.str.debug_define_llvm_function = private unnamed_addr constant [34 x i8] c"Parsing define-llvm-function form\00"
+@.str.debug_let_star_recognized = private unnamed_addr constant [22 x i8] c"let* form recognized\0A\00"
+@.str.debug_bindings_list = private unnamed_addr constant [16 x i8] c"Bindings list: \00"
+@.str.debug_binding_pair = private unnamed_addr constant [14 x i8] c"Binding pair \00"
+@.str.debug_body_start = private unnamed_addr constant [17 x i8] c"Body starts at: \00"
+@.str.debug_list_car = private unnamed_addr constant [8 x i8] c"  car: \00"
+@.str.debug_list_cdr = private unnamed_addr constant [8 x i8] c"  cdr: \00"
+@.str.debug_atom_name = private unnamed_addr constant [7 x i8] c"atom: \00"
+@.str.debug_list_type = private unnamed_addr constant [7 x i8] c"list: \00"
+@.str.debug_colon_space = private unnamed_addr constant [3 x i8] c": \00"
+@.str.debug_quote = private unnamed_addr constant [2 x i8] c"\22\00"
+@.str.debug_char_fmt = private unnamed_addr constant [3 x i8] c"%c\00"
+@.str.debug_other_type = private unnamed_addr constant [9 x i8] c"type: %d\00"
+@.str.debug_int_fmt = private unnamed_addr constant [3 x i8] c"%d\00"
+@.str.debug_not_atom_error = private unnamed_addr constant [23 x i8] c"ERROR: not atom, type=\00"
+@.str.let_star = private unnamed_addr constant [5 x i8] c"let*\00"
 @.str.empty = private unnamed_addr constant [1 x i8] c"\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
 declare void @free(i8*)
 declare i32 @printf(i8*, ...)
+declare i32 @strncmp(i8*, i8*, i64)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
