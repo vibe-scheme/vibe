@@ -16,6 +16,8 @@ This document provides guidance for AI agents contributing to the Vibe language 
 
 4. **`define-bitcode` Primitive**: This is the central primitive that enables the Vibe kernel to be written in Vibe itself. It allows binding LLVM modules to names, enabling core language features (like `lambda`) to be implemented in Vibe.
 
+5. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. For example, if the lexer isn't recognizing numbers correctly, fix the lexer rather than adding fallback logic in the codegen. We don't need to worry about backwards compatibility until we actually have something working - prioritize correctness and proper architecture over maintaining broken behavior.
+
 ### Code Style
 
 - **Naming Conventions**: Use `snake_case` for LLVM functions and variables

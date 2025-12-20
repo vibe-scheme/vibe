@@ -3914,9 +3914,33 @@ handle_atom:
     %atom_type = load i32, i32* %atom_type_ptr
     
     ; Check atom type: TOKEN_IDENTIFIER (symbol), TOKEN_STRING, TOKEN_NUMBER
-    ; For now, we'll treat identifiers as symbols (primitives or parameters)
-    ; Strings and numbers would need special handling
+    ; Handle TOKEN_NUMBER (type 2) by converting to constant integer
+    %is_number = icmp eq i32 %atom_type, 2  ; TOKEN_NUMBER
+    br i1 %is_number, label %handle_number, label %try_resolve_symbol
     
+handle_number:
+    ; Parse integer from AST node
+    %int_value = call i32 @codegen_parse_int_from_ast(%ASTNode* %expr)
+    
+    ; Get context to create i32 type
+    %context_for_int_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context_for_int = load %LLVMContextRef, %LLVMContextRef* %context_for_int_ptr
+    %context_for_int_null = icmp eq %LLVMContextRef %context_for_int, null
+    br i1 %context_for_int_null, label %return_null, label %get_i32_type
+    
+get_i32_type:
+    ; Get i32 type for the constant
+    %i32_type_for_const = call %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %context_for_int)
+    %i32_type_for_const_null = icmp eq %LLVMTypeRef %i32_type_for_const, null
+    br i1 %i32_type_for_const_null, label %return_null, label %create_int_const
+    
+create_int_const:
+    ; Create constant integer (value is already i32, extend to i64 for API)
+    %int_value_64 = zext i32 %int_value to i64
+    %int_const = call %LLVMValueRef @llvm_create_constant_int(%LLVMTypeRef %i32_type_for_const, i64 %int_value_64, i32 0)
+    ret %LLVMValueRef %int_const
+    
+try_resolve_symbol:
     ; Resolution order per R7RS: let* bindings shadow parameters
     ; 1. Local values (let* bindings) - most local scope
     ; 2. Parameters - function parameters
@@ -4968,8 +4992,8 @@ return:
 ; ============================================================================
 
 ; llvm-gep: Build getelementptr instruction
-; Signature: (llvm-gep type pointer indices name)
-; Args: type (ASTNode with type string), pointer (ASTNode), indices (ASTNode list), name (ASTNode string, optional)
+; Signature: (llvm:gep type pointer index1 index2 ...)
+; Args: type (ASTNode with type string), pointer (ASTNode), indices (ASTNode list)
 define %LLVMValueRef @codegen_dsl_gep(%CodeGen* %cg, %ASTNode* %args) {
 entry:
     ; Get builder
@@ -4980,13 +5004,40 @@ entry:
     br i1 %builder_null, label %error, label %get_args
     
 get_args:
-    ; Extract arguments: pointer, indices, name (type is inferred from pointer)
+    ; Extract arguments: type, pointer, indices
     %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %get_pointer
+    br i1 %args_null, label %error, label %get_type
+    
+get_type:
+    ; Get type argument (first element = args.car)
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    
+    ; Check if type node is null
+    %type_node_null = icmp eq %ASTNode* %type_node, null
+    br i1 %type_node_null, label %error, label %extract_type_string
+    
+extract_type_string:
+    ; Extract type string from type node
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_str = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+    
+    ; Resolve type string to LLVMTypeRef
+    %gep_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
+    %gep_type_null = icmp eq %LLVMTypeRef %gep_type, null
+    br i1 %gep_type_null, label %error, label %get_pointer
     
 get_pointer:
-    ; Get pointer argument (first element)
-    %pointer_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    ; Get pointer argument (second element = args.cdr.car)
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %args_cdr_null = icmp eq %ASTNode* %args_cdr, null
+    br i1 %args_cdr_null, label %error, label %get_pointer_node
+    
+get_pointer_node:
+    %pointer_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
     %pointer_node = load %ASTNode*, %ASTNode** %pointer_node_ptr
     
     ; Check if pointer node is null
@@ -4997,24 +5048,12 @@ eval_pointer:
     ; Evaluate pointer expression
     %pointer = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %pointer_node)
     %pointer_null = icmp eq %LLVMValueRef %pointer, null
-    br i1 %pointer_null, label %error, label %get_type_from_pointer
-    
-get_type_from_pointer:
-    ; Get pointer type
-    %pointer_type = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %pointer)
-    %pointer_type_null = icmp eq %LLVMTypeRef %pointer_type, null
-    br i1 %pointer_type_null, label %error, label %get_element_type
-    
-get_element_type:
-    ; Get element type from pointer type (for GEP, we need the pointee type)
-    %gep_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %pointer_type)
-    %gep_type_null = icmp eq %LLVMTypeRef %gep_type, null
-    br i1 %gep_type_null, label %error, label %get_indices
+    br i1 %pointer_null, label %error, label %get_indices
     
 get_indices:
-    ; Get indices list (second element = args.cdr)
-    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
-    %indices_list_node = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    ; Get indices list (third element onwards = args.cdr.cdr)
+    %indices_list_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 5
+    %indices_list_node = load %ASTNode*, %ASTNode** %indices_list_node_ptr
     
     ; Check if indices_list_node is null (no indices provided)
     %indices_is_null = icmp eq %ASTNode* %indices_list_node, null
@@ -5036,7 +5075,6 @@ eval_indices:
     br label %build_gep
     
 build_gep:
-    
     ; Validate GEP type before using it
     %gep_type_valid = icmp eq %LLVMTypeRef %gep_type, null
     br i1 %gep_type_valid, label %error, label %build_gep_inst
