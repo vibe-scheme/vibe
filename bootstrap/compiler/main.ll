@@ -2,8 +2,8 @@
 ; Main entry point that orchestrates lexer → parser → code generation
 ; All functions use snake_case naming convention
 
-target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "arm64-apple-darwin"
 
 ; Forward declarations from types.ll
 ; Types are defined in bootstrap/types/types.ll and linked via llvm-link
@@ -22,7 +22,7 @@ declare %Token* @lex_next(%Lexer*)
 declare %Parser* @parse_init(%Lexer*)
 declare %ASTNode* @parse_expr(%Parser*)
 declare %Runtime* @runtime_init(i64)
-declare %CodeGen* @codegen_init()
+declare %CodeGen* @codegen_init(i8*)
 declare i32 @codegen_define_bitcode(%CodeGen*, %ASTNode*)
 declare i32 @codegen_main(%CodeGen*, %ASTNode*)
 declare i8* @codegen_get_ir(%CodeGen*)
@@ -72,9 +72,29 @@ compile:
     ; Initialize parser
     %parser = call %Parser* @parse_init(%Lexer* %lexer)
     
-    ; Initialize code generator
-    %codegen = call %CodeGen* @codegen_init()
+    ; Extract module name from input file path
+    %module_name = call i8* @extract_module_name(i8* %input_file)
+    %module_name_null = icmp eq i8* %module_name, null
+    br i1 %module_name_null, label %module_name_error, label %init_codegen
+
+module_name_error:
+    ; If module name extraction fails, use null (will default to "vibe")
+    br label %init_codegen
+
+init_codegen:
+    ; Initialize code generator with module name
+    %module_name_to_use = phi i8* [ null, %module_name_error ], [ %module_name, %compile ]
+    %codegen = call %CodeGen* @codegen_init(i8* %module_name_to_use)
     
+    ; Free module name if it was allocated (LLVM copies it internally)
+    %should_free = icmp ne i8* %module_name_to_use, null
+    br i1 %should_free, label %free_module_name, label %after_free
+
+free_module_name:
+    call void @free(i8* %module_name_to_use)
+    br label %after_free
+
+after_free:
     ; Parse expressions until EOF, collecting AST nodes
     %exprs_list = alloca %ASTNode*
     store %ASTNode* null, %ASTNode** %exprs_list
@@ -428,6 +448,152 @@ match:
     
 no_match:
     ret i32 0
+}
+
+; extract_module_name: Extract module name from file path
+; Extracts basename and optionally strips extension
+; Parameters:
+;   filepath: Full file path (null-terminated)
+; Returns: Pointer to module name string (allocated with malloc), or null on error
+; NOTE: The returned string must be freed by caller
+; Algorithm:
+;   1. Find last '/' character (or start of string if none)
+;   2. Extract basename (everything after last '/')
+;   3. Find last '.' character in basename
+;   4. If found, strip extension (everything from '.' to end)
+;   5. Return the result
+define i8* @extract_module_name(i8* %filepath) {
+entry:
+    %filepath_null = icmp eq i8* %filepath, null
+    br i1 %filepath_null, label %error, label %get_length
+
+get_length:
+    %path_len = call i64 @strlen(i8* %filepath)
+    %path_len_zero = icmp eq i64 %path_len, 0
+    br i1 %path_len_zero, label %error, label %find_last_slash
+
+find_last_slash:
+    ; Find last '/' character
+    %last_slash_pos = alloca i64
+    store i64 0, i64* %last_slash_pos  ; Default to start of string
+    %i = alloca i64
+    store i64 0, i64* %i
+    br label %slash_loop
+
+slash_loop:
+    %i_val = load i64, i64* %i
+    %done = icmp uge i64 %i_val, %path_len
+    br i1 %done, label %extract_basename, label %check_slash
+
+check_slash:
+    %char_ptr = getelementptr i8, i8* %filepath, i64 %i_val
+    %char = load i8, i8* %char_ptr
+    %char_int = zext i8 %char to i32
+    %is_slash = icmp eq i32 %char_int, 47  ; '/' = 47
+    br i1 %is_slash, label %update_slash_pos, label %increment_slash
+
+update_slash_pos:
+    ; Update last slash position (position after the slash)
+    %slash_pos_after = add i64 %i_val, 1
+    store i64 %slash_pos_after, i64* %last_slash_pos
+    br label %increment_slash
+
+increment_slash:
+    %i_next = add i64 %i_val, 1
+    store i64 %i_next, i64* %i
+    br label %slash_loop
+
+extract_basename:
+    ; Extract basename starting from last_slash_pos
+    %basename_start = load i64, i64* %last_slash_pos
+    %basename_len = sub i64 %path_len, %basename_start
+    %basename_len_zero = icmp eq i64 %basename_len, 0
+    br i1 %basename_len_zero, label %error, label %find_last_dot
+
+find_last_dot:
+    ; Find last '.' character in basename
+    %last_dot_pos = alloca i64
+    store i64 0, i64* %last_dot_pos  ; 0 means no dot found
+    %j = alloca i64
+    store i64 0, i64* %j
+    br label %dot_loop
+
+dot_loop:
+    %j_val = load i64, i64* %j
+    %dot_done = icmp uge i64 %j_val, %basename_len
+    br i1 %dot_done, label %determine_length, label %check_dot
+
+check_dot:
+    %basename_char_ptr = getelementptr i8, i8* %filepath, i64 %basename_start
+    %basename_char_offset = getelementptr i8, i8* %basename_char_ptr, i64 %j_val
+    %basename_char = load i8, i8* %basename_char_offset
+    %basename_char_int = zext i8 %basename_char to i32
+    %is_dot = icmp eq i32 %basename_char_int, 46  ; '.' = 46
+    br i1 %is_dot, label %update_dot_pos, label %increment_dot
+
+update_dot_pos:
+    ; Store position of dot (relative to basename start)
+    store i64 %j_val, i64* %last_dot_pos
+    br label %increment_dot
+
+increment_dot:
+    %j_next = add i64 %j_val, 1
+    store i64 %j_next, i64* %j
+    br label %dot_loop
+
+determine_length:
+    ; Determine final length (basename_len if no dot, or up to dot if dot found)
+    %dot_pos = load i64, i64* %last_dot_pos
+    %has_dot = icmp ne i64 %dot_pos, 0
+    br i1 %has_dot, label %use_dot_length, label %use_full_length
+
+use_dot_length:
+    ; Use length up to (but not including) the dot
+    br label %allocate_name
+
+use_full_length:
+    ; Use full basename length
+    br label %allocate_name
+
+allocate_name:
+    %final_len = phi i64 [ %dot_pos, %use_dot_length ], [ %basename_len, %use_full_length ]
+    %final_len_zero = icmp eq i64 %final_len, 0
+    br i1 %final_len_zero, label %error, label %alloc_buf
+
+alloc_buf:
+    %buf_size = add i64 %final_len, 1  ; +1 for null terminator
+    %buf = call i8* @malloc(i64 %buf_size)
+    %buf_null = icmp eq i8* %buf, null
+    br i1 %buf_null, label %error, label %copy_name
+
+copy_name:
+    ; Copy basename (up to dot if found) to buffer
+    %basename_ptr = getelementptr i8, i8* %filepath, i64 %basename_start
+    %i_copy = alloca i64
+    store i64 0, i64* %i_copy
+    br label %copy_loop
+
+copy_loop:
+    %i_copy_val = load i64, i64* %i_copy
+    %copy_done = icmp uge i64 %i_copy_val, %final_len
+    br i1 %copy_done, label %null_terminate, label %copy_char
+
+copy_char:
+    %src_char_ptr = getelementptr i8, i8* %basename_ptr, i64 %i_copy_val
+    %src_char = load i8, i8* %src_char_ptr
+    %dst_char_ptr = getelementptr i8, i8* %buf, i64 %i_copy_val
+    store i8 %src_char, i8* %dst_char_ptr
+    %i_copy_next = add i64 %i_copy_val, 1
+    store i64 %i_copy_next, i64* %i_copy
+    br label %copy_loop
+
+null_terminate:
+    %null_ptr = getelementptr i8, i8* %buf, i64 %final_len
+    store i8 0, i8* %null_ptr
+    ret i8* %buf
+
+error:
+    ret i8* null
 }
 
 ; String literals

@@ -2,8 +2,8 @@
 ; All modules should use these type definitions to ensure consistency
 ; All functions use snake_case naming convention
 
-target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "arm64-apple-darwin"
 
 ; LLVM opaque types (pointers to LLVM structures)
 %LLVMContextRef = type i8*

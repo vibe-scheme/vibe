@@ -62,8 +62,8 @@ case "$COMMAND" in
         print_info "Executable: ${BUILD_DIR}/bin/bootstrap_compiler"
         ;;
     
-    build)
-        print_info "Building Vibe kernel (using .vibe files + _no_vibe.ll files)..."
+    build_kernel)
+        print_info "Building Vibe kernel (using .vibe files + _no_vibe.ll files, compiled with bootstrap_compiler)..."
         
         # Ensure bootstrap compiler exists
         if [ ! -f "${BUILD_DIR}/bin/bootstrap_compiler" ]; then
@@ -90,6 +90,37 @@ case "$COMMAND" in
         }
         
         print_info "Kernel build complete!"
+        print_info "Executable: ${BUILD_DIR}/bin/vibe_kernel"
+        ;;
+    
+    build)
+        print_info "Building Vibe kernel using vibe_kernel itself (self-hosting build)..."
+        
+        # Ensure vibe_kernel exists (build_kernel uses bootstrap_compiler)
+        if [ ! -f "${BUILD_DIR}/bin/vibe_kernel" ]; then
+            print_warn "vibe_kernel not found. Running build_kernel first..."
+            "$0" build_kernel
+        fi
+        
+        # Create build directory
+        mkdir -p "${BUILD_DIR}"
+        
+        # Configure CMake for self-hosting build
+        print_info "Configuring CMake for self-hosting build..."
+        cd "${BUILD_DIR}"
+        cmake "${SCRIPT_DIR}" -DBUILD_MODE=SELF_HOST || {
+            print_error "CMake configuration failed."
+            exit 1
+        }
+        
+        # Build kernel using vibe_kernel
+        print_info "Building kernel using vibe_kernel..."
+        cmake --build . --target vibe_kernel || {
+            print_error "Self-hosting build failed."
+            exit 1
+        }
+        
+        print_info "Self-hosting build complete!"
         print_info "Executable: ${BUILD_DIR}/bin/vibe_kernel"
         ;;
     
@@ -121,14 +152,15 @@ case "$COMMAND" in
         ;;
     
     *)
-        echo "Usage: $0 {clean|bootstrap|build|test|install}"
+        echo "Usage: $0 {clean|bootstrap|build_kernel|build|test|install}"
         echo ""
         echo "Commands:"
-        echo "  clean     - Remove build directory"
-        echo "  bootstrap - Build bootstrap compiler using .ll files only"
-        echo "  build     - Build Vibe kernel using .vibe files + _no_vibe.ll files (default)"
-        echo "  test      - Run tests using vibe_kernel"
-        echo "  install   - Install the project"
+        echo "  clean       - Remove build directory"
+        echo "  bootstrap   - Build bootstrap compiler using .ll files only"
+        echo "  build_kernel - Build Vibe kernel using .vibe files + _no_vibe.ll files (compiled with bootstrap_compiler)"
+        echo "  build       - Build Vibe kernel using vibe_kernel itself (self-hosting, default)"
+        echo "  test        - Run tests using vibe_kernel"
+        echo "  install     - Install the project"
         exit 1
         ;;
 esac

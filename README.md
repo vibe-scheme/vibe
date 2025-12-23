@@ -81,9 +81,15 @@ export PATH="/usr/lib/llvm-21/bin:$PATH"
 
 ### Platform-Specific Notes
 
-**macOS**: The bootstrap compiler is currently configured for macOS. The target triple in all `.ll` files is set to `x86_64-apple-macosx10.15.0`. If building on a different macOS version, you may need to update the target triple in the LLVM IR files.
+**macOS (Apple Silicon)**: The bootstrap compiler is currently configured for Apple Silicon (arm64). The target triple in all `.ll` files is set to `arm64-apple-darwin` with data layout `"e-m:o-i64:64-i128:128-n32:64-S128"`.
 
-**Linux**: For Linux builds, you'll need to update the target triple in all `.ll` files to match your Linux distribution (e.g., `x86_64-unknown-linux-gnu`).
+**macOS (Intel)**: For Intel-based Macs, you'll need to update the target triple in all `.ll` files to `x86_64-apple-macosx10.15.0` (or your specific macOS version) and update the data layout accordingly.
+
+**Linux**: For Linux builds, you'll need to update the target triple in all `.ll` files to match your Linux distribution:
+- x86_64: `x86_64-unknown-linux-gnu`
+- ARM64: `aarch64-unknown-linux-gnu`
+
+**Target Initialization**: The bootstrap compiler automatically detects the target architecture at runtime and initializes the appropriate LLVM target components. This means the same code works on both arm64 and x86_64 platforms without requiring separate code paths.
 
 **Cross-Compilation**: Cross-compilation is not currently supported. The bootstrap compiler will only work on the same architecture/OS it was built on. This is a known limitation and a future goal.
 
@@ -155,7 +161,7 @@ The bootstrap compiler is currently under active development. Current status:
 
 ## Known Limitations
 
-1. **Target Triple**: All LLVM IR files hardcode the target triple to the build system's architecture. Cross-compilation is not currently supported.
+1. **Target Triple**: All LLVM IR files hardcode the target triple to the build system's architecture. Currently configured for Apple Silicon (arm64-apple-darwin). Cross-compilation is not currently supported.
 
 2. **Platform Support**: Currently configured for macOS. Linux support requires updating target triples in all `.ll` files.
 

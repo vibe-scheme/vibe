@@ -2,8 +2,8 @@
 ; Implements tokenization for R7RS Scheme lexical syntax
 ; All functions use snake_case naming convention
 
-target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "arm64-apple-darwin"
 
 ; Token types enum
 ; TOKEN_EOF = 0
@@ -29,7 +29,6 @@ target triple = "x86_64-apple-macosx10.15.0"
 %Token = type { i32, i8*, i64, i32, i32 }
 %Lexer = type { i8*, i64, i64, i32, i32 }
 
-; Forward declaration from lexer.vibe
 declare %Lexer* @lex_init(i8*, i64)
 
 ; Check if we've reached end of input
@@ -210,7 +209,7 @@ entry:
     %token = call i8* @malloc(i64 32)
     %token_ptr = bitcast i8* %token to %Token*
     
-    ; Determine token type (check if it's a symbol starting with #)
+    ; Determine token type (check if it's a symbol starting with #, or a number)
     %source_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 0
     %source = load i8*, i8** %source_ptr
     %first_char_ptr = getelementptr i8, i8* %source, i64 %start
@@ -218,7 +217,53 @@ entry:
     %first_int = zext i8 %first_char to i32
     %is_hash = icmp eq i32 %first_int, 35
     
+    ; Check if first character is a digit
+    %is_digit_first = icmp uge i32 %first_int, 48  ; '0'
+    %is_digit_first2 = icmp ule i32 %first_int, 57  ; '9'
+    %is_digit_first_both = and i1 %is_digit_first, %is_digit_first2
+    
+    ; If starts with digit, check if all characters are digits
+    br i1 %is_digit_first_both, label %check_all_digits, label %check_hash
+    
+check_all_digits:
+    ; Check if all characters in the token are digits
+    %i = alloca i64
+    store i64 0, i64* %i
+    br label %digit_check_loop
+    
+digit_check_loop:
+    %i_val = load i64, i64* %i
+    %done_check = icmp uge i64 %i_val, %len
+    br i1 %done_check, label %all_digits, label %check_char
+    
+check_char:
+    %char_idx_ptr = getelementptr i8, i8* %first_char_ptr, i64 %i_val
+    %char_idx = load i8, i8* %char_idx_ptr
+    %char_idx_int = zext i8 %char_idx to i32
+    %is_digit_char = icmp uge i32 %char_idx_int, 48  ; '0'
+    %is_digit_char2 = icmp ule i32 %char_idx_int, 57  ; '9'
+    %is_digit_char_both = and i1 %is_digit_char, %is_digit_char2
+    br i1 %is_digit_char_both, label %next_char, label %not_all_digits
+    
+next_char:
+    %i_new = add i64 %i_val, 1
+    store i64 %i_new, i64* %i
+    br label %digit_check_loop
+    
+all_digits:
+    ; All characters are digits, this is a number
+    br label %set_token_type
+    
+not_all_digits:
+    ; Not all digits, treat as identifier
+    br label %check_hash
+    
+check_hash:
     %token_type = select i1 %is_hash, i32 4, i32 1  ; TOKEN_SYMBOL or TOKEN_IDENTIFIER
+    br label %set_token_type
+    
+set_token_type:
+    %token_type_phi = phi i32 [ %token_type, %check_hash ], [ 2, %all_digits ]  ; TOKEN_NUMBER = 2
     
     ; Copy value
     %value = call i8* @malloc(i64 %len)
@@ -226,7 +271,7 @@ entry:
     
     ; Set token fields
     %type_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 0
-    store i32 %token_type, i32* %type_ptr
+    store i32 %token_type_phi, i32* %type_ptr
     
     %val_ptr = getelementptr %Token, %Token* %token_ptr, i32 0, i32 1
     store i8* %value, i8** %val_ptr

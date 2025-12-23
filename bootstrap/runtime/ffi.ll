@@ -3,8 +3,8 @@
 ; Platform abstraction layer for POSIX and Windows
 ; All functions use snake_case naming convention
 
-target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "arm64-apple-darwin"
 
 ; FFI type enum
 ; FFI_TYPE_VOID = 0
@@ -336,14 +336,37 @@ declare i32 @printf(i8*, ...)
 declare i32 @fprintf(%struct.__sFILE*, i8*, ...)
 %struct.__sFILE = type opaque
 
+; Standard library memory management
+declare void @free(i8*)
+
+; String comparison function (from C standard library)
+declare i32 @strncmp(i8*, i8*, i64)
+
 ; TargetMachine API
 ; Native target initialization functions (must be called before using TargetMachine API)
-; These are X86-specific initialization functions (for x86_64 target)
-declare void @LLVMInitializeX86TargetInfo()
-declare void @LLVMInitializeX86Target()
-declare void @LLVMInitializeX86TargetMC()
-declare void @LLVMInitializeX86AsmPrinter()
-declare void @LLVMInitializeX86AsmParser()
+; Note: We only declare functions for the architecture we're building for.
+; The target triple at the top of this file determines which functions are available.
+; For arm64 builds, only AArch64 functions are declared.
+; For x86_64 builds, only X86 functions are declared.
+
+; AArch64 target initialization functions (for arm64 target)
+declare void @LLVMInitializeAArch64TargetInfo()
+declare void @LLVMInitializeAArch64Target()
+declare void @LLVMInitializeAArch64TargetMC()
+declare void @LLVMInitializeAArch64AsmPrinter()
+declare void @LLVMInitializeAArch64AsmParser()
+
+; X86-specific initialization functions (for x86_64 target)
+; These are only available when building for x86_64, so we use a runtime check
+; to avoid calling them on arm64. However, the linker will still try to resolve
+; them if they're declared. We'll handle this by making the calls conditional
+; and ensuring the linker doesn't require these symbols on arm64.
+; For now, we'll comment them out and use a different approach.
+; declare void @LLVMInitializeX86TargetInfo()
+; declare void @LLVMInitializeX86Target()
+; declare void @LLVMInitializeX86TargetMC()
+; declare void @LLVMInitializeX86AsmPrinter()
+; declare void @LLVMInitializeX86AsmParser()
 
 declare i8* @LLVMGetDefaultTargetTriple()
 declare i32 @LLVMGetTargetFromTriple(i8*, %LLVMTargetRef*, i8**)
@@ -367,18 +390,71 @@ declare %LLVMValueRef @LLVMGetNamedGlobal(%LLVMModuleRef, i8*)
 ; Module linking
 declare i32 @LLVMLinkModules2(%LLVMModuleRef, %LLVMModuleRef)
 
+; String constants for target triple comparison
+@.str.arm64 = private unnamed_addr constant [6 x i8] c"arm64\00"
+@.str.aarch64 = private unnamed_addr constant [8 x i8] c"aarch64\00"
+
+; Check if target triple is ARM64/AArch64
+; is_arm64_target: Check if target triple indicates ARM64 architecture
+; Parameters:
+;   triple: Target triple string (null-terminated)
+; Returns: 1 if ARM64, 0 otherwise
+define i32 @is_arm64_target(i8* %triple) {
+entry:
+    ; Check if triple starts with "arm64"
+    %arm64_str = getelementptr [6 x i8], [6 x i8]* @.str.arm64, i32 0, i32 0
+    %arm64_cmp = call i32 @strncmp(i8* %triple, i8* %arm64_str, i64 5)
+    %is_arm64 = icmp eq i32 %arm64_cmp, 0
+    br i1 %is_arm64, label %return_arm64, label %check_aarch64
+
+check_aarch64:
+    ; Check if triple starts with "aarch64"
+    %aarch64_str = getelementptr [8 x i8], [8 x i8]* @.str.aarch64, i32 0, i32 0
+    %aarch64_cmp = call i32 @strncmp(i8* %triple, i8* %aarch64_str, i64 7)
+    %is_aarch64 = icmp eq i32 %aarch64_cmp, 0
+    br i1 %is_aarch64, label %return_arm64, label %return_x86
+
+return_arm64:
+    ret i32 1
+
+return_x86:
+    ret i32 0
+}
+
 ; Initialize native target
 ; llvm_initialize_native_target: Initialize native target for TargetMachine API
 ; This must be called before using TargetMachine functions
-; For x86_64 target, this initializes X86 target components
+; Automatically detects the target architecture and initializes the appropriate components
+; Note: Since this file is built for arm64, we only initialize AArch64 components.
+; For x86_64 builds, a separate version of this function would initialize X86 components.
 define void @llvm_initialize_native_target() {
 entry:
-    ; Initialize X86 target components
-    call void @LLVMInitializeX86TargetInfo()
-    call void @LLVMInitializeX86Target()
-    call void @LLVMInitializeX86TargetMC()
-    call void @LLVMInitializeX86AsmPrinter()
-    call void @LLVMInitializeX86AsmParser()
+    ; Get default target triple
+    %triple = call i8* @LLVMGetDefaultTargetTriple()
+    
+    ; Check if target is ARM64
+    %is_arm64 = call i32 @is_arm64_target(i8* %triple)
+    %is_arm64_bool = icmp ne i32 %is_arm64, 0
+    br i1 %is_arm64_bool, label %init_arm64, label %error_unsupported
+
+init_arm64:
+    ; Initialize AArch64 target components
+    call void @LLVMInitializeAArch64TargetInfo()
+    call void @LLVMInitializeAArch64Target()
+    call void @LLVMInitializeAArch64TargetMC()
+    call void @LLVMInitializeAArch64AsmPrinter()
+    call void @LLVMInitializeAArch64AsmParser()
+    br label %done
+
+error_unsupported:
+    ; If we're not on ARM64, this build doesn't support the target architecture
+    ; This should not happen if the file is built for the correct architecture
+    ; For now, we'll just skip initialization (this is a build configuration error)
+    br label %done
+
+done:
+    ; Free the target triple string returned by LLVMGetDefaultTargetTriple()
+    call void @free(i8* %triple)
     ret void
 }
 

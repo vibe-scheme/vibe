@@ -86,21 +86,54 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Build mode: BOOTSTRAP (uses .ll files) or KERNEL (uses .vibe + _no_vibe.ll files)
+# Detect target architecture from LLVM IR files
+# Check the first .ll file to determine target triple
+file(READ "${CMAKE_SOURCE_DIR}/bootstrap/types/types.ll" TYPES_LL_CONTENT)
+string(REGEX MATCH "target triple = \"([^\"]+)\"" _ "${TYPES_LL_CONTENT}")
+if(CMAKE_MATCH_1)
+    set(LLVM_TARGET_TRIPLE "${CMAKE_MATCH_1}")
+    message(STATUS "Detected target triple from LLVM IR: ${LLVM_TARGET_TRIPLE}")
+else()
+    # Fallback: detect from system
+    if(APPLE)
+        execute_process(
+            COMMAND sysctl -n machdep.cpu.brand_string
+            OUTPUT_VARIABLE CPU_BRAND
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(CPU_BRAND MATCHES "Apple")
+            set(LLVM_TARGET_TRIPLE "arm64-apple-darwin")
+        else()
+            set(LLVM_TARGET_TRIPLE "x86_64-apple-macosx10.15.0")
+        endif()
+    else()
+        set(LLVM_TARGET_TRIPLE "${CMAKE_SYSTEM_PROCESSOR}-unknown-linux-gnu")
+    endif()
+    message(STATUS "Using detected target triple: ${LLVM_TARGET_TRIPLE}")
+endif()
+
+# Build mode: BOOTSTRAP (uses .ll files), KERNEL (uses .vibe + _no_vibe.ll files, compiled with bootstrap_compiler),
+# or SELF_HOST (uses .vibe + _no_vibe.ll files, compiled with vibe_kernel)
 if(NOT DEFINED BUILD_MODE)
-    set(BUILD_MODE "BOOTSTRAP" CACHE STRING "Build mode: BOOTSTRAP or KERNEL")
+    set(BUILD_MODE "BOOTSTRAP" CACHE STRING "Build mode: BOOTSTRAP, KERNEL, or SELF_HOST")
 endif()
 
 message(STATUS "Build mode: ${BUILD_MODE}")
 
 if(BUILD_MODE STREQUAL "BOOTSTRAP")
     set(USE_VIBE_FILES OFF)
+    set(USE_VIBE_KERNEL OFF)
     set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.ll)
 elseif(BUILD_MODE STREQUAL "KERNEL")
     set(USE_VIBE_FILES ON)
+    set(USE_VIBE_KERNEL OFF)
+    set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll)
+elseif(BUILD_MODE STREQUAL "SELF_HOST")
+    set(USE_VIBE_FILES ON)
+    set(USE_VIBE_KERNEL ON)
     set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll)
 else()
-    message(FATAL_ERROR "Invalid BUILD_MODE: ${BUILD_MODE}. Must be BOOTSTRAP or KERNEL")
+    message(FATAL_ERROR "Invalid BUILD_MODE: ${BUILD_MODE}. Must be BOOTSTRAP, KERNEL, or SELF_HOST")
 endif()
 
 # Shared Types - LLVM bitcode module (must be built first)
@@ -125,15 +158,28 @@ if(USE_VIBE_FILES)
         COMMENT "Assembling lexer_no_vibe bitcode (temp)"
     )
     
-    # Step 2: Compile lexer.vibe to bitcode (requires bootstrap_compiler)
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-        COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-            ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
-            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
-        COMMENT "Compiling lexer.vibe to bitcode"
-    )
+    # Step 2: Compile lexer.vibe to bitcode
+    if(USE_VIBE_KERNEL)
+        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
+                ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+            DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+            COMMENT "Compiling lexer.vibe to bitcode using vibe_kernel"
+        )
+    else()
+        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
+                ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
+            DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer.vibe
+            COMMENT "Compiling lexer.vibe to bitcode using bootstrap_compiler"
+        )
+    endif()
     
     # Step 3: Create final lexer.bc (with Vibe code)
     add_custom_command(
@@ -153,6 +199,10 @@ if(USE_VIBE_FILES)
     add_custom_target(bootstrap_lexer_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc)
     add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
     add_dependencies(bootstrap_lexer bootstrap_lexer_vibe_temp)
+    # Note: In SELF_HOST mode, vibe_kernel must exist before we can compile .vibe files.
+    # This creates a circular dependency that we handle by requiring vibe_kernel to exist
+    # before configuring CMake (build.sh ensures this by running build_kernel first).
+    # We do NOT add a CMake dependency here to avoid the circular dependency.
 else()
     # BOOTSTRAP mode: Use .ll files only
     add_custom_command(
@@ -243,7 +293,50 @@ add_custom_command(
     COMMENT "Linking codegen with types"
 )
 
-add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
+    add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
+
+# Link against LLVM C API libraries
+# Map LLVM components to library names
+# Note: We use LLVM's component mapping, but may need to adjust component names
+# based on the actual LLVM installation. Common components:
+# - Core: Core LLVM functionality
+# - BitWriter: For writing bitcode files
+# - IR: IR functionality (may be part of Core in some builds)
+# Base components (architecture-independent)
+# Note: native and nativecodegen are removed as they may cause duplicate library issues
+# Architecture-specific components are added explicitly below
+llvm_map_components_to_libnames(LLVM_LIBS
+    Core
+    BitWriter
+    Support
+    Target
+    MC
+    Linker
+)
+
+# Add architecture-specific components based on target triple
+if(LLVM_TARGET_TRIPLE MATCHES "arm64|aarch64")
+    # ARM64-specific components
+    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
+        AArch64CodeGen
+        AArch64Desc
+        AArch64Info
+        AArch64Utils
+        AArch64AsmParser
+    )
+    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
+    message(STATUS "Added ARM64-specific LLVM components")
+elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
+    # X86-specific components (usually included in native/nativecodegen, but explicit is better)
+    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
+        X86CodeGen
+        X86Desc
+        X86Info
+        X86Utils
+    )
+    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
+    message(STATUS "Added X86-specific LLVM components")
+endif()
 
 # Bootstrap Compiler - Main executable
 # First compile main.ll to bitcode, then link all modules and compile to native
@@ -286,7 +379,7 @@ if(USE_VIBE_FILES)
     # Compile kernel bitcode to object file
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel.o
-        COMMAND ${LLC} -filetype=obj ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc -o ${CMAKE_BINARY_DIR}/vibe_kernel.o
+        COMMAND ${LLC} -mtriple=${LLVM_TARGET_TRIPLE} -filetype=obj ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc -o ${CMAKE_BINARY_DIR}/vibe_kernel.o
         DEPENDS ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
         COMMENT "Compiling kernel bitcode to object file"
     )
@@ -294,6 +387,14 @@ if(USE_VIBE_FILES)
     # Create kernel executable
     add_executable(vibe_kernel ${CMAKE_BINARY_DIR}/vibe_kernel.o)
     set_target_properties(vibe_kernel PROPERTIES LINKER_LANGUAGE C)
+    
+    # Set architecture for linking (match the target triple)
+    if(LLVM_TARGET_TRIPLE MATCHES "arm64")
+        set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "arm64")
+    elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64")
+        set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "x86_64")
+    endif()
+    
     target_link_libraries(vibe_kernel ${LLVM_LIBS})
     if(UNIX AND NOT APPLE)
         target_link_libraries(vibe_kernel dl)
@@ -329,6 +430,9 @@ endif()
 # - Core: Core LLVM functionality
 # - BitWriter: For writing bitcode files
 # - IR: IR functionality (may be part of Core in some builds)
+# Base components (architecture-independent)
+# Note: native and nativecodegen are removed as they may cause duplicate library issues
+# Architecture-specific components are added explicitly below
 llvm_map_components_to_libnames(LLVM_LIBS
     Core
     BitWriter
@@ -336,15 +440,41 @@ llvm_map_components_to_libnames(LLVM_LIBS
     Target
     MC
     Linker
-    native
-    nativecodegen
 )
+
+message(STATUS "LLVM_LIBS after base components: ${LLVM_LIBS}")
+
+# Add architecture-specific components based on target triple
+if(LLVM_TARGET_TRIPLE MATCHES "arm64|aarch64")
+    # ARM64-specific components
+    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
+        AArch64CodeGen
+        AArch64Desc
+        AArch64Info
+        AArch64Utils
+        AArch64AsmParser
+    )
+    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
+    message(STATUS "Added ARM64-specific LLVM components")
+    message(STATUS "LLVM_LIBS after ARM64 components: ${LLVM_LIBS}")
+elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
+    # X86-specific components (usually included in native/nativecodegen, but explicit is better)
+    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
+        X86CodeGen
+        X86Desc
+        X86Info
+        X86Utils
+    )
+    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
+    message(STATUS "Added X86-specific LLVM components")
+    message(STATUS "LLVM_LIBS after X86 components: ${LLVM_LIBS}")
+endif()
 
 if(NOT USE_VIBE_FILES)
     # BOOTSTRAP mode: Compile bootstrap_compiler
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
-        COMMAND ${LLC} -filetype=obj ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
+        COMMAND ${LLC} -mtriple=${LLVM_TARGET_TRIPLE} -filetype=obj ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
         DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
         COMMENT "Compiling bitcode to object file"
     )
@@ -356,6 +486,13 @@ if(NOT USE_VIBE_FILES)
     # (libdl on Linux), and LLVM C API libraries.
     add_executable(bootstrap_compiler ${CMAKE_BINARY_DIR}/bootstrap_compiler.o)
     set_target_properties(bootstrap_compiler PROPERTIES LINKER_LANGUAGE C)
+    
+    # Set architecture for linking (match the target triple)
+    if(LLVM_TARGET_TRIPLE MATCHES "arm64")
+        set_target_properties(bootstrap_compiler PROPERTIES OSX_ARCHITECTURES "arm64")
+    elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64")
+        set_target_properties(bootstrap_compiler PROPERTIES OSX_ARCHITECTURES "x86_64")
+    endif()
     
     # Link LLVM libraries
     target_link_libraries(bootstrap_compiler ${LLVM_LIBS})

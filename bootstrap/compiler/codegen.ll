@@ -10,8 +10,8 @@
 ; 3. Switch to LLVM API by default (new default) - TODO
 ; 4. Keep text IR as fallback (for debugging) - TODO
 
-target datalayout = "e-m:o-i64:64-f80:128-n8:16:32:64-S128"
-target triple = "x86_64-apple-macosx10.15.0"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
+target triple = "arm64-apple-darwin"
 
 ; Forward declarations from types.ll
 ; Types are defined in bootstrap/types/types.ll and linked via llvm-link
@@ -112,7 +112,7 @@ declare i32 @close(i32)
 ; Initialize code generator
 ; codegen_init: Initialize code generator
 ; Returns: Pointer to CodeGen structure
-define %CodeGen* @codegen_init() {
+define %CodeGen* @codegen_init(i8* %module_name) {
 entry:
     ; Allocate CodeGen structure (now includes LLVM context/module/builder pointers + DSL fields + function types + tracking fields)
     %cg = call i8* @malloc(i64 112)  ; 8 + 8 + 8 + 4 + 4 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 = 112 bytes
@@ -124,24 +124,37 @@ entry:
     ; Create LLVM context
     %llvm_context = call %LLVMContextRef @llvm_create_context()
     %context_null = icmp eq %LLVMContextRef %llvm_context, null
-    br i1 %context_null, label %error, label %create_module
-    
+    br i1 %context_null, label %error, label %check_module_name
+
+check_module_name:
+    ; Check if module_name is null, use default if so
+    %module_name_null = icmp eq i8* %module_name, null
+    br i1 %module_name_null, label %use_default_name, label %use_provided_name
+
+use_default_name:
+    ; Use default module name "vibe"
+    %default_name_array = bitcast [5 x i8]* @.str.module_name to i8*
+    br label %create_module
+
+use_provided_name:
+    ; Use provided module name
+    br label %create_module
+
 create_module:
-    ; Create LLVM module
-    ; Use bitcast to convert the constant array pointer to i8*
-    %module_name_array = bitcast [5 x i8]* @.str.module_name to i8*
-    %llvm_module = call %LLVMModuleRef @llvm_create_module(%LLVMContextRef %llvm_context, i8* %module_name_array)
+    ; Create LLVM module with appropriate name
+    %module_name_to_use = phi i8* [ %default_name_array, %use_default_name ], [ %module_name, %use_provided_name ]
+    %llvm_module = call %LLVMModuleRef @llvm_create_module(%LLVMContextRef %llvm_context, i8* %module_name_to_use)
     %module_null = icmp eq %LLVMModuleRef %llvm_module, null
     br i1 %module_null, label %dispose_context, label %set_target
     
 set_target:
     ; Set target triple via LLVM API
     ; Use bitcast to convert the constant array pointer to i8*
-    %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
+    %target_triple_array = bitcast [18 x i8]* @.str.target_triple_value to i8*
     call void @llvm_set_target(%LLVMModuleRef %llvm_module, i8* %target_triple_array)
     
     ; Set data layout via LLVM API
-    %data_layout_array = bitcast [35 x i8]* @.str.data_layout_value to i8*
+    %data_layout_array = bitcast [38 x i8]* @.str.data_layout_value to i8*
     call void @llvm_set_data_layout(%LLVMModuleRef %llvm_module, i8* %data_layout_array)
     
     ; Allocate initial buffer (64KB) - for text IR generation (backward compatibility)
@@ -198,7 +211,7 @@ set_target:
     store %ASTNode* null, %ASTNode** %llvm_functions_ptr
     
     ; Write target triple header (46 bytes without null terminator) - text IR approach (backward compatibility)
-    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([47 x i8], [47 x i8]* @.str.target_triple, i32 0, i32 0), i64 46)
+    call void @codegen_append(%CodeGen* %cg_ptr, i8* getelementptr inbounds ([38 x i8], [38 x i8]* @.str.target_triple, i32 0, i32 0), i64 37)
     
     ; Note: printf and other C library functions should now be declared via
     ; define-llvm-ffi-function in user code or runtime, not hardcoded here
@@ -2772,15 +2785,15 @@ wrap_module:
 wrap_module_valid:
     ; Wrap function in minimal module IR
     ; Format: "target datalayout = \"...\"\ntarget triple = \"...\"\n\n[func_ir]\n"
-    %data_layout_array = bitcast [38 x i8]* @.str.data_layout_value to i8*
-    %data_layout_len = add i64 37, 0  ; length without null (e-m:o-i64:64-f80:128-n8:16:32:64-S128 = 37 chars)
+    %data_layout_array = bitcast [35 x i8]* @.str.data_layout_value to i8*
+    %data_layout_len = add i64 34, 0  ; length without null (e-m:o-i64:64-i128:128-n32:64-S128 = 34 chars)
     %data_layout_prefix_len = add i64 21, 0  ; "target datalayout = \"" (21 chars)
     %data_layout_suffix_len = add i64 2, 0   ; "\"\n" (2 chars)
     %data_layout_total = add i64 %data_layout_prefix_len, %data_layout_len
     %data_layout_with_suffix = add i64 %data_layout_total, %data_layout_suffix_len
     
-    %target_triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
-    %target_triple_len = add i64 26, 0  ; length without null (x86_64-apple-macosx10.15.0 = 26 chars)
+    %target_triple_array = bitcast [18 x i8]* @.str.target_triple_value to i8*
+    %target_triple_len = add i64 17, 0  ; length without null (arm64-apple-darwin = 17 chars)
     %target_triple_prefix_len = add i64 17, 0  ; "target triple = \"" (17 chars)
     %target_triple_suffix_len = add i64 3, 0   ; "\"\n\n" (3 chars)
     %target_triple_total = add i64 %target_triple_prefix_len, %target_triple_len
@@ -3080,7 +3093,7 @@ get_triple:
     
 use_hardcoded_triple:
     ; Fallback to hardcoded triple if default fails
-    %triple_array = bitcast [27 x i8]* @.str.target_triple_value to i8*
+    %triple_array = bitcast [18 x i8]* @.str.target_triple_value to i8*
     br label %get_target_with_triple
     
 get_target:
@@ -3140,7 +3153,7 @@ error:
 declare i32 @printf(i8*, ...)
 
 ; String literals
-@.str.target_triple = private unnamed_addr constant [47 x i8] c"target triple = \22x86_64-apple-macosx10.15.0\22\0A\0A\00"
+@.str.target_triple = private unnamed_addr constant [39 x i8] c"target triple = \22arm64-apple-darwin\22\0A\0A\00"
 @.str.printf_decl = private unnamed_addr constant [42 x i8] c"declare i32 @printf(i8* nocapture, ...)\0A\0A\00"
 @.str.debug_prefix_lexer = private unnamed_addr constant [9 x i8] c"[LEXER] \00"
 @.str.debug_prefix_parser = private unnamed_addr constant [10 x i8] c"[PARSER] \00"
@@ -3257,8 +3270,8 @@ declare i32 @printf(i8*, ...)
 @.str.debug_retrieving_name_node = private unnamed_addr constant [31 x i8] c"Retrieving name node from pair\00"
 @.str.debug_name_node_type = private unnamed_addr constant [31 x i8] c"Name node type=%d atom_type=%d\00"
 @.str.module_name = private unnamed_addr constant [5 x i8] c"vibe\00"
-@.str.target_triple_value = private unnamed_addr constant [27 x i8] c"x86_64-apple-macosx10.15.0\00"
-@.str.data_layout_value = private unnamed_addr constant [38 x i8] c"e-m:o-i64:64-f80:128-n8:16:32:64-S128\00"
+@.str.target_triple_value = private unnamed_addr constant [19 x i8] c"arm64-apple-darwin\00"
+@.str.data_layout_value = private unnamed_addr constant [34 x i8] c"e-m:o-i64:64-i128:128-n32:64-S128\00"
 @.str.space_at = private unnamed_addr constant [3 x i8] c" @\00"
 @.str.newline_close_brace = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
 @.str.main_name = private unnamed_addr constant [5 x i8] c"main\00"

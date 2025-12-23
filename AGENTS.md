@@ -65,6 +65,16 @@ Each chat document should include:
 - Use consistent type definitions across modules
 - Document all functions with their purpose and parameters
 
+### Synchronizing `*_no_vibe.ll` Files
+
+**IMPORTANT**: When making changes to `.ll` files that have corresponding `*_no_vibe.ll` files (e.g., `lexer.ll` and `lexer_no_vibe.ll`), you must synchronize the changes. The `*_no_vibe.ll` files are used when building `vibe_kernel` in KERNEL mode, and they contain the non-migrated functions that haven't been moved to `.vibe` files yet.
+
+- **When to synchronize**: Any time you modify a function or logic in a `.ll` file that also exists in the corresponding `*_no_vibe.ll` file
+- **What to synchronize**: Function implementations, type definitions, constants, and any logic changes
+- **Future goal**: Eventually all code will be migrated to `.vibe` files, but until then, keep `*_no_vibe.ll` files in sync with their `.ll` counterparts
+
+Example: If you fix number parsing in `bootstrap/lexer/lexer.ll`, you must also apply the same fix to `bootstrap/lexer/lexer_no_vibe.ll` if that function hasn't been migrated to `lexer.vibe` yet.
+
 ### Error Handling
 
 - Always provide informative error messages
@@ -134,18 +144,23 @@ Example programs and tutorials demonstrating Vibe features.
 
 ### Target Triple Restriction
 
-**IMPORTANT**: All LLVM IR files currently hardcode the target triple to the build system's architecture (e.g., `x86_64-apple-macosx10.15.0`). This means:
+**IMPORTANT**: All LLVM IR files currently hardcode the target triple to the build system's architecture. This means:
 
 - The bootstrap compiler will only work on the same architecture/OS it was built on
 - Cross-compilation is not currently supported (this is a future goal)
 - Developers should be aware that target triples in `.ll` files match their development machine
 
+**Current Configuration**:
+- **Apple Silicon (arm64)**: `arm64-apple-darwin` with data layout `"e-m:o-i64:64-i128:128-n32:64-S128"`
+- **Intel macOS (x86_64)**: Previously `x86_64-apple-macosx10.15.0` (now updated to arm64)
+
 When adding new `.ll` files, use the same target triple as existing files. The target triple can be found at the top of any `.ll` file:
 ```
-target triple = "x86_64-apple-macosx10.15.0"
+target triple = "arm64-apple-darwin"
+target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
 ```
 
-For Linux builds, update the target triple to match your distribution (e.g., `x86_64-unknown-linux-gnu`).
+For Linux builds, update the target triple to match your distribution (e.g., `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` for ARM64 Linux).
 
 ### Build System Notes
 
@@ -154,6 +169,16 @@ For Linux builds, update the target triple to match your distribution (e.g., `x8
 - FFI is reintroduced to enable calling LLVM C API functions at runtime
 - FFI requires dynamic library loading (dlopen/dlsym) - libdl on Linux, built-in on macOS
 - LLVM libraries will be loaded via FFI at runtime for bitcode generation
+- Architecture-specific LLVM components are automatically linked based on the target triple (AArch64 for arm64, X86 for x86_64)
+
+### Platform-Aware Target Initialization
+
+The `llvm_initialize_native_target()` function in `bootstrap/runtime/ffi.ll` automatically detects the target architecture at runtime and initializes the appropriate LLVM target components:
+
+- **ARM64/AArch64**: Initializes AArch64 target components (`LLVMInitializeAArch64TargetInfo`, etc.)
+- **X86_64**: Initializes X86 target components (`LLVMInitializeX86TargetInfo`, etc.)
+
+The function uses `LLVMGetDefaultTargetTriple()` to detect the architecture and calls the appropriate initialization functions. This allows the same code to work on both arm64 and x86_64 platforms without requiring separate code paths.
 
 ## Key Concepts
 
