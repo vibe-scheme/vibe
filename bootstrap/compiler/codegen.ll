@@ -85,6 +85,13 @@ declare %LLVMValueRef @llvm_build_call(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValue
 declare %LLVMValueRef @llvm_build_gep(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
 declare %LLVMValueRef @llvm_build_bitcast(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
 declare void @llvm_build_store(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef)
+declare %LLVMValueRef @llvm_build_load(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_icmp(%LLVMBuilderRef, i32, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_br(%LLVMBuilderRef, %LLVMBasicBlockRef)
+declare %LLVMValueRef @llvm_build_cond_br(%LLVMBuilderRef, %LLVMValueRef, %LLVMBasicBlockRef, %LLVMBasicBlockRef)
+declare %LLVMValueRef @llvm_build_zext(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @llvm_build_add(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_or(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
 declare %LLVMValueRef @llvm_add_global(%LLVMModuleRef, %LLVMTypeRef, i8*)
 declare void @llvm_set_initializer(%LLVMValueRef, %LLVMValueRef)
 declare void @llvm_set_global_constant(%LLVMValueRef, i32)
@@ -2962,7 +2969,18 @@ do_link:
     
 success_after_link:
     ; Linking succeeded - function is now in main module
-    ; Note: Don't dispose temp module - LLVMLinkModules2 invalidates it
+    ; Dispose temp module after linking (it's now empty but still needs to be freed)
+    ; According to LLVM docs, LLVMLinkModules2 moves content from src to dest,
+    ; leaving src empty. The empty module should still be disposed to free memory.
+    %temp_module_success = load %LLVMModuleRef, %LLVMModuleRef* %temp_module_ptr
+    %temp_module_success_null = icmp eq %LLVMModuleRef %temp_module_success, null
+    br i1 %temp_module_success_null, label %return_success, label %dispose_temp_success
+    
+dispose_temp_success:
+    call void @llvm_dispose_module(%LLVMModuleRef %temp_module_success)
+    br label %return_success
+    
+return_success:
     ret i32 0
     
 dispose_temp_and_error:
@@ -3037,6 +3055,38 @@ error:
     ret i32 -1
 }
 
+; codegen_write_ir_text: Write module IR text to file using LLVM API
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   filename: Output file path (null-terminated string)
+; Returns: 0 on success, -1 on error
+define i32 @codegen_write_ir_text(%CodeGen* %cg, i8* %filename) {
+entry:
+    %cg_null = icmp eq %CodeGen* %cg, null
+    br i1 %cg_null, label %error, label %get_module
+    
+get_module:
+    ; Get LLVM module from CodeGen structure
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    br i1 %module_null, label %error, label %write
+    
+write:
+    ; Write IR text to file
+    %error_msg = alloca i8*
+    store i8* null, i8** %error_msg
+    %result = call i32 @llvm_print_module_to_file(%LLVMModuleRef %module, i8* %filename, i8** %error_msg)
+    %write_failed = icmp ne i32 %result, 0
+    br i1 %write_failed, label %error, label %success
+    
+success:
+    ret i32 0
+    
+error:
+    ret i32 -1
+}
+
 ; codegen_write_bitcode: Write module bitcode to file using LLVM API
 ; Parameters:
 ;   cg: Pointer to CodeGen structure
@@ -3055,6 +3105,15 @@ get_module:
     br i1 %module_null, label %error, label %write
     
 write:
+    ; Verify module before writing (helps ensure module is in valid state)
+    ; Note: We ignore verification errors as they may be false positives
+    ; (e.g., vararg functions, global initializers), but verification itself
+    ; may help finalize module state for proper bitcode writing
+    %verify_error_msg = alloca i8*
+    store i8* null, i8** %verify_error_msg
+    %verify_result = call i32 @llvm_verify_module(%LLVMModuleRef %module, i32 1, i8** %verify_error_msg)
+    ; Continue regardless of verification result
+    
     ; Write bitcode to file
     %result = call i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %filename)
     %write_failed = icmp ne i32 %result, 0
@@ -3360,6 +3419,23 @@ declare i32 @printf(i8*, ...)
 @.str.let_star = private unnamed_addr constant [5 x i8] c"let*\00"
 @.str.dsl_bitcast = private unnamed_addr constant [13 x i8] c"llvm:bitcast\00"
 @.str.dsl_store = private unnamed_addr constant [11 x i8] c"llvm:store\00"
+@.str.dsl_load = private unnamed_addr constant [10 x i8] c"llvm:load\00"
+@.str.dsl_icmp = private unnamed_addr constant [10 x i8] c"llvm:icmp\00"
+@.str.dsl_br = private unnamed_addr constant [8 x i8] c"llvm:br\00"
+@.str.dsl_zext = private unnamed_addr constant [10 x i8] c"llvm:zext\00"
+@.str.dsl_add = private unnamed_addr constant [9 x i8] c"llvm:add\00"
+@.str.dsl_or = private unnamed_addr constant [8 x i8] c"llvm:or\00"
+@.str.dsl_label = private unnamed_addr constant [11 x i8] c"llvm:label\00"
+@.str.pred_eq = private unnamed_addr constant [3 x i8] c"eq\00"
+@.str.pred_ne = private unnamed_addr constant [3 x i8] c"ne\00"
+@.str.pred_uge = private unnamed_addr constant [4 x i8] c"uge\00"
+@.str.pred_ult = private unnamed_addr constant [4 x i8] c"ult\00"
+@.str.pred_ugt = private unnamed_addr constant [4 x i8] c"ugt\00"
+@.str.pred_ule = private unnamed_addr constant [4 x i8] c"ule\00"
+@.str.pred_sge = private unnamed_addr constant [4 x i8] c"sge\00"
+@.str.pred_slt = private unnamed_addr constant [4 x i8] c"slt\00"
+@.str.pred_sgt = private unnamed_addr constant [4 x i8] c"sgt\00"
+@.str.pred_sle = private unnamed_addr constant [4 x i8] c"sle\00"
 
 ; ============================================================================
 ; Debug Logging Helpers
@@ -3908,9 +3984,38 @@ check_type:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_expr_type, i32 0, i32 0), i32 %expr_type)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-    ; Check if atom (type 0) or list (type 1)
+    ; Check if quote (type 2), atom (type 0), or list (type 1)
+    %is_quote = icmp eq i32 %expr_type, 2  ; AST_QUOTE
+    br i1 %is_quote, label %handle_quote, label %check_atom
+    
+check_atom:
     %is_atom = icmp eq i32 %expr_type, 0  ; AST_ATOM
     br i1 %is_atom, label %handle_atom, label %handle_list
+    
+handle_quote:
+    ; Extract quoted expression from car field
+    %quote_car_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 4
+    %quoted_expr = load %ASTNode*, %ASTNode** %quote_car_ptr
+    %quoted_expr_null = icmp eq %ASTNode* %quoted_expr, null
+    br i1 %quoted_expr_null, label %return_null, label %check_quoted_atom
+    
+check_quoted_atom:
+    ; Check if quoted expression is an atom (type 0)
+    %quoted_type_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 0
+    %quoted_type = load i32, i32* %quoted_type_ptr
+    %quoted_is_atom = icmp eq i32 %quoted_type, 0  ; AST_ATOM
+    br i1 %quoted_is_atom, label %extract_atom_name, label %return_null
+    
+extract_atom_name:
+    ; Extract atom name and return as special marker
+    ; For now, we'll use a helper function to extract the atom name
+    ; This will be used by llvm:icmp, llvm:br, llvm:label to get quoted identifiers
+    ; We need to return the atom name somehow - but LLVMValueRef can't hold strings directly
+    ; Instead, we'll store it in a special way that handlers can extract
+    ; For now, return null and let handlers call codegen_extract_quoted_atom directly
+    ; This is a limitation - we need a way to pass quoted atom names through the evaluation
+    ; The handlers will check if their argument is AST_QUOTE and extract it themselves
+    ret %LLVMValueRef null
     
 handle_atom:
     ; Debug logging
@@ -4301,11 +4406,81 @@ check_store:
     ; Check for "llvm:store" form
     %is_store = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.dsl_store, i32 0, i32 0), i64 10)
     %is_store_bool = icmp ne i32 %is_store, 0
-    br i1 %is_store_bool, label %call_store, label %unknown_primitive
+    br i1 %is_store_bool, label %call_store, label %check_load
     
 call_store:
     %store_result = call %LLVMValueRef @codegen_dsl_store(%CodeGen* %cg, %ASTNode* %args_list)
     ret %LLVMValueRef %store_result
+    
+check_load:
+    ; Check for "llvm:load" form
+    %is_load = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.dsl_load, i32 0, i32 0), i64 9)
+    %is_load_bool = icmp ne i32 %is_load, 0
+    br i1 %is_load_bool, label %call_load, label %check_icmp
+    
+call_load:
+    %load_result = call %LLVMValueRef @codegen_dsl_load(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %load_result
+    
+check_icmp:
+    ; Check for "llvm:icmp" form
+    %is_icmp = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.dsl_icmp, i32 0, i32 0), i64 9)
+    %is_icmp_bool = icmp ne i32 %is_icmp, 0
+    br i1 %is_icmp_bool, label %call_icmp, label %check_br
+    
+call_icmp:
+    %icmp_result = call %LLVMValueRef @codegen_dsl_icmp(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %icmp_result
+    
+check_br:
+    ; Check for "llvm:br" form
+    %is_br = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.dsl_br, i32 0, i32 0), i64 7)
+    %is_br_bool = icmp ne i32 %is_br, 0
+    br i1 %is_br_bool, label %call_br, label %check_zext
+    
+call_br:
+    %br_result = call %LLVMValueRef @codegen_dsl_br(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %br_result
+    
+check_zext:
+    ; Check for "llvm:zext" form
+    %is_zext = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.dsl_zext, i32 0, i32 0), i64 9)
+    %is_zext_bool = icmp ne i32 %is_zext, 0
+    br i1 %is_zext_bool, label %call_zext, label %check_add
+    
+call_zext:
+    %zext_result = call %LLVMValueRef @codegen_dsl_zext(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %zext_result
+    
+check_add:
+    ; Check for "llvm:add" form
+    %is_add = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_add, i32 0, i32 0), i64 8)
+    %is_add_bool = icmp ne i32 %is_add, 0
+    br i1 %is_add_bool, label %call_add, label %check_or
+    
+call_add:
+    %add_result = call %LLVMValueRef @codegen_dsl_add(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %add_result
+    
+check_or:
+    ; Check for "llvm:or" form
+    %is_or = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.dsl_or, i32 0, i32 0), i64 7)
+    %is_or_bool = icmp ne i32 %is_or, 0
+    br i1 %is_or_bool, label %call_or, label %check_label
+    
+call_or:
+    %or_result = call %LLVMValueRef @codegen_dsl_or(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %or_result
+    
+check_label:
+    ; Check for "llvm:label" form
+    %is_label = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.dsl_label, i32 0, i32 0), i64 10)
+    %is_label_bool = icmp ne i32 %is_label, 0
+    br i1 %is_label_bool, label %call_label, label %unknown_primitive
+    
+call_label:
+    %label_result = call %LLVMValueRef @codegen_dsl_label(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %label_result
     
 handle_array_form:
     ; For "llvm-array" form, we return null and let the caller handle it
@@ -5832,6 +6007,623 @@ build_store:
     ; Build store instruction (returns void, so return null)
     call void @llvm_build_store(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMValueRef %ptr)
     ret %LLVMValueRef null
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_extract_quoted_atom: Extract atom name from AST_QUOTE node
+; Parameters:
+;   quote_node: AST_QUOTE node (type 2)
+;   name_out: Output parameter for atom name string
+;   len_out: Output parameter for atom name length
+; Returns: 0 on success, -1 on error
+define i32 @codegen_extract_quoted_atom(%ASTNode* %quote_node, i8** %name_out, i64* %len_out) {
+entry:
+    %quote_null = icmp eq %ASTNode* %quote_node, null
+    br i1 %quote_null, label %error, label %check_quote_type
+    
+check_quote_type:
+    %quote_type_ptr = getelementptr %ASTNode, %ASTNode* %quote_node, i32 0, i32 0
+    %quote_type = load i32, i32* %quote_type_ptr
+    %is_quote = icmp eq i32 %quote_type, 2  ; AST_QUOTE
+    br i1 %is_quote, label %get_quoted_expr, label %error
+    
+get_quoted_expr:
+    %car_ptr = getelementptr %ASTNode, %ASTNode* %quote_node, i32 0, i32 4
+    %quoted_expr = load %ASTNode*, %ASTNode** %car_ptr
+    %quoted_expr_null = icmp eq %ASTNode* %quoted_expr, null
+    br i1 %quoted_expr_null, label %error, label %check_atom
+    
+check_atom:
+    %quoted_type_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 0
+    %quoted_type = load i32, i32* %quoted_type_ptr
+    %is_atom = icmp eq i32 %quoted_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %extract_name, label %error
+    
+extract_name:
+    %atom_val_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 2
+    %atom_val = load i8*, i8** %atom_val_ptr
+    %atom_len_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 3
+    %atom_len = load i64, i64* %atom_len_ptr
+    
+    ; Store in output parameters
+    store i8* %atom_val, i8** %name_out
+    store i64 %atom_len, i64* %len_out
+    ret i32 0
+    
+error:
+    ret i32 -1
+}
+
+; codegen_dsl_load: Handle llvm:load form
+; Syntax: (llvm:load ptr type)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (ptr type)
+; Returns: LLVMValueRef for loaded value
+define %LLVMValueRef @codegen_dsl_load(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_ptr
+    
+get_ptr:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_ptr
+    
+eval_ptr:
+    ; Get ptr expression (first element)
+    %ptr_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %ptr_node = load %ASTNode*, %ASTNode** %ptr_node_ptr
+    %ptr = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %ptr_node)
+    %ptr_null = icmp eq %LLVMValueRef %ptr, null
+    br i1 %ptr_null, label %error, label %get_type
+    
+get_type:
+    ; Get type string (second element)
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_node_null = icmp eq %ASTNode* %type_node, null
+    br i1 %type_node_null, label %error, label %extract_type_string
+    
+extract_type_string:
+    ; Extract type string from atom node
+    %type_node_type_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 0
+    %type_node_type = load i32, i32* %type_node_type_ptr
+    %is_atom = icmp eq i32 %type_node_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %get_type_string, label %error
+    
+get_type_string:
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_val = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+    
+    ; Resolve type string to LLVMTypeRef
+    %load_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_val, i64 %type_len)
+    %load_type_null = icmp eq %LLVMTypeRef %load_type, null
+    br i1 %load_type_null, label %error, label %build_load
+    
+build_load:
+    ; Build load instruction with empty name
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %load_result = call %LLVMValueRef @llvm_build_load(%LLVMBuilderRef %builder, %LLVMTypeRef %load_type, %LLVMValueRef %ptr, i8* %empty_str)
+    ret %LLVMValueRef %load_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_add: Handle llvm:add form
+; Syntax: (llvm:add lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (lhs rhs)
+; Returns: LLVMValueRef for sum
+define %LLVMValueRef @codegen_dsl_add(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_lhs
+    
+get_lhs:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_lhs
+    
+eval_lhs:
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+    
+get_rhs:
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_add
+    
+build_add:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %add_result = call %LLVMValueRef @llvm_build_add(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %add_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_or: Handle llvm:or form
+; Syntax: (llvm:or lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (lhs rhs)
+; Returns: LLVMValueRef for result
+define %LLVMValueRef @codegen_dsl_or(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_lhs
+    
+get_lhs:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_lhs
+    
+eval_lhs:
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+    
+get_rhs:
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_or
+    
+build_or:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %or_result = call %LLVMValueRef @llvm_build_or(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %or_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_zext: Handle llvm:zext form
+; Syntax: (llvm:zext value source-type target-type)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (value source-type target-type)
+; Returns: LLVMValueRef for extended value
+define %LLVMValueRef @codegen_dsl_zext(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_value
+    
+get_value:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_value
+    
+eval_value:
+    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
+    %value = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %value_node)
+    %value_null = icmp eq %LLVMValueRef %value, null
+    br i1 %value_null, label %error, label %get_target_type
+    
+get_target_type:
+    ; Get target-type (third element, skip source-type)
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %target_type_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %target_type_node = load %ASTNode*, %ASTNode** %target_type_node_ptr
+    %target_type_node_null = icmp eq %ASTNode* %target_type_node, null
+    br i1 %target_type_node_null, label %error, label %extract_target_type_string
+    
+extract_target_type_string:
+    %target_type_node_type_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 0
+    %target_type_node_type = load i32, i32* %target_type_node_type_ptr
+    %is_atom = icmp eq i32 %target_type_node_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %get_target_type_string, label %error
+    
+get_target_type_string:
+    %target_type_val_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 2
+    %target_type_val = load i8*, i8** %target_type_val_ptr
+    %target_type_len_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 3
+    %target_type_len = load i64, i64* %target_type_len_ptr
+    
+    ; Resolve target type string to LLVMTypeRef
+    %zext_target_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %target_type_val, i64 %target_type_len)
+    %zext_target_type_null = icmp eq %LLVMTypeRef %zext_target_type, null
+    br i1 %zext_target_type_null, label %error, label %build_zext
+    
+build_zext:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %zext_result = call %LLVMValueRef @llvm_build_zext(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %zext_target_type, i8* %empty_str)
+    ret %LLVMValueRef %zext_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_map_predicate_string: Map predicate string to LLVMIntPredicate enum
+; Parameters:
+;   pred_str: Predicate string (e.g., "eq", "ne", "uge")
+;   pred_len: String length
+; Returns: LLVMIntPredicate enum value (i32), or -1 on error
+define i32 @codegen_map_predicate_string(i8* %pred_str, i64 %pred_len) {
+entry:
+    ; Compare with known predicates
+    ; "eq" -> 32 (LLVMIntEQ)
+    %is_eq = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.pred_eq, i32 0, i32 0), i64 2)
+    %is_eq_bool = icmp ne i32 %is_eq, 0
+    br i1 %is_eq_bool, label %return_eq, label %check_ne
+    
+return_eq:
+    ret i32 32  ; LLVMIntEQ
+    
+check_ne:
+    %is_ne = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.pred_ne, i32 0, i32 0), i64 2)
+    %is_ne_bool = icmp ne i32 %is_ne, 0
+    br i1 %is_ne_bool, label %return_ne, label %check_uge
+    
+return_ne:
+    ret i32 33  ; LLVMIntNE
+    
+check_uge:
+    %is_uge = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_uge, i32 0, i32 0), i64 3)
+    %is_uge_bool = icmp ne i32 %is_uge, 0
+    br i1 %is_uge_bool, label %return_uge, label %check_ult
+    
+return_uge:
+    ret i32 36  ; LLVMIntUGE
+    
+check_ult:
+    %is_ult = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ult, i32 0, i32 0), i64 3)
+    %is_ult_bool = icmp ne i32 %is_ult, 0
+    br i1 %is_ult_bool, label %return_ult, label %check_ugt
+    
+return_ult:
+    ret i32 35  ; LLVMIntULT
+    
+check_ugt:
+    %is_ugt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ugt, i32 0, i32 0), i64 3)
+    %is_ugt_bool = icmp ne i32 %is_ugt, 0
+    br i1 %is_ugt_bool, label %return_ugt, label %check_ule
+    
+return_ugt:
+    ret i32 37  ; LLVMIntUGT
+    
+check_ule:
+    %is_ule = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ule, i32 0, i32 0), i64 3)
+    %is_ule_bool = icmp ne i32 %is_ule, 0
+    br i1 %is_ule_bool, label %return_ule, label %check_sge
+    
+return_ule:
+    ret i32 34  ; LLVMIntULE
+    
+check_sge:
+    %is_sge = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sge, i32 0, i32 0), i64 3)
+    %is_sge_bool = icmp ne i32 %is_sge, 0
+    br i1 %is_sge_bool, label %return_sge, label %check_slt
+    
+return_sge:
+    ret i32 14  ; LLVMIntSGE
+    
+check_slt:
+    %is_slt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_slt, i32 0, i32 0), i64 3)
+    %is_slt_bool = icmp ne i32 %is_slt, 0
+    br i1 %is_slt_bool, label %return_slt, label %check_sgt
+    
+return_slt:
+    ret i32 13  ; LLVMIntSLT
+    
+check_sgt:
+    %is_sgt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sgt, i32 0, i32 0), i64 3)
+    %is_sgt_bool = icmp ne i32 %is_sgt, 0
+    br i1 %is_sgt_bool, label %return_sgt, label %check_sle
+    
+return_sgt:
+    ret i32 15  ; LLVMIntSGT
+    
+check_sle:
+    %is_sle = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sle, i32 0, i32 0), i64 3)
+    %is_sle_bool = icmp ne i32 %is_sle, 0
+    br i1 %is_sle_bool, label %return_sle, label %error
+    
+return_sle:
+    ret i32 12  ; LLVMIntSLE
+    
+error:
+    ret i32 -1
+}
+
+; codegen_dsl_icmp: Handle llvm:icmp form
+; Syntax: (llvm:icmp 'pred lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with ('pred lhs rhs)
+; Returns: LLVMValueRef (i1 boolean) for comparison result
+define %LLVMValueRef @codegen_dsl_icmp(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_pred
+    
+get_pred:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %check_pred_quote
+    
+check_pred_quote:
+    ; First arg must be AST_QUOTE node
+    %pred_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %pred_node = load %ASTNode*, %ASTNode** %pred_node_ptr
+    %pred_node_null = icmp eq %ASTNode* %pred_node, null
+    br i1 %pred_node_null, label %error, label %extract_pred
+    
+extract_pred:
+    ; Extract predicate name from quoted atom
+    %pred_name_out = alloca i8*
+    %pred_len_out = alloca i64
+    %extract_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %pred_node, i8** %pred_name_out, i64* %pred_len_out)
+    %extract_failed = icmp ne i32 %extract_result, 0
+    br i1 %extract_failed, label %error, label %map_predicate
+    
+map_predicate:
+    %pred_name = load i8*, i8** %pred_name_out
+    %pred_len = load i64, i64* %pred_len_out
+    %pred_enum = call i32 @codegen_map_predicate_string(i8* %pred_name, i64 %pred_len)
+    %pred_invalid = icmp eq i32 %pred_enum, -1
+    br i1 %pred_invalid, label %error, label %get_lhs
+    
+get_lhs:
+    ; Get lhs (second element)
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+    
+get_rhs:
+    ; Get rhs (third element)
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_icmp
+    
+build_icmp:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %icmp_result = call %LLVMValueRef @llvm_build_icmp(%LLVMBuilderRef %builder, i32 %pred_enum, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %icmp_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; Label tracking structure (simple linked list node)
+%LabelEntry = type { i8*, i64, %LLVMBasicBlockRef, %LabelEntry* }
+
+; codegen_get_or_create_label: Get or create a basic block with given name
+; Parameters:
+;   cg: CodeGen pointer
+;   func: LLVMValueRef for function
+;   name: Label name string
+;   name_len: Label name length
+; Returns: LLVMBasicBlockRef for the label, or null on error
+; Note: Creates label eagerly if it doesn't exist (forward reference handling)
+define %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %name, i64 %name_len) {
+entry:
+    %func_null = icmp eq %LLVMValueRef %func, null
+    br i1 %func_null, label %error, label %create_label
+    
+create_label:
+    ; Create null-terminated name string
+    %name_buf_size = add i64 %name_len, 1
+    %name_buf = call i8* @malloc(i64 %name_buf_size)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
+    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
+    store i8 0, i8* %name_null_ptr
+    
+    ; Create basic block with name
+    %block = call %LLVMBasicBlockRef @llvm_append_basic_block(%LLVMValueRef %func, i8* %name_buf)
+    
+    ; Note: We don't free name_buf here because LLVM may keep a reference to it
+    ; In a production system, we'd want to track allocated strings and free them later
+    ret %LLVMBasicBlockRef %block
+    
+error:
+    ret %LLVMBasicBlockRef null
+}
+
+; codegen_dsl_br: Handle llvm:br form
+; Syntax: (llvm:br 'label-name) or (llvm:br cond 'then-label 'else-label)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list
+; Returns: LLVMValueRef for branch instruction
+define %LLVMValueRef @codegen_dsl_br(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_func
+    
+get_func:
+    %func_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 8
+    %func = load %LLVMValueRef, %LLVMValueRef* %func_ptr
+    %func_null = icmp eq %LLVMValueRef %func, null
+    br i1 %func_null, label %error, label %check_args
+    
+check_args:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %check_first_arg
+    
+check_first_arg:
+    ; Get first argument
+    %first_arg_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %first_arg = load %ASTNode*, %ASTNode** %first_arg_ptr
+    %first_arg_null = icmp eq %ASTNode* %first_arg, null
+    br i1 %first_arg_null, label %error, label %check_if_quote
+    
+check_if_quote:
+    ; Check if first arg is AST_QUOTE (unconditional) or evaluated value (conditional)
+    %first_arg_type_ptr = getelementptr %ASTNode, %ASTNode* %first_arg, i32 0, i32 0
+    %first_arg_type = load i32, i32* %first_arg_type_ptr
+    %is_quote = icmp eq i32 %first_arg_type, 2  ; AST_QUOTE
+    br i1 %is_quote, label %unconditional_br, label %conditional_br
+    
+unconditional_br:
+    ; Extract label name from quoted atom
+    %label_name_out = alloca i8*
+    %label_len_out = alloca i64
+    %extract_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %first_arg, i8** %label_name_out, i64* %label_len_out)
+    %extract_failed = icmp ne i32 %extract_result, 0
+    br i1 %extract_failed, label %error, label %get_uncond_label
+    
+get_uncond_label:
+    %label_name = load i8*, i8** %label_name_out
+    %label_len = load i64, i64* %label_len_out
+    %block = call %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %label_name, i64 %label_len)
+    %block_null = icmp eq %LLVMBasicBlockRef %block, null
+    br i1 %block_null, label %error, label %build_uncond_br
+    
+build_uncond_br:
+    %br_result = call %LLVMValueRef @llvm_build_br(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %block)
+    ret %LLVMValueRef %br_result
+    
+conditional_br:
+    ; First arg is condition (already evaluated), second and third are labels
+    %cond = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %first_arg)
+    %cond_null = icmp eq %LLVMValueRef %cond, null
+    br i1 %cond_null, label %error, label %get_then_label
+    
+get_then_label:
+    ; Get then-label (second element, AST_QUOTE)
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %then_label_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 4
+    %then_label_node = load %ASTNode*, %ASTNode** %then_label_node_ptr
+    %then_label_name_out = alloca i8*
+    %then_label_len_out = alloca i64
+    %extract_then_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %then_label_node, i8** %then_label_name_out, i64* %then_label_len_out)
+    %extract_then_failed = icmp ne i32 %extract_then_result, 0
+    br i1 %extract_then_failed, label %error, label %get_else_label
+    
+get_else_label:
+    ; Get else-label (third element, AST_QUOTE)
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %else_label_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %else_label_node = load %ASTNode*, %ASTNode** %else_label_node_ptr
+    %else_label_name_out = alloca i8*
+    %else_label_len_out = alloca i64
+    %extract_else_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %else_label_node, i8** %else_label_name_out, i64* %else_label_len_out)
+    %extract_else_failed = icmp ne i32 %extract_else_result, 0
+    br i1 %extract_else_failed, label %error, label %get_blocks
+    
+get_blocks:
+    %then_label_name = load i8*, i8** %then_label_name_out
+    %then_label_len = load i64, i64* %then_label_len_out
+    %then_block = call %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %then_label_name, i64 %then_label_len)
+    %then_block_null = icmp eq %LLVMBasicBlockRef %then_block, null
+    br i1 %then_block_null, label %error, label %get_else_block
+    
+get_else_block:
+    %else_label_name = load i8*, i8** %else_label_name_out
+    %else_label_len = load i64, i64* %else_label_len_out
+    %else_block = call %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %else_label_name, i64 %else_label_len)
+    %else_block_null = icmp eq %LLVMBasicBlockRef %else_block, null
+    br i1 %else_block_null, label %error, label %build_cond_br
+    
+build_cond_br:
+    %cond_br_result = call %LLVMValueRef @llvm_build_cond_br(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMBasicBlockRef %then_block, %LLVMBasicBlockRef %else_block)
+    ret %LLVMValueRef %cond_br_result
+    
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_label: Handle llvm:label form
+; Syntax: (llvm:label 'name body ...)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with ('name body ...)
+; Returns: LLVMValueRef (basic block)
+define %LLVMValueRef @codegen_dsl_label(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_func
+    
+get_func:
+    %func_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 8
+    %func = load %LLVMValueRef, %LLVMValueRef* %func_ptr
+    %func_null = icmp eq %LLVMValueRef %func, null
+    br i1 %func_null, label %error, label %get_name
+    
+get_name:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %extract_name
+    
+extract_name:
+    ; First arg must be AST_QUOTE node with label name
+    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
+    %name_node_null = icmp eq %ASTNode* %name_node, null
+    br i1 %name_node_null, label %error, label %extract_atom_name
+    
+extract_atom_name:
+    %label_name_out = alloca i8*
+    %label_len_out = alloca i64
+    %extract_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %name_node, i8** %label_name_out, i64* %label_len_out)
+    %extract_failed = icmp ne i32 %extract_result, 0
+    br i1 %extract_failed, label %error, label %get_or_create_block
+    
+get_or_create_block:
+    %label_name = load i8*, i8** %label_name_out
+    %label_len = load i64, i64* %label_len_out
+    %block = call %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %label_name, i64 %label_len)
+    %block_null = icmp eq %LLVMBasicBlockRef %block, null
+    br i1 %block_null, label %error, label %position_builder
+    
+position_builder:
+    ; Position builder at end of this block
+    call void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %block)
+    
+    ; Get body (rest of args)
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %body = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    
+    ; Evaluate body expressions (void version - we don't need the return value)
+    call void @codegen_eval_dsl_body(%CodeGen* %cg, %ASTNode* %body)
+    
+    ; Return basic block as LLVMValueRef (cast)
+    %block_as_value = bitcast %LLVMBasicBlockRef %block to %LLVMValueRef
+    ret %LLVMValueRef %block_as_value
     
 error:
     ret %LLVMValueRef null

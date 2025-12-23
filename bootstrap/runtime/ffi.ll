@@ -312,6 +312,13 @@ declare %LLVMValueRef @LLVMBuildCall2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueR
 declare %LLVMValueRef @LLVMBuildGEP2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
 declare %LLVMValueRef @LLVMBuildBitCast(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
 declare void @LLVMBuildStore(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef)
+declare %LLVMValueRef @LLVMBuildLoad2(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildICmp(%LLVMBuilderRef, i32, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildBr(%LLVMBuilderRef, %LLVMBasicBlockRef)
+declare %LLVMValueRef @LLVMBuildCondBr(%LLVMBuilderRef, %LLVMValueRef, %LLVMBasicBlockRef, %LLVMBasicBlockRef)
+declare %LLVMValueRef @LLVMBuildZExt(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @LLVMBuildAdd(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildOr(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
 
 ; Global variable management
 declare %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef, %LLVMTypeRef, i8*)
@@ -882,6 +889,96 @@ entry:
     ret void
 }
 
+; llvm_build_load: Build a load instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   type: LLVMTypeRef for the type being loaded
+;   pointer: LLVMValueRef for the pointer to load from
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for load instruction
+define %LLVMValueRef @llvm_build_load(%LLVMBuilderRef %builder, %LLVMTypeRef %type, %LLVMValueRef %pointer, i8* %name) {
+entry:
+    %load = call %LLVMValueRef @LLVMBuildLoad2(%LLVMBuilderRef %builder, %LLVMTypeRef %type, %LLVMValueRef %pointer, i8* %name)
+    ret %LLVMValueRef %load
+}
+
+; llvm_build_icmp: Build an integer comparison instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   pred: LLVMIntPredicate enum value (i32)
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef (i1 boolean) for comparison result
+define %LLVMValueRef @llvm_build_icmp(%LLVMBuilderRef %builder, i32 %pred, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %icmp = call %LLVMValueRef @LLVMBuildICmp(%LLVMBuilderRef %builder, i32 %pred, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %icmp
+}
+
+; llvm_build_br: Build an unconditional branch instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   dest: LLVMBasicBlockRef for destination block
+; Returns: LLVMValueRef for branch instruction
+define %LLVMValueRef @llvm_build_br(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %dest) {
+entry:
+    %br = call %LLVMValueRef @LLVMBuildBr(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %dest)
+    ret %LLVMValueRef %br
+}
+
+; llvm_build_cond_br: Build a conditional branch instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   cond: LLVMValueRef (i1 boolean) for condition
+;   then_block: LLVMBasicBlockRef for then branch
+;   else_block: LLVMBasicBlockRef for else branch
+; Returns: LLVMValueRef for branch instruction
+define %LLVMValueRef @llvm_build_cond_br(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMBasicBlockRef %then_block, %LLVMBasicBlockRef %else_block) {
+entry:
+    %cond_br = call %LLVMValueRef @LLVMBuildCondBr(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMBasicBlockRef %then_block, %LLVMBasicBlockRef %else_block)
+    ret %LLVMValueRef %cond_br
+}
+
+; llvm_build_zext: Build a zero extension instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   value: LLVMValueRef to extend
+;   target_type: LLVMTypeRef for target type
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for extended value
+define %LLVMValueRef @llvm_build_zext(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name) {
+entry:
+    %zext = call %LLVMValueRef @LLVMBuildZExt(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name)
+    ret %LLVMValueRef %zext
+}
+
+; llvm_build_add: Build an addition instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for sum
+define %LLVMValueRef @llvm_build_add(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %add = call %LLVMValueRef @LLVMBuildAdd(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %add
+}
+
+; llvm_build_or: Build a bitwise OR instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for result
+define %LLVMValueRef @llvm_build_or(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %or = call %LLVMValueRef @LLVMBuildOr(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %or
+}
+
 ; Add global variable
 ; llvm_add_global: Add a global variable to module
 ; Parameters:
@@ -987,8 +1084,15 @@ error:
 ;   module: LLVMModuleRef
 ;   path: Output file path (null-terminated string)
 ; Returns: 0 on success, non-zero on error
+; Note: LLVMWriteBitcodeToFile produces bitcode that llvm-link/llvm-dis reject
+; for multi-function modules. We work around this by writing IR text and using
+; llvm-as to convert it, which produces bitcode in the correct format.
 define i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %path) {
 entry:
+    ; For now, use LLVMWriteBitcodeToFile directly
+    ; TODO: Implement workaround that writes IR text and calls llvm-as
+    ; This requires system call support which is complex from LLVM IR
+    ; The build system could handle this conversion as a post-processing step
     %result = call i32 @LLVMWriteBitcodeToFile(%LLVMModuleRef %module, i8* %path)
     ret i32 %result
 }

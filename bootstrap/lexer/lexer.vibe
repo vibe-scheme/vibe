@@ -36,3 +36,99 @@
     (llvm:store (llvm:const-int |i32| 1) line_ptr)
     (llvm:store (llvm:const-int |i32| 1) col_ptr)
     (llvm:ret lexer_ptr)))
+
+; lex_is_eof: Check if lexer has reached end of source
+; Returns 1 if EOF, 0 otherwise. Compares current position (pos) with 
+; source length (source_len) using unsigned greater-or-equal comparison.
+; Uses zero extension to convert boolean result (i1) to i32 return type.
+(llvm:define-function (lex_is_eof (lexer |%Lexer*|)) |i32|
+  (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+         (pos (llvm:load pos_ptr |i64|))
+         (len_ptr (llvm:gep |%Lexer| lexer 0 1))
+         (len (llvm:load len_ptr |i64|))
+         (cmp (llvm:icmp 'uge pos len))
+         (result (llvm:zext cmp |i1| |i32|)))
+    (llvm:ret result)))
+
+; lex_current_char: Get character at current position
+; Returns current character (i8) if not EOF, or 0 if EOF. Uses lex_is_eof 
+; to check bounds before accessing source buffer. If EOF, returns 0 immediately.
+; Otherwise, loads source pointer and position, computes character address via 
+; getelementptr, and loads the character.
+(llvm:define-function (lex_current_char (lexer |%Lexer*|)) |i8|
+  (let* ((is_eof (llvm:call lex_is_eof lexer))
+         (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+    ; Branch instruction comes first (in entry block)
+    (llvm:br eof_bool 'eof 'not_eof)
+    ; Then define the label blocks
+    (llvm:label 'eof
+      (llvm:ret (llvm:const-int |i8| 0)))
+    (llvm:label 'not_eof
+      (let* ((source_ptr (llvm:gep |%Lexer| lexer 0 0))
+             (source (llvm:load source_ptr |i8*|))
+             (pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+             (pos (llvm:load pos_ptr |i64|))
+             (char_ptr (llvm:gep |i8| source pos))
+             (char (llvm:load char_ptr |i8|)))
+        (llvm:ret char)))))
+
+; lex_advance: Move to next character, updating line/column tracking
+; If current character is newline (10), increments line and resets column to 1.
+; Otherwise, increments column. Always increments position. Does nothing if 
+; already at EOF. Uses lex_current_char to get current character, then branches 
+; based on whether it's a newline.
+(llvm:define-function (lex_advance (lexer |%Lexer*|)) |void|
+    (let* ((is_eof (llvm:call lex_is_eof lexer))
+            (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+    (llvm:br eof_bool 'done 'advance)
+    (llvm:label 'done
+                (llvm:ret-void))
+    (llvm:label 'advance
+                (let* ((char (llvm:call lex_current_char lexer))
+                        (char_int (llvm:zext char |i8| |i32|))
+                        (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10))))
+                    (llvm:br is_newline 'newline 'normal)
+                    (llvm:label 'newline
+                                (let* ((line_ptr (llvm:gep |%Lexer| lexer 0 3))
+                                        (line (llvm:load line_ptr |i32|))
+                                        (new_line (llvm:add line (llvm:const-int |i32| 1)))
+                                        (col_ptr (llvm:gep |%Lexer| lexer 0 4)))
+                                (llvm:store new_line line_ptr)
+                                (llvm:store (llvm:const-int |i32| 1) col_ptr)
+                                (llvm:br 'increment_pos)))
+                    (llvm:label 'normal
+                                (let* ((col_ptr (llvm:gep |%Lexer| lexer 0 4))
+                                        (col (llvm:load col_ptr |i32|))
+                                        (new_col (llvm:add col (llvm:const-int |i32| 1))))
+                                (llvm:store new_col col_ptr)
+                                (llvm:br 'increment_pos)))
+                    (llvm:label 'increment_pos
+                                (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+                                        (pos (llvm:load pos_ptr |i64|))
+                                        (new_pos (llvm:add pos (llvm:const-int |i64| 1))))
+                                (llvm:store new_pos pos_ptr)
+                                (llvm:br 'done)))))
+    (llvm:ret-void)))
+
+; lex_skip_whitespace: Skip whitespace characters (space, tab, newline, carriage return)
+; Repeatedly calls lex_current_char and lex_advance until a non-whitespace character 
+; is encountered or EOF is reached. Uses a loop that checks if current character is 
+; any whitespace type, branching to skip (advance and loop) or done (return).
+(llvm:define-function (lex_skip_whitespace (lexer |%Lexer*|)) |void|
+  (llvm:label 'loop
+    (let* ((char (llvm:call lex_current_char lexer))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_space (llvm:icmp 'eq char_int (llvm:const-int |i32| 32)))
+           (is_tab (llvm:icmp 'eq char_int (llvm:const-int |i32| 9)))
+           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
+           (is_cr (llvm:icmp 'eq char_int (llvm:const-int |i32| 13)))
+           (is_ws1 (llvm:or is_space is_tab))
+           (is_ws2 (llvm:or is_newline is_cr))
+           (is_ws (llvm:or is_ws1 is_ws2)))
+      ; Branch before label definitions
+      (llvm:br is_ws 'skip 'done)
+      (llvm:label 'skip
+        (llvm:call lex_advance lexer)
+        (llvm:br 'loop))
+      (llvm:label 'done
+        (llvm:ret-void)))))

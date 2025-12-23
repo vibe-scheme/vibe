@@ -258,19 +258,31 @@ use_arg2:
     br label %write_bitcode
 
 write_bitcode:
-    ; Write bitcode or object file based on extension
+    ; Write bitcode, IR text, or object file based on extension
     %output_file_phi = phi i8* [ %output_file_o, %get_output_file ], [ %output_file_arg, %use_arg2 ]
     
     ; Check if output file ends with .o (object file)
-    %ext_check = call i32 @check_extension(i8* %output_file_phi, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.dot_o, i32 0, i32 0))
-    %is_object_file = icmp ne i32 %ext_check, 0
-    br i1 %is_object_file, label %write_object, label %write_bc
+    %ext_o_check = call i32 @check_extension(i8* %output_file_phi, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.dot_o, i32 0, i32 0))
+    %is_object_file = icmp ne i32 %ext_o_check, 0
+    br i1 %is_object_file, label %write_object, label %check_ll
+    
+check_ll:
+    ; Check if output file ends with .ll (IR text)
+    %ext_ll_check = call i32 @check_extension(i8* %output_file_phi, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.dot_ll, i32 0, i32 0))
+    %is_ir_text = icmp ne i32 %ext_ll_check, 0
+    br i1 %is_ir_text, label %write_ir_text, label %write_bc
     
 write_object:
     ; Write object file directly
     %write_obj_result = call i32 @codegen_write_object_file(%CodeGen* %codegen, i8* %output_file_phi)
     %write_obj_failed = icmp ne i32 %write_obj_result, 0
     br i1 %write_obj_failed, label %write_error, label %done
+    
+write_ir_text:
+    ; Write IR text to file (for conversion with llvm-as)
+    %write_ir_result = call i32 @codegen_write_ir_text(%CodeGen* %codegen, i8* %output_file_phi)
+    %write_ir_failed = icmp ne i32 %write_ir_result, 0
+    br i1 %write_ir_failed, label %write_error, label %done
     
 write_bc:
     ; Write bitcode to file using LLVM API
@@ -609,6 +621,7 @@ error:
 @.str.define_bitcode_function = private unnamed_addr constant [24 x i8] c"define-bitcode-function\00"
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 @.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"
+@.str.dot_ll = private unnamed_addr constant [4 x i8] c".ll\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
@@ -628,5 +641,6 @@ declare i32 @codegen_define_llvm_function(%CodeGen*, %ASTNode*)
 declare i32 @codegen_define_llvm_ffi_function(%CodeGen*, %ASTNode*)
 declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
+declare i32 @codegen_write_ir_text(%CodeGen*, i8*)
 declare i32 @codegen_write_object_file(%CodeGen*, i8*)
 declare i32 @codegen_emit_debug_files(%CodeGen*, i8*)
