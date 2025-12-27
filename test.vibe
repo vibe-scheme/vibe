@@ -1,0 +1,11 @@
+(llvm:define-ffi-function (printf (fmt-string |i8*|)) |i32| ("/usr/lib/libSystem.B.dylib" "printf") #t)
+
+(llvm:define-function (bool-test (n |i8|)) |i8|
+  (let* ((is_same (llvm:icmp 'eq n (llvm:const-int |i8| 42))))
+    (llvm:br is_same 'same 'different)
+    (llvm:label 'same
+      (llvm:ret (llvm:const-int |i8| 1)))
+    (llvm:label 'different
+      (llvm:ret (llvm:const-int |i8| 0)))))
+
+;(llvm:call printf (llvm:array (bool-test 42)) "")

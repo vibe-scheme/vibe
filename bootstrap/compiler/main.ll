@@ -232,7 +232,6 @@ generate_code:
     call i32 @codegen_main(%CodeGen* %codegen, %ASTNode* %exprs)
     
     ; Emit debug files for inspection
-    call i32 @codegen_emit_debug_files(%CodeGen* %codegen, i8* %input_file)
     
     ; Check for output file argument
     %has_output = icmp ugt i32 %argc, 2
@@ -643,4 +642,3 @@ declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
 declare i32 @codegen_write_ir_text(%CodeGen*, i8*)
 declare i32 @codegen_write_object_file(%CodeGen*, i8*)
-declare i32 @codegen_emit_debug_files(%CodeGen*, i8*)

@@ -76,9 +76,13 @@ declare i32 @llvm_count_params(%LLVMValueRef)
 declare %LLVMValueRef @llvm_get_param(%LLVMValueRef, i32)
 declare void @llvm_set_value_name(%LLVMValueRef, i8*)
 declare %LLVMBasicBlockRef @llvm_append_basic_block(%LLVMValueRef, i8*)
+declare %LLVMBasicBlockRef @llvm_get_first_basic_block(%LLVMValueRef)
+declare %LLVMBasicBlockRef @llvm_get_next_basic_block(%LLVMBasicBlockRef)
+declare i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef)
 declare %LLVMBuilderRef @llvm_create_builder(%LLVMContextRef)
 declare void @llvm_dispose_builder(%LLVMBuilderRef)
 declare void @llvm_position_builder_at_end(%LLVMBuilderRef, %LLVMBasicBlockRef)
+declare %LLVMBasicBlockRef @llvm_get_insert_block(%LLVMBuilderRef)
 declare %LLVMValueRef @llvm_build_ret_void(%LLVMBuilderRef)
 declare %LLVMValueRef @llvm_build_ret(%LLVMBuilderRef, %LLVMValueRef)
 declare %LLVMValueRef @llvm_build_call(%LLVMBuilderRef, %LLVMTypeRef, %LLVMValueRef, %LLVMValueRef*, i32, i8*)
@@ -814,9 +818,12 @@ create_string_constant:
     br i1 %i8_type_const_null, label %text_only_constant, label %create_const_str
     
 create_const_str:
-    ; Create constant string value (with null terminator)
+    ; Create constant string value
+    ; Note: If the bytevector already includes a null terminator, we should pass dont_null_terminate=1
+    ; For now, we'll check if the last byte is null and adjust accordingly
+    ; But for simplicity, assume bytevectors include null terminator and pass dont_null_terminate=1
     %value_len_int_const = trunc i64 %value_len to i32
-    %const_str_value = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %value, i32 %value_len_int_const, i32 0)
+    %const_str_value = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %value, i32 %value_len_int_const, i32 1)
     %const_str_value_null = icmp eq %LLVMValueRef %const_str_value, null
     br i1 %const_str_value_null, label %text_only_constant, label %create_global
     
@@ -1499,19 +1506,6 @@ not_found_func:
 ; TODO: Future version will use llvm_create_function_type() and llvm_add_function() via FFI instead of text IR
 define i32 @codegen_define_bitcode_function(%CodeGen* %cg, %ASTNode* %node) {
 entry:
-    ; DEBUG: Write that we're processing define-bitcode-function
-    %debug_define_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
-    %debug_define_fd = call i32 @open(i8* %debug_define_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
-    %debug_define_fd_valid = icmp sge i32 %debug_define_fd, 0
-    br i1 %debug_define_fd_valid, label %write_define_debug, label %continue_define
-    
-write_define_debug:
-    %define_msg = getelementptr [40 x i8], [40 x i8]* @.str.processing_define_bitcode, i32 0, i32 0
-    call i64 @write(i32 %debug_define_fd, i8* %define_msg, i32 39)
-    call i32 @close(i32 %debug_define_fd)
-    br label %continue_define
-    
-continue_define:
     ; AST structure: LIST { ATOM: "define-bitcode-function", LIST: signature, ATOM: return-type, STRING: body }
     ; Get signature list (second element)
     %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
@@ -1628,31 +1622,6 @@ continue_define:
     %pos_val17 = load i64, i64* %pos
     %null_ptr = getelementptr i8, i8* %func_def_buf, i64 %pos_val17
     store i8 0, i8* %null_ptr
-    
-    ; DEBUG: Write function IR to debug file before parsing
-    ; This helps us see what IR is being generated
-    %debug_func_ir_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_func_ir, i32 0, i32 0
-    %debug_fd = call i32 @open(i8* %debug_func_ir_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
-    %debug_fd_valid = icmp sge i32 %debug_fd, 0
-    br i1 %debug_fd_valid, label %write_debug, label %parse_func
-    
-write_debug:
-    %pos_val17_int = trunc i64 %pos_val17 to i32
-    call i64 @write(i32 %debug_fd, i8* %func_def_buf, i32 %pos_val17_int)
-    call i32 @close(i32 %debug_fd)
-    br label %parse_func
-    
-parse_func:
-    ; DEBUG: Write that we're calling codegen_parse_function_ir
-    %debug_parse_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
-    %debug_parse_fd = call i32 @open(i8* %debug_parse_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
-    %debug_parse_fd_valid = icmp sge i32 %debug_parse_fd, 0
-    br i1 %debug_parse_fd_valid, label %write_parse_debug, label %do_parse
-    
-write_parse_debug:
-    %parse_msg = getelementptr [34 x i8], [34 x i8]* @.str.calling_parse_func_ir, i32 0, i32 0
-    call i64 @write(i32 %debug_parse_fd, i8* %parse_msg, i32 33)
-    call i32 @close(i32 %debug_parse_fd)
     br label %do_parse
     
 do_parse:
@@ -1964,21 +1933,6 @@ entry:
     br i1 %either_null, label %text_only, label %use_llvm_api
     
 use_llvm_api:
-    ; DEBUG: Write that we're checking function before call
-    %debug_check_before_call_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_call, i32 0, i32 0
-    %debug_check_before_call_fd = call i32 @open(i8* %debug_check_before_call_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
-    %debug_check_before_call_fd_valid = icmp sge i32 %debug_check_before_call_fd, 0
-    br i1 %debug_check_before_call_fd_valid, label %write_check_before_call, label %lookup_func
-    
-write_check_before_call:
-    %check_before_call_msg = getelementptr [39 x i8], [39 x i8]* @.str.checking_func_before_call, i32 0, i32 0
-    call i64 @write(i32 %debug_check_before_call_fd, i8* %check_before_call_msg, i32 38)
-    %func_name_len_check = call i64 @strlen(i8* %func_name)
-    %func_name_len_check_int = trunc i64 %func_name_len_check to i32
-    call i64 @write(i32 %debug_check_before_call_fd, i8* %func_name, i32 %func_name_len_check_int)
-    %newline_check = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-    call i64 @write(i32 %debug_check_before_call_fd, i8* %newline_check, i32 1)
-    call i32 @close(i32 %debug_check_before_call_fd)
     br label %lookup_func
     
 lookup_func:
@@ -2018,22 +1972,7 @@ build_call_with_type:
     br label %build_call
 
 error_not_found:
-    ; Function not found in module - write debug output and return error
-    ; DEBUG: Write function name being looked up to debug file
-    %debug_call_name = getelementptr [21 x i8], [21 x i8]* @.str.debug_call, i32 0, i32 0
-    %debug_call_fd = call i32 @open(i8* %debug_call_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
-    %debug_call_fd_valid = icmp sge i32 %debug_call_fd, 0
-    br i1 %debug_call_fd_valid, label %write_call_debug, label %return_error
-    
-write_call_debug:
-    %call_not_found_prefix = getelementptr [36 x i8], [36 x i8]* @.str.func_not_found_in_call, i32 0, i32 0
-    call i64 @write(i32 %debug_call_fd, i8* %call_not_found_prefix, i32 35)
-    %func_name_len_call = call i64 @strlen(i8* %func_name)
-    %func_name_len_call_int = trunc i64 %func_name_len_call to i32
-    call i64 @write(i32 %debug_call_fd, i8* %func_name, i32 %func_name_len_call_int)
-    %newline_char_call = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-    call i64 @write(i32 %debug_call_fd, i8* %newline_char_call, i32 1)
-    call i32 @close(i32 %debug_call_fd)
+    ; Function not found in module - return error
     br label %return_error
     
 return_error:
@@ -2606,22 +2545,6 @@ gen_call:
     ; Extract arguments
     %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
     %args = load %ASTNode*, %ASTNode** %expr_cdr_ptr
-    
-    ; DEBUG: Write function call being processed to debug file
-    %debug_top_level_name = getelementptr [25 x i8], [25 x i8]* @.str.debug_top_level, i32 0, i32 0
-    %debug_top_level_fd = call i32 @open(i8* %debug_top_level_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
-    %debug_top_level_fd_valid = icmp sge i32 %debug_top_level_fd, 0
-    br i1 %debug_top_level_fd_valid, label %write_top_level_debug, label %do_call
-    
-write_top_level_debug:
-    %processing_call_prefix = getelementptr [27 x i8], [27 x i8]* @.str.processing_call, i32 0, i32 0
-    call i64 @write(i32 %debug_top_level_fd, i8* %processing_call_prefix, i32 26)
-    %func_name_len_top = call i64 @strlen(i8* %func_name)
-    %func_name_len_top_int = trunc i64 %func_name_len_top to i32
-    call i64 @write(i32 %debug_top_level_fd, i8* %func_name, i32 %func_name_len_top_int)
-    %newline_char_top = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-    call i64 @write(i32 %debug_top_level_fd, i8* %newline_char_top, i32 1)
-    call i32 @close(i32 %debug_top_level_fd)
     br label %do_call
     
 do_call:
@@ -2879,17 +2802,6 @@ build_module_ir:
     
     ; Use pos_val16 as total length (includes null terminator, but we pass length without it)
     %total_len = sub i64 %pos_val16, 1
-    
-    ; DEBUG: Write wrapped module IR to debug file before parsing
-    %debug_module_ir_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_module_ir, i32 0, i32 0
-    %debug_module_fd = call i32 @open(i8* %debug_module_ir_name, i32 577, i32 420)  ; O_CREAT | O_WRONLY | O_TRUNC, 0644
-    %debug_module_fd_valid = icmp sge i32 %debug_module_fd, 0
-    br i1 %debug_module_fd_valid, label %write_module_debug, label %parse_module
-    
-write_module_debug:
-    %total_len_int = trunc i64 %total_len to i32
-    call i64 @write(i32 %debug_module_fd, i8* %module_ir_buf, i32 %total_len_int)
-    call i32 @close(i32 %debug_module_fd)
     br label %parse_module
     
 parse_module:
@@ -2899,32 +2811,6 @@ parse_module:
     
     ; Free buffer
     call void @free(i8* %module_ir_buf)
-    
-    ; DEBUG: Write parse result to debug file
-    %debug_parse_result_name = getelementptr [27 x i8], [27 x i8]* @.str.debug_extract, i32 0, i32 0
-    %debug_parse_result_fd = call i32 @open(i8* %debug_parse_result_name, i32 1025, i32 420)  ; O_CREAT | O_WRONLY | O_APPEND, 0644
-    %debug_parse_result_fd_valid = icmp sge i32 %debug_parse_result_fd, 0
-    br i1 %debug_parse_result_fd_valid, label %write_parse_result_debug, label %check_parse_result
-    
-write_parse_result_debug:
-    ; Check if parse succeeded (result == 0) or failed (result != 0)
-    %parse_result_zero = icmp eq i32 %parse_result, 0
-    br i1 %parse_result_zero, label %write_parse_success, label %write_parse_failure
-    
-write_parse_success:
-    %parse_success_msg = getelementptr [34 x i8], [34 x i8]* @.str.parse_succeeded, i32 0, i32 0
-    call i64 @write(i32 %debug_parse_result_fd, i8* %parse_success_msg, i32 33)
-    %newline_parse_success = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-    call i64 @write(i32 %debug_parse_result_fd, i8* %newline_parse_success, i32 1)
-    call i32 @close(i32 %debug_parse_result_fd)
-    br label %check_parse_result
-    
-write_parse_failure:
-    %parse_failure_msg = getelementptr [32 x i8], [32 x i8]* @.str.parse_failed, i32 0, i32 0
-    call i64 @write(i32 %debug_parse_result_fd, i8* %parse_failure_msg, i32 31)
-    %newline_parse_failure = getelementptr [2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0
-    call i64 @write(i32 %debug_parse_result_fd, i8* %newline_parse_failure, i32 1)
-    call i32 @close(i32 %debug_parse_result_fd)
     br label %check_parse_result
     
 check_parse_result:
@@ -3008,52 +2894,6 @@ error:
 }
 
 ; Write bitcode to file
-; codegen_emit_debug_files: Emit debug bitcode and IR files for inspection
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   base_filename: Base filename (without extension)
-; Returns: 0 on success, -1 on error
-define i32 @codegen_emit_debug_files(%CodeGen* %cg, i8* %base_filename) {
-entry:
-    ; Get module from CodeGen structure
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    br i1 %module_null, label %error, label %emit_files
-    
-emit_files:
-    ; Build debug filenames: base_filename.debug.bc and base_filename.debug.ll
-    ; For simplicity, we'll use fixed suffixes
-    ; TODO: Implement proper string concatenation for filenames
-    ; For now, just emit to fixed debug filenames
-    %debug_bc_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_bc, i32 0, i32 0
-    %debug_ll_name = getelementptr [20 x i8], [20 x i8]* @.str.debug_ll, i32 0, i32 0
-    
-    ; Write bitcode file
-    %bc_error_msg = alloca i8*
-    store i8* null, i8** %bc_error_msg
-    %bc_result = call i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %debug_bc_name)
-    %bc_failed = icmp ne i32 %bc_result, 0
-    br i1 %bc_failed, label %error, label %write_ir
-    
-write_ir:
-    ; Print IR to file
-    %ir_error_msg = alloca i8*
-    store i8* null, i8** %ir_error_msg
-    %ir_result = call i32 @llvm_print_module_to_file(%LLVMModuleRef %module, i8* %debug_ll_name, i8** %ir_error_msg)
-    %ir_failed = icmp ne i32 %ir_result, 0
-    br i1 %ir_failed, label %error, label %success
-    
-    ; Note: Verification is skipped to avoid warnings about vararg functions
-    ; and global variable initializers. These are harmless warnings from LLVM's
-    ; strict validation, but the generated code works correctly.
-    
-success:
-    ret i32 0
-    
-error:
-    ret i32 -1
-}
 
 ; codegen_write_ir_text: Write module IR text to file using LLVM API
 ; Parameters:
@@ -3307,6 +3147,11 @@ declare i32 @printf(i8*, ...)
 @.str.debug_constant_found = private unnamed_addr constant [26 x i8] c"Constant found, pointer: \00"
 @.str.debug_constant_not_found = private unnamed_addr constant [26 x i8] c"Constant not found: name=\00"
 @.str.debug_pointer_value = private unnamed_addr constant [13 x i8] c", pointer=%p\00"
+@.str.debug_type_fmt = private unnamed_addr constant [3 x i8] c"%s\00"
+@.str.debug_type_len = private unnamed_addr constant [17 x i8] c"Type length: %ld\00"
+@.str.debug_checking_array = private unnamed_addr constant [22 x i8] c"Checking for array...\00"
+@.str.debug_reached_array_check = private unnamed_addr constant [26 x i8] c"Reached check_array block\00"
+@.str.debug_first_char = private unnamed_addr constant [18 x i8] c"First char: %d (dec)\00"
 @.str.debug_checking_builder = private unnamed_addr constant [19 x i8] c"Checking builder: \00"
 @.str.debug_checking_func_type = private unnamed_addr constant [21 x i8] c"Checking func_type: \00"
 @.str.debug_checking_func = private unnamed_addr constant [16 x i8] c"Checking func: \00"
@@ -3363,14 +3208,6 @@ declare i32 @printf(i8*, ...)
 @.str.backslash_00 = private unnamed_addr constant [4 x i8] c"\\00\00"
 @.str.backslash_quote = private unnamed_addr constant [3 x i8] c"\\\22\00"
 @.str.backslash_backslash = private unnamed_addr constant [3 x i8] c"\\\\\00"
-@.str.debug_bc = private unnamed_addr constant [16 x i8] c"debug_output.bc\00"
-@.str.debug_ll = private unnamed_addr constant [16 x i8] c"debug_output.ll\00"
-@.str.debug_func_ir = private unnamed_addr constant [17 x i8] c"debug_func_ir.ll\00"
-@.str.debug_module_ir = private unnamed_addr constant [19 x i8] c"debug_module_ir.ll\00"
-@.str.debug_verify = private unnamed_addr constant [21 x i8] c"debug_verify_func.ll\00"
-@.str.debug_call = private unnamed_addr constant [21 x i8] c"debug_call_lookup.ll\00"
-@.str.debug_top_level = private unnamed_addr constant [25 x i8] c"debug_top_level_exprs.ll\00"
-@.str.debug_extract = private unnamed_addr constant [27 x i8] c"debug_extract_func_name.ll\00"
 @.str.func_not_found_after_link = private unnamed_addr constant [42 x i8] c"ERROR: Function not found after linking: \00"
 @.str.func_not_found_in_call = private unnamed_addr constant [36 x i8] c"ERROR: Function not found in call: \00"
 @.str.processing_call = private unnamed_addr constant [27 x i8] c"Processing function call: \00"
@@ -3379,15 +3216,10 @@ declare i32 @printf(i8*, ...)
 @.str.extracted_name = private unnamed_addr constant [26 x i8] c"Extracted function name: \00"
 @.str.reached_verify_after_link = private unnamed_addr constant [33 x i8] c"DEBUG: Reached verify_after_link\00"
 @.str.about_to_link = private unnamed_addr constant [22 x i8] c"About to link modules\00"
-@.str.processing_define_bitcode = private unnamed_addr constant [40 x i8] c"Processing define-bitcode-function node\00"
-@.str.calling_parse_func_ir = private unnamed_addr constant [34 x i8] c"Calling codegen_parse_function_ir\00"
-@.str.parse_succeeded = private unnamed_addr constant [34 x i8] c"DEBUG: Parse succeeded (result=0)\00"
-@.str.parse_failed = private unnamed_addr constant [32 x i8] c"DEBUG: Parse failed (result!=0)\00"
 @.str.link_succeeded = private unnamed_addr constant [33 x i8] c"DEBUG: Link succeeded (result=0)\00"
 @.str.link_failed = private unnamed_addr constant [31 x i8] c"DEBUG: Link failed (result!=0)\00"
 @.str.external_hello_string = private unnamed_addr constant [45 x i8] c"@hello_string = external constant [14 x i8]\0A\00"
 @.str.func_found_after_link = private unnamed_addr constant [36 x i8] c"DEBUG: Function found after linking\00"
-@.str.checking_func_before_call = private unnamed_addr constant [39 x i8] c"DEBUG: Checking function before call: \00"
 @.str.printf_decl_module = private unnamed_addr constant [42 x i8] c"declare i32 @printf(i8* nocapture, ...)\0A\0A\00"
 @.str.constant_decl = private unnamed_addr constant [22 x i8] c" = private constant [\00"
 @.str.x_i8_c_quote = private unnamed_addr constant [10 x i8] c" x i8] c\22\00"
@@ -3631,6 +3463,12 @@ entry:
     ; Debug: Print type string being resolved
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.debug_resolving_type, i32 0, i32 0))
+    
+    ; Debug: Print length first
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.debug_type_len, i32 0, i32 0), i64 %type_len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     %type_str_null_check = icmp eq i8* %type_str, null
     %type_len_zero_check = icmp eq i64 %type_len, 0
     %type_invalid_check = or i1 %type_str_null_check, %type_len_zero_check
@@ -3642,14 +3480,20 @@ print_type_null:
     br label %check_context
     
 print_type_valid:
-    ; Debug output removed to reduce memory allocation overhead
-    ; %type_buf_debug = call i8* @malloc(i64 %type_len)
-    ; call void @llvm.memcpy.p0i8.p0i8.i64(i8* %type_buf_debug, i8* %type_str, i64 %type_len, i1 false)
-    ; %type_null_ptr_debug = getelementptr i8, i8* %type_buf_debug, i64 %type_len
-    ; store i8 0, i8* %type_null_ptr_debug
-    ; call i32 (i8*, ...) @printf(i8* %type_buf_debug)
-    ; call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    ; call void @free(i8* %type_buf_debug)
+    ; Print type string for debugging
+    ; Debug: Print length first (already printed in entry, but keep for consistency)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.debug_type_len, i32 0, i32 0), i64 %type_len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    %type_buf_debug = call i8* @malloc(i64 %type_len)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %type_buf_debug, i8* %type_str, i64 %type_len, i1 false)
+    %type_null_ptr_debug = getelementptr i8, i8* %type_buf_debug, i64 %type_len
+    store i8 0, i8* %type_null_ptr_debug
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_type_fmt, i32 0, i32 0), i8* %type_buf_debug)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    call void @free(i8* %type_buf_debug)
     br label %check_context
     
 check_context:
@@ -3666,6 +3510,13 @@ check_named_type:
     %first_char_named = load i8, i8* %type_str
     %is_percent = icmp eq i8 %first_char_named, 37  ; '%' = 37
     %is_bar = icmp eq i8 %first_char_named, 124  ; '|' = 124
+    
+    ; Debug: Print first char
+    %first_char_int = zext i8 %first_char_named to i32
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.debug_first_char, i32 0, i32 0), i32 %first_char_int)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     br i1 %is_percent, label %parse_named_type_direct, label %check_bar_then_percent
     
 check_bar_then_percent:
@@ -3914,6 +3765,12 @@ check_array:
     %first_char = load i8, i8* %type_str
     %is_bracket = icmp eq i8 %first_char, 91  ; '[' = 91
     %first_char_bar = icmp eq i8 %first_char, 124  ; '|' = 124
+    
+    ; Debug: Print that we're checking for array
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_checking_array, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     br i1 %is_bracket, label %parse_array, label %check_array_bar
     
 check_array_bar:
@@ -3929,8 +3786,8 @@ check_array_bar_content:
 parse_array_bar:
     ; Parse array with vertical bars: "|[N x i8]|"
     ; Skip first '|', parse "[N x i8]", skip last '|'
-    %array_start = getelementptr i8, i8* %type_str, i64 1
-    %array_len_minus2 = sub i64 %type_len, 2  ; Subtract both '|' chars
+    %array_start_bar = getelementptr i8, i8* %type_str, i64 1
+    %array_len_minus2_bar = sub i64 %type_len, 2  ; Subtract both '|' chars
     br label %parse_array_common
     
 parse_array:
@@ -3940,14 +3797,166 @@ parse_array:
     br label %parse_array_common
     
 parse_array_common:
+    ; Merge values from both branches
+    %array_start = phi i8* [ %array_start_bar, %parse_array_bar ], [ %array_start_no_bar, %parse_array ]
+    %array_len_minus2 = phi i64 [ %array_len_minus2_bar, %parse_array_bar ], [ %array_len_no_bar, %parse_array ]
     ; Common array parsing logic
-    ; For now, we'll implement a simple parser that handles "[N x i8]" format
-    ; TODO: Implement full array type parsing
-    ; For bootstrap, we'll return i8* pointer type as a placeholder
-    ; In a full implementation, we'd parse the number and element type
+    ; Parse "[N x i8]" format where N is a number
+    ; We need to extract the number N and create an array type [N x i8]
+    
+    ; Find the opening bracket position (already at start of array string)
+    ; Skip '[' to get to the number
+    %array_start_plus1 = getelementptr i8, i8* %array_start, i64 1
+    %array_len_minus1 = sub i64 %array_len_minus2, 1  ; Subtract '[' from length
+    
+    ; Parse the number N
+    ; We'll scan for digits until we find " x "
+    %num_start = alloca i8*
+    store i8* %array_start_plus1, i8** %num_start
+    %num_end = alloca i8*
+    store i8* %array_start_plus1, i8** %num_end
+    %num_value = alloca i32
+    store i32 0, i32* %num_value
+    %found_x = alloca i32
+    store i32 0, i32* %found_x
+    
+    ; Simple digit parsing: look for " x " pattern
+    ; For bootstrap simplicity, we'll search for " x " and parse digits before it
+    br label %find_x_pattern
+    
+find_x_pattern:
+    ; Look for " x " pattern in the string
+    ; We'll use a simple approach: check if current position + 1 is ' ' and position + 2 is 'x' and position + 3 is ' '
+    %current_pos_val = load i8*, i8** %num_end
+    
+    ; Check bounds first
+    %current_offset = ptrtoint i8* %current_pos_val to i64
+    %start_offset = ptrtoint i8* %array_start_plus1 to i64
+    %offset = sub i64 %current_offset, %start_offset
+    %max_offset = sub i64 %array_len_minus1, 3  ; Need at least 3 more chars for " x "
+    %within_bounds = icmp ult i64 %offset, %max_offset
+    br i1 %within_bounds, label %check_pattern, label %parse_digits
+    
+check_pattern:
+    ; Check if current position is a digit, and if so, check if next 3 chars are " x "
+    %current_char = load i8, i8* %current_pos_val
+    %current_char_int = zext i8 %current_char to i32
+    %is_digit_check = icmp uge i32 %current_char_int, 48  ; '0'
+    %is_digit_max_check = icmp ule i32 %current_char_int, 57  ; '9'
+    %is_valid_digit_check = and i1 %is_digit_check, %is_digit_max_check
+    
+    ; If it's a digit, check if the next 3 chars are " x "
+    br i1 %is_valid_digit_check, label %check_x_pattern, label %increment_pos
+    
+check_x_pattern:
+    %pos_plus1 = getelementptr i8, i8* %current_pos_val, i64 1
+    %pos_plus2 = getelementptr i8, i8* %current_pos_val, i64 2
+    %pos_plus3 = getelementptr i8, i8* %current_pos_val, i64 3
+    
+    %char1 = load i8, i8* %pos_plus1
+    %char2 = load i8, i8* %pos_plus2
+    %char3 = load i8, i8* %pos_plus3
+    
+    %is_space1 = icmp eq i8 %char1, 32  ; ' '
+    %is_x = icmp eq i8 %char2, 120  ; 'x'
+    %is_space2 = icmp eq i8 %char3, 32  ; ' '
+    %both_spaces = and i1 %is_space1, %is_space2
+    %found_pattern = and i1 %both_spaces, %is_x
+    
+    br i1 %found_pattern, label %mark_found_x, label %increment_pos
+    
+mark_found_x:
+    ; When we find " x ", current_pos_val points to the char before the first space
+    ; This is the last digit, so num_end should point to current_pos_val + 1 (the space)
+    %num_end_pos = getelementptr i8, i8* %current_pos_val, i64 1
+    store i8* %num_end_pos, i8** %num_end
+    store i32 1, i32* %found_x
+    br label %parse_digits
+    
+increment_pos:
+    ; Move to next position
+    %next_pos = getelementptr i8, i8* %current_pos_val, i64 1
+    store i8* %next_pos, i8** %num_end
+    br label %find_x_pattern
+    
+parse_digits:
+    ; Parse digits from num_start to num_end
+    %num_start_val = load i8*, i8** %num_start
+    %num_end_val = load i8*, i8** %num_end
+    %num_len_ptr = alloca i64
+    %num_start_int = ptrtoint i8* %num_start_val to i64
+    %num_end_int = ptrtoint i8* %num_end_val to i64
+    %num_len_calc = sub i64 %num_end_int, %num_start_int
+    store i64 %num_len_calc, i64* %num_len_ptr
+    
+    ; Simple digit parsing: convert ASCII digits to integer
+    %num_len_val = load i64, i64* %num_len_ptr
+    %num_len_zero = icmp eq i64 %num_len_val, 0
+    br i1 %num_len_zero, label %error, label %convert_digits
+    
+convert_digits:
+    ; Convert string of digits to integer
+    ; For simplicity, handle up to 3 digits (0-999)
+    %num_result = alloca i32
+    store i32 0, i32* %num_result
+    %digit_pos = alloca i8*
+    store i8* %num_start_val, i8** %digit_pos
+    %digit_count = alloca i32
+    store i32 0, i32* %digit_count
+    br label %digit_loop
+    
+digit_loop:
+    %digit_pos_val = load i8*, i8** %digit_pos
+    %digit_pos_end = load i8*, i8** %num_end
+    %digit_pos_int = ptrtoint i8* %digit_pos_val to i64
+    %digit_end_int = ptrtoint i8* %digit_pos_end to i64
+    %digit_done = icmp uge i64 %digit_pos_int, %digit_end_int
+    br i1 %digit_done, label %check_element_type, label %read_digit
+    
+read_digit:
+    %digit_char = load i8, i8* %digit_pos_val
+    %digit_int = zext i8 %digit_char to i32
+    %is_digit = icmp uge i32 %digit_int, 48  ; '0'
+    %is_digit_max = icmp ule i32 %digit_int, 57  ; '9'
+    %is_valid_digit = and i1 %is_digit, %is_digit_max
+    br i1 %is_valid_digit, label %accumulate_digit, label %check_element_type
+    
+accumulate_digit:
+    %num_result_val = load i32, i32* %num_result
+    %digit_value = sub i32 %digit_int, 48  ; Convert ASCII to value
+    %num_result_times10 = mul i32 %num_result_val, 10
+    %num_result_new = add i32 %num_result_times10, %digit_value
+    store i32 %num_result_new, i32* %num_result
+    
+    %digit_pos_next = getelementptr i8, i8* %digit_pos_val, i64 1
+    store i8* %digit_pos_next, i8** %digit_pos
+    br label %digit_loop
+    
+check_element_type:
+    ; Verify that after " x " we have "i8]"
+    ; num_end points to the space before "x", so we need to check position + 4 for "i8]"
+    %num_end_val_check = load i8*, i8** %num_end
+    %check_pos = getelementptr i8, i8* %num_end_val_check, i64 4  ; After " x "
+    %check_char_i = load i8, i8* %check_pos
+    %check_pos_plus1 = getelementptr i8, i8* %check_pos, i64 1
+    %check_char_8 = load i8, i8* %check_pos_plus1
+    %check_pos_plus2 = getelementptr i8, i8* %check_pos, i64 2
+    %check_char_bracket = load i8, i8* %check_pos_plus2
+    
+    %is_i_check = icmp eq i8 %check_char_i, 105  ; 'i'
+    %is_8_check = icmp eq i8 %check_char_8, 56  ; '8'
+    %is_bracket_check = icmp eq i8 %check_char_bracket, 93  ; ']'
+    %is_i8_check = and i1 %is_i_check, %is_8_check
+    %is_i8_bracket = and i1 %is_i8_check, %is_bracket_check
+    
+    br i1 %is_i8_bracket, label %create_array_type, label %error
+    
+create_array_type:
+    ; Create array type [N x i8]
+    %num_result_final = load i32, i32* %num_result
     %i8_type_arr = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    %i8_ptr_type_arr = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %i8_type_arr, i32 0)
-    ret %LLVMTypeRef %i8_ptr_type_arr
+    %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type_arr, i32 %num_result_final)
+    ret %LLVMTypeRef %array_type
     
 error:
     ret %LLVMTypeRef null
@@ -6433,13 +6442,57 @@ error:
 ;   name: Label name string
 ;   name_len: Label name length
 ; Returns: LLVMBasicBlockRef for the label, or null on error
-; Note: Creates label eagerly if it doesn't exist (forward reference handling)
+; Note: First checks if a block with this name already exists, then creates if needed
 define %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %name, i64 %name_len) {
 entry:
     %func_null = icmp eq %LLVMValueRef %func, null
-    br i1 %func_null, label %error, label %create_label
+    br i1 %func_null, label %error, label %check_existing
+    
+check_existing:
+    ; First, check if a block with this name already exists
+    ; Iterate through all basic blocks in the function
+    %first_block = call %LLVMBasicBlockRef @llvm_get_first_basic_block(%LLVMValueRef %func)
+    %first_block_null = icmp eq %LLVMBasicBlockRef %first_block, null
+    br i1 %first_block_null, label %create_label, label %iterate_blocks
+    
+iterate_blocks:
+    %current_block = phi %LLVMBasicBlockRef [ %first_block, %check_existing ], [ %next_block_val, %check_next_block ]
+    
+    ; Get the name of the current block
+    %block_name = call i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef %current_block)
+    %block_name_null = icmp eq i8* %block_name, null
+    br i1 %block_name_null, label %check_next_block, label %compare_names
+    
+compare_names:
+    ; Compare block name with desired name
+    ; We need to compare the full strings. Since block_name is null-terminated and
+    ; name is not (we have name_len), we'll compare up to name_len characters,
+    ; then check that block_name is null-terminated at that position
+    %name_len_int = trunc i64 %name_len to i32
+    %cmp_result = call i32 @strncmp(i8* %block_name, i8* %name, i32 %name_len_int)
+    %names_match = icmp eq i32 %cmp_result, 0
+    br i1 %names_match, label %check_null_term, label %check_next_block
+    
+check_null_term:
+    ; Check that the block name is exactly name_len characters (null-terminated at name_len)
+    ; This ensures "same" matches "same" but not "same1"
+    %block_name_at_len = getelementptr i8, i8* %block_name, i64 %name_len
+    %block_char_at_len = load i8, i8* %block_name_at_len
+    %is_null_term = icmp eq i8 %block_char_at_len, 0
+    br i1 %is_null_term, label %found_existing, label %check_next_block
+    
+found_existing:
+    ; Found an existing block with matching name - return it
+    ret %LLVMBasicBlockRef %current_block
+    
+check_next_block:
+    ; Move to next block
+    %next_block_val = call %LLVMBasicBlockRef @llvm_get_next_basic_block(%LLVMBasicBlockRef %current_block)
+    %next_block_null = icmp eq %LLVMBasicBlockRef %next_block_val, null
+    br i1 %next_block_null, label %create_label, label %iterate_blocks
     
 create_label:
+    ; No existing block found - create a new one
     ; Create null-terminated name string
     %name_buf_size = add i64 %name_len, 1
     %name_buf = call i8* @malloc(i64 %name_buf_size)
@@ -6611,7 +6664,12 @@ get_or_create_block:
     br i1 %block_null, label %error, label %position_builder
     
 position_builder:
-    ; Position builder at end of this block
+    ; Save current builder position before positioning at label block
+    ; This allows us to restore it after evaluating the label body
+    %saved_block = call %LLVMBasicBlockRef @llvm_get_insert_block(%LLVMBuilderRef %builder)
+    
+    ; Position builder at end of label block
+    ; Note: This must happen BEFORE evaluating the body so instructions go into the label block
     call void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %block)
     
     ; Get body (rest of args)
@@ -6619,10 +6677,26 @@ position_builder:
     %body = load %ASTNode*, %ASTNode** %args_cdr_ptr
     
     ; Evaluate body expressions (void version - we don't need the return value)
+    ; The builder should now be positioned at the label block, so instructions will go there
     call void @codegen_eval_dsl_body(%CodeGen* %cg, %ASTNode* %body)
     
+    ; Restore builder to saved position (if it was positioned)
+    ; This ensures subsequent expressions continue in the correct block
+    ; If saved_block is null, builder wasn't positioned initially, so we can't restore
+    ; In practice, builder should always be positioned when llvm:label is called
+    %saved_block_null = icmp eq %LLVMBasicBlockRef %saved_block, null
+    br i1 %saved_block_null, label %return_block, label %restore_position
+    
+restore_position:
+    ; Restore builder to the position it was at before we positioned it at the label block
+    ; This is critical: without this, subsequent expressions would be generated in the label block
+    call void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %saved_block)
+    br label %return_block
+    
+return_block:
     ; Return basic block as LLVMValueRef (cast)
-    %block_as_value = bitcast %LLVMBasicBlockRef %block to %LLVMValueRef
+    %block_phi = phi %LLVMBasicBlockRef [ %block, %position_builder ], [ %block, %restore_position ]
+    %block_as_value = bitcast %LLVMBasicBlockRef %block_phi to %LLVMValueRef
     ret %LLVMValueRef %block_as_value
     
 error:

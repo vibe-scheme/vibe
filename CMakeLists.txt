@@ -171,8 +171,10 @@ if(USE_VIBE_FILES)
         )
     else()
         # KERNEL mode: Use bootstrap_compiler to compile .vibe files
-        # Workaround: LLVMWriteBitcodeToFile produces bitcode that llvm-link rejects
-        # for multi-function modules. Write IR text first, then convert with llvm-as.
+        # Note: LLVMWriteBitcodeToFile produces bitcode that llvm-link rejects for multi-function modules.
+        # We write IR text first, then convert with llvm-as to ensure compatibility with llvm-link.
+        # TODO: Investigate using LLVMLinkModules2 API via a custom linker tool instead of llvm-link
+        #       to support direct bitcode output from bootstrap_compiler.
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
             COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler

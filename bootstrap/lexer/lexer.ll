@@ -929,7 +929,8 @@ print_value:
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %value, i64 %len, i1 false)
     %null_ptr = getelementptr i8, i8* %buf, i64 %len
     store i8 0, i8* %null_ptr
-    call i32 (i8*, ...) @printf(i8* %buf)
+    ; Use format string to safely print token value (prevents format specifier injection)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.debug_token_value_fmt, i32 0, i32 0), i8* %buf)
     call void @free(i8* %buf)
     br label %done
     
@@ -941,6 +942,7 @@ done:
 ; String literals for debug logging
 @.str.debug_prefix_lexer = private unnamed_addr constant [9 x i8] c"[LEXER] \00"
 @.str.debug_token_fmt = private unnamed_addr constant [31 x i8] c"Token type=%d line=%d col=%d: \00"
+@.str.debug_token_value_fmt = private unnamed_addr constant [3 x i8] c"%s\00"
 @.str.debug_newline = private unnamed_addr constant [2 x i8] c"\0A\00"
 @.str.empty = private unnamed_addr constant [1 x i8] c"\00"
 @.str.debug_eof_token = private unnamed_addr constant [11 x i8] c"EOF token\0A\00"

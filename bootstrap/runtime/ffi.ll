@@ -299,11 +299,15 @@ declare void @LLVMSetValueName(%LLVMValueRef, i8*)
 
 ; Basic block management
 declare %LLVMBasicBlockRef @LLVMAppendBasicBlock(%LLVMValueRef, i8*)
+declare %LLVMBasicBlockRef @LLVMGetFirstBasicBlock(%LLVMValueRef)
+declare %LLVMBasicBlockRef @LLVMGetNextBasicBlock(%LLVMBasicBlockRef)
+declare i8* @LLVMGetBasicBlockName(%LLVMBasicBlockRef)
 
 ; Builder management
 declare %LLVMBuilderRef @LLVMCreateBuilderInContext(%LLVMContextRef)
 declare void @LLVMDisposeBuilder(%LLVMBuilderRef)
 declare void @LLVMPositionBuilderAtEnd(%LLVMBuilderRef, %LLVMBasicBlockRef)
+declare %LLVMBasicBlockRef @LLVMGetInsertBlock(%LLVMBuilderRef)
 
 ; Instruction building
 declare %LLVMValueRef @LLVMBuildRetVoid(%LLVMBuilderRef)
@@ -807,6 +811,50 @@ define void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBl
 entry:
     call void @LLVMPositionBuilderAtEnd(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %bb)
     ret void
+}
+
+; Get current insert block from builder
+; llvm_get_insert_block: Get the basic block that the builder is currently positioned at
+; Parameters:
+;   builder: LLVMBuilderRef
+; Returns: LLVMBasicBlockRef for current insert block, or null if builder is not positioned
+define %LLVMBasicBlockRef @llvm_get_insert_block(%LLVMBuilderRef %builder) {
+entry:
+    %block = call %LLVMBasicBlockRef @LLVMGetInsertBlock(%LLVMBuilderRef %builder)
+    ret %LLVMBasicBlockRef %block
+}
+
+; Get first basic block in function
+; llvm_get_first_basic_block: Get the first basic block in a function
+; Parameters:
+;   func: LLVMValueRef for function
+; Returns: LLVMBasicBlockRef for first basic block, or null if function has no blocks
+define %LLVMBasicBlockRef @llvm_get_first_basic_block(%LLVMValueRef %func) {
+entry:
+    %block = call %LLVMBasicBlockRef @LLVMGetFirstBasicBlock(%LLVMValueRef %func)
+    ret %LLVMBasicBlockRef %block
+}
+
+; Get next basic block
+; llvm_get_next_basic_block: Get the next basic block after the given one
+; Parameters:
+;   block: LLVMBasicBlockRef
+; Returns: LLVMBasicBlockRef for next basic block, or null if this is the last block
+define %LLVMBasicBlockRef @llvm_get_next_basic_block(%LLVMBasicBlockRef %block) {
+entry:
+    %next = call %LLVMBasicBlockRef @LLVMGetNextBasicBlock(%LLVMBasicBlockRef %block)
+    ret %LLVMBasicBlockRef %next
+}
+
+; Get basic block name
+; llvm_get_basic_block_name: Get the name of a basic block
+; Parameters:
+;   block: LLVMBasicBlockRef
+; Returns: i8* pointer to null-terminated name string, or null if block has no name
+define i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef %block) {
+entry:
+    %name = call i8* @LLVMGetBasicBlockName(%LLVMBasicBlockRef %block)
+    ret i8* %name
 }
 
 ; Build return void

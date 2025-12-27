@@ -18,6 +18,8 @@ This document provides guidance for AI agents contributing to the Vibe language 
 
 5. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. For example, if the lexer isn't recognizing numbers correctly, fix the lexer rather than adding fallback logic in the codegen. We don't need to worry about backwards compatibility until we actually have something working - prioritize correctness and proper architecture over maintaining broken behavior.
 
+6. **Parser/Codegen Separation**: The parser phase should handle all syntax normalization (e.g., stripping vertical bars `|` from symbols like `|%Foo|` → `%Foo`), while the codegen phase should only handle semantic resolution (e.g., mapping type names to LLVM types). Syntax variations like `|i8*|` vs `i8*` should be normalized by the parser before reaching codegen. This separation simplifies both layers and makes the codebase more maintainable.
+
 ### Code Style
 
 - **Naming Conventions**: Use `snake_case` for LLVM functions and variables
@@ -51,10 +53,19 @@ vibe/
 
 Each chat document should include:
 - Date and context of the conversation
+- **Complete session overview**: Document ALL work done in the session, not just the final topic investigated. Review git diff to ensure comprehensive coverage of:
+  - Bug fixes
+  - Feature implementations
+  - Code cleanup
+  - Security fixes
+  - Architectural discoveries
+  - Refactoring work
 - Key decisions made
 - Implementation details discussed
 - Any important notes or considerations
 - Links to related design documents or code
+
+**Note**: Early in development, sessions often involve multiple related fixes and investigations. The chat documentation should reflect the full breadth of work accomplished, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 
 ## Coding Standards and Practices
 
@@ -272,14 +283,20 @@ At the end of each development session, the following steps should be completed:
 Create a new chat document in `doc/chats/` following the naming convention:
 - Format: `NNNN-descriptive-name.md` where NNNN is the next sequential number
 - Check existing chat files to determine the next number
+- **Review git diff** to ensure comprehensive coverage of ALL work done:
+  - Run `git diff --stat` to see all modified files
+  - Review `git diff` for each major file to understand all changes
+  - Don't just document the final topic - document everything accomplished
 - Include:
-  - Date and context
-  - Overview of work completed
-  - Key decisions made
-  - Implementation details
-  - Technical challenges encountered
-  - Files modified
-  - Related documentation references
+ - Date and context
+ - **Complete overview** of ALL work completed (not just the last investigation)
+ - Key decisions made
+ - Implementation details for each major change
+ - Technical challenges encountered
+ - Files modified (with specific changes)
+ - Related documentation references
+
+**Important**: Early in development, sessions often involve multiple fixes, cleanups, and investigations. The chat document should reflect the full breadth of work, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 
 ### 2. Generate Git Commit Message
 
