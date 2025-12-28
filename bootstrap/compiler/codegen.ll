@@ -3112,7 +3112,6 @@ declare i32 @printf(i8*, ...)
 @.str.debug_extracting_args_list = private unnamed_addr constant [24 x i8] c"Extracting args list...\00"
 @.str.debug_checking_i8_ptr = private unnamed_addr constant [26 x i8] c"Checking for i8* match...\00"
 @.str.debug_i8_ptr_cmp_result = private unnamed_addr constant [26 x i8] c"i8* comparison result: %d\00"
-@.str.debug_checking_i8_ptr_bar = private unnamed_addr constant [28 x i8] c"Checking for |i8*| match...\00"
 @.str.debug_i8_ptr_bar_cmp_result = private unnamed_addr constant [28 x i8] c"|i8*| comparison result: %d\00"
 @.str.debug_looking_up_global = private unnamed_addr constant [20 x i8] c"Looking up global: \00"
 @.str.debug_local = private unnamed_addr constant [8 x i8] c"local: \00"
@@ -3151,7 +3150,7 @@ declare i32 @printf(i8*, ...)
 @.str.debug_type_len = private unnamed_addr constant [17 x i8] c"Type length: %ld\00"
 @.str.debug_checking_array = private unnamed_addr constant [22 x i8] c"Checking for array...\00"
 @.str.debug_reached_array_check = private unnamed_addr constant [26 x i8] c"Reached check_array block\00"
-@.str.debug_first_char = private unnamed_addr constant [18 x i8] c"First char: %d (dec)\00"
+@.str.debug_first_char = private unnamed_addr constant [21 x i8] c"First char: %d (dec)\00"
 @.str.debug_checking_builder = private unnamed_addr constant [19 x i8] c"Checking builder: \00"
 @.str.debug_checking_func_type = private unnamed_addr constant [21 x i8] c"Checking func_type: \00"
 @.str.debug_checking_func = private unnamed_addr constant [16 x i8] c"Checking func: \00"
@@ -3503,113 +3502,51 @@ check_context:
     
     ; Check for null context
     %context_null = icmp eq %LLVMContextRef %context, null
-    br i1 %context_null, label %error, label %check_named_type
+    br i1 %context_null, label %error, label %check_void
     
 check_named_type:
-    ; Check if type starts with '%' or '|' followed by '%' (named type like %Token, %Lexer*, |%Lexer*|)
-    %first_char_named = load i8, i8* %type_str
-    %is_percent = icmp eq i8 %first_char_named, 37  ; '%' = 37
-    %is_bar = icmp eq i8 %first_char_named, 124  ; '|' = 124
+    ; Check if type is a named type (fallback after all built-in types checked)
+    ; Note: Parser already stripped % prefix, lexer already stripped bars
+    ; So we receive "TypeName" or "TypeName*" format
     
     ; Debug: Print first char
+    %first_char_named = load i8, i8* %type_str
     %first_char_int = zext i8 %first_char_named to i32
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.debug_first_char, i32 0, i32 0), i32 %first_char_int)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-    br i1 %is_percent, label %parse_named_type_direct, label %check_bar_then_percent
-    
-check_bar_then_percent:
-    ; Check if it's "|%TypeName|" or "|%TypeName*|"
-    br i1 %is_bar, label %check_second_char, label %check_void
-    
-check_second_char:
-    ; Skip '|' and check if next char is '%'
-    %type_str_plus1_bar = getelementptr i8, i8* %type_str, i64 1
-    %second_char_bar = load i8, i8* %type_str_plus1_bar
-    %is_percent_after_bar = icmp eq i8 %second_char_bar, 37  ; '%'
-    br i1 %is_percent_after_bar, label %parse_named_type_with_bars, label %check_void
-    
-parse_named_type_with_bars:
-    ; Type is "|%TypeName|" or "|%TypeName*|" - skip first '|', parse "%TypeName" or "%TypeName*", skip last '|'
-    %type_str_after_bar_bars = getelementptr i8, i8* %type_str, i64 1  ; Skip first '|'
-    %type_len_minus_bar_bars = sub i64 %type_len, 1  ; Subtract first '|'
-    %is_bar_true = icmp eq i1 %is_bar, 1  ; True for bars path
-    br label %parse_named_type_common
-    
-parse_named_type_direct:
-    ; Type is "%TypeName" or "%TypeName*" - parse directly
-    %type_str_after_bar_direct = getelementptr i8, i8* %type_str, i64 0  ; No bar to skip
-    %type_len_minus_bar_direct = add i64 %type_len, 0  ; No bar to subtract
-    %is_bar_false = icmp eq i1 %is_bar, 0  ; False for direct path
-    br label %parse_named_type_common
-    
-parse_named_type_common:
-    ; Common parsing logic for named types (with or without bars)
-    ; Merge values from both paths using phi nodes (must be at top of block)
-    %type_str_after_bar = phi i8* [ %type_str_after_bar_bars, %parse_named_type_with_bars ], [ %type_str_after_bar_direct, %parse_named_type_direct ]
-    %type_len_minus_bar = phi i64 [ %type_len_minus_bar_bars, %parse_named_type_with_bars ], [ %type_len_minus_bar_direct, %parse_named_type_direct ]
-    %is_bar_merged = phi i1 [ %is_bar_true, %parse_named_type_with_bars ], [ %is_bar_false, %parse_named_type_direct ]
-    
-    ; Extract type name (skip '%', handle optional '*' at end, handle optional trailing '|')
-    ; type_str format: "%TypeName", "%TypeName*", "|%TypeName|", or "|%TypeName*|"
-    %type_str_plus1_named = getelementptr i8, i8* %type_str_after_bar, i64 1  ; Skip '%'
-    %name_len_minus1 = sub i64 %type_len_minus_bar, 1  ; Subtract '%'
-    
-    ; Check if it ends with '|' (if we had bars)
-    %last_char_idx = sub i64 %type_len_minus_bar, 1
-    %last_char_ptr = getelementptr i8, i8* %type_str_after_bar, i64 %last_char_idx
+    ; Check if type ends with '*' (pointer to named type)
+    %last_char_idx = sub i64 %type_len, 1
+    %last_char_ptr = getelementptr i8, i8* %type_str, i64 %last_char_idx
     %last_char = load i8, i8* %last_char_ptr
-    %is_pointer_named = icmp eq i8 %last_char, 42  ; '*' = 42
-    %is_bar_end = icmp eq i8 %last_char, 124  ; '|' = 124
-    %has_trailing_bar = and i1 %is_bar_merged, %is_bar_end  ; Only if we started with '|'
-    br i1 %has_trailing_bar, label %check_before_trailing_bar, label %check_pointer_direct
+    %is_pointer = icmp eq i8 %last_char, 42  ; '*' = 42
+    br i1 %is_pointer, label %lookup_named_type_ptr, label %lookup_named_type_direct
     
-check_before_trailing_bar:
-    ; Re-check last char before trailing bar
-    %last_char_before_bar_idx = sub i64 %type_len_minus_bar, 2  ; Subtract '%' and trailing '|'
-    %last_char_before_bar_ptr = getelementptr i8, i8* %type_str_after_bar, i64 %last_char_before_bar_idx
-    %last_char_before_bar = load i8, i8* %last_char_before_bar_ptr
-    %is_pointer_after_bar_check = icmp eq i8 %last_char_before_bar, 42  ; '*'
-    %final_name_len_minus1_bar = select i1 %is_pointer_after_bar_check, i64 %last_char_before_bar_idx, i64 %name_len_minus1
-    br i1 %is_pointer_after_bar_check, label %extract_name_with_ptr, label %extract_name_no_ptr
+lookup_named_type_ptr:
+    ; Type is "TypeName*" - extract "TypeName" (skip last '*')
+    %name_len_ptr_val = sub i64 %type_len, 1
+    br label %lookup_named_type_common
     
-check_pointer_direct:
-    ; No trailing bar, check directly
-    %final_name_len_minus1_direct = add i64 %name_len_minus1, 0
-    br i1 %is_pointer_named, label %extract_name_with_ptr, label %extract_name_no_ptr
+lookup_named_type_direct:
+    ; Type is "TypeName" - use full length
+    %name_len_direct_val = add i64 %type_len, 0
+    br label %lookup_named_type_common
     
-extract_name_with_ptr:
-    ; Merge final_name_len_minus1 from both paths
-    %final_name_len_minus1_merged = phi i64 [ %final_name_len_minus1_bar, %check_before_trailing_bar ], [ %final_name_len_minus1_direct, %check_pointer_direct ]
-    ; Type is "%TypeName*" or "|%TypeName*|" - extract "TypeName"
-    %name_len_with_ptr = sub i64 %final_name_len_minus1_merged, 1  ; Subtract '*' too
-    br label %lookup_type
-    
-extract_name_no_ptr:
-    ; Merge final_name_len_minus1 from both paths
-    %final_name_len_minus1_merged_no_ptr = phi i64 [ %final_name_len_minus1_bar, %check_before_trailing_bar ], [ %final_name_len_minus1_direct, %check_pointer_direct ]
-    ; Type is "%TypeName" or "|%TypeName|" - extract "TypeName"
-    %name_len_no_ptr_val = add i64 %final_name_len_minus1_merged_no_ptr, 0
-    br label %lookup_type
-    
-lookup_type:
-    ; Merge name length from both paths using phi node
-    %name_len_no_ptr = phi i64 [ %name_len_with_ptr, %extract_name_with_ptr ], [ %name_len_no_ptr_val, %extract_name_no_ptr ]
-    ; Merge is_pointer flag - need to track it through the paths
-    %is_pointer_flag = phi i1 [ %is_pointer_named, %extract_name_with_ptr ], [ %is_pointer_named, %extract_name_no_ptr ]
-    ; Merge type_str_plus1_named from both paths
-    %type_str_plus1_named_merged = phi i8* [ %type_str_plus1_named, %extract_name_with_ptr ], [ %type_str_plus1_named, %extract_name_no_ptr ]
+lookup_named_type_common:
+    ; Merge name length from both paths
+    %name_len = phi i64 [ %name_len_ptr_val, %lookup_named_type_ptr ], [ %name_len_direct_val, %lookup_named_type_direct ]
+    %is_pointer_flag = phi i1 [ %is_pointer, %lookup_named_type_ptr ], [ %is_pointer, %lookup_named_type_direct ]
     
     ; Create null-terminated name for lookup
-    %name_buf_size = add i64 %name_len_no_ptr, 1
+    %name_buf_size = add i64 %name_len, 1
     %name_buf = call i8* @malloc(i64 %name_buf_size)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %type_str_plus1_named_merged, i64 %name_len_no_ptr, i1 false)
-    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len_no_ptr
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %type_str, i64 %name_len, i1 false)
+    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
     store i8 0, i8* %name_null_ptr
     
     ; Look up type by name
-    %resolved_type = call %LLVMTypeRef @codegen_get_type(%CodeGen* %cg, i8* %name_buf, i64 %name_len_no_ptr)
+    %resolved_type = call %LLVMTypeRef @codegen_get_type(%CodeGen* %cg, i8* %name_buf, i64 %name_len)
     call void @free(i8* %name_buf)
     
     %resolved_null = icmp eq %LLVMTypeRef %resolved_type, null
@@ -3631,76 +3568,42 @@ return_named_type:
     ret %LLVMTypeRef %resolved_type
     
 check_void:
-    ; Check for "void" (with or without vertical bars)
-    ; Handle "|void|" (5 chars) or "void" (4 chars)
+    ; Check for "void" (already normalized by lexer - bars stripped)
     %is_void_len = icmp eq i64 %type_len, 4
-    %is_void_len_bar = icmp eq i64 %type_len, 5
-    %is_void_len_check = or i1 %is_void_len, %is_void_len_bar
-    br i1 %is_void_len_check, label %check_void_str, label %check_i8
+    br i1 %is_void_len, label %check_void_str, label %check_i8
     
 check_void_str:
-    ; Compare with "void" (4 chars) or "|void|" (5 chars)
+    ; Compare with "void" (4 chars)
     %void_str = getelementptr [5 x i8], [5 x i8]* @.str.type_void, i32 0, i32 0
     %void_cmp = call i32 @strncmp(i8* %type_str, i8* %void_str, i32 4)
     %is_void = icmp eq i32 %void_cmp, 0
-    br i1 %is_void, label %return_void, label %check_void_bar
-    
-check_void_bar:
-    ; Check if it's "|void|" - skip first char and compare "void"
-    %type_str_plus1 = getelementptr i8, i8* %type_str, i64 1
-    %void_cmp_bar = call i32 @strncmp(i8* %type_str_plus1, i8* %void_str, i32 4)
-    %is_void_bar = icmp eq i32 %void_cmp_bar, 0
-    br i1 %is_void_bar, label %return_void, label %check_i8
+    br i1 %is_void, label %return_void, label %check_i8
     
 return_void:
     %void_type = call %LLVMTypeRef @llvm_get_void_type(%LLVMContextRef %context)
     ret %LLVMTypeRef %void_type
     
 check_i8:
-    ; Check for "i8" (with or without vertical bars)
+    ; Check for "i8" (already normalized by lexer - bars stripped)
     %is_i8_len = icmp eq i64 %type_len, 2
-    %is_i8_len_bar = icmp eq i64 %type_len, 4
-    %is_i8_len_check = or i1 %is_i8_len, %is_i8_len_bar
-    br i1 %is_i8_len_check, label %check_i8_str, label %check_i8_ptr
+    br i1 %is_i8_len, label %check_i8_str, label %check_i8_ptr
     
 check_i8_str:
     %i8_str = getelementptr [3 x i8], [3 x i8]* @.str.type_i8, i32 0, i32 0
     %i8_cmp = call i32 @strncmp(i8* %type_str, i8* %i8_str, i32 2)
     %is_i8 = icmp eq i32 %i8_cmp, 0
-    br i1 %is_i8, label %return_i8, label %check_i8_bar
-    
-check_i8_bar:
-    ; Check if it's "|i8|" - skip first char and compare "i8"
-    %type_str_plus1_i8 = getelementptr i8, i8* %type_str, i64 1
-    %i8_cmp_bar = call i32 @strncmp(i8* %type_str_plus1_i8, i8* %i8_str, i32 2)
-    %is_i8_bar = icmp eq i32 %i8_cmp_bar, 0
-    br i1 %is_i8_bar, label %return_i8, label %check_i8_ptr_after_i8
-    
-check_i8_ptr_after_i8:
-    ; After checking i8, always check for i8* before moving to i32
-    br label %check_i8_ptr
+    br i1 %is_i8, label %return_i8, label %check_i8_ptr
     
 check_i8_ptr:
-    ; Check for "i8*" or "|i8*|"
+    ; Check for "i8*" (already normalized by lexer - bars stripped)
     %is_i8_ptr_len = icmp eq i64 %type_len, 3
-    %is_i8_ptr_len_bar = icmp eq i64 %type_len, 5
-    %is_i8_ptr_len_check = or i1 %is_i8_ptr_len, %is_i8_ptr_len_bar
-    br i1 %is_i8_ptr_len_check, label %check_i8_ptr_str, label %check_i32
+    br i1 %is_i8_ptr_len, label %check_i8_ptr_str, label %check_i32
     
 check_i8_ptr_str:
-    ; Debug output removed to reduce overhead
     %i8_ptr_str = getelementptr [4 x i8], [4 x i8]* @.str.type_i8_ptr, i32 0, i32 0
     %i8_ptr_cmp = call i32 @strncmp(i8* %type_str, i8* %i8_ptr_str, i32 3)
     %is_i8_ptr = icmp eq i32 %i8_ptr_cmp, 0
-    br i1 %is_i8_ptr, label %return_i8_ptr, label %check_i8_ptr_bar
-    
-check_i8_ptr_bar:
-    ; Debug output removed to reduce overhead
-    ; Check if it's "|i8*|" - skip first char and compare "i8*"
-    %type_str_plus1_i8_ptr = getelementptr i8, i8* %type_str, i64 1
-    %i8_ptr_cmp_bar = call i32 @strncmp(i8* %type_str_plus1_i8_ptr, i8* %i8_ptr_str, i32 3)
-    %is_i8_ptr_bar = icmp eq i32 %i8_ptr_cmp_bar, 0
-    br i1 %is_i8_ptr_bar, label %return_i8_ptr, label %check_i32
+    br i1 %is_i8_ptr, label %return_i8_ptr, label %check_i32
     
 return_i8:
     %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
@@ -3712,102 +3615,56 @@ return_i8_ptr:
     ret %LLVMTypeRef %i8_ptr_type
     
 check_i32:
-    ; Check for "i32" (with or without vertical bars)
+    ; Check for "i32" (already normalized by lexer - bars stripped)
     %is_i32_len = icmp eq i64 %type_len, 3
-    %is_i32_len_bar = icmp eq i64 %type_len, 5
-    %is_i32_len_check = or i1 %is_i32_len, %is_i32_len_bar
-    br i1 %is_i32_len_check, label %check_i32_str, label %check_i64
+    br i1 %is_i32_len, label %check_i32_str, label %check_i64
     
 check_i32_str:
     %i32_str = getelementptr [4 x i8], [4 x i8]* @.str.type_i32, i32 0, i32 0
     %i32_cmp = call i32 @strncmp(i8* %type_str, i8* %i32_str, i32 3)
     %is_i32 = icmp eq i32 %i32_cmp, 0
-    br i1 %is_i32, label %return_i32, label %check_i32_bar
-    
-check_i32_bar:
-    ; Check if it's "|i32|" - skip first char and compare "i32"
-    %type_str_plus1_i32 = getelementptr i8, i8* %type_str, i64 1
-    %i32_cmp_bar = call i32 @strncmp(i8* %type_str_plus1_i32, i8* %i32_str, i32 3)
-    %is_i32_bar = icmp eq i32 %i32_cmp_bar, 0
-    br i1 %is_i32_bar, label %return_i32, label %check_i64
+    br i1 %is_i32, label %return_i32, label %check_i64
     
 return_i32:
     %i32_type = call %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef %context)
     ret %LLVMTypeRef %i32_type
     
 check_i64:
-    ; Check for "i64" (with or without vertical bars)
+    ; Check for "i64" (already normalized by lexer - bars stripped)
     %is_i64_len = icmp eq i64 %type_len, 3
-    %is_i64_len_bar = icmp eq i64 %type_len, 5
-    %is_i64_len_check = or i1 %is_i64_len, %is_i64_len_bar
-    br i1 %is_i64_len_check, label %check_i64_str, label %check_array
+    br i1 %is_i64_len, label %check_i64_str, label %check_array
     
 check_i64_str:
     %i64_str = getelementptr [4 x i8], [4 x i8]* @.str.type_i64, i32 0, i32 0
     %i64_cmp = call i32 @strncmp(i8* %type_str, i8* %i64_str, i32 3)
     %is_i64 = icmp eq i32 %i64_cmp, 0
-    br i1 %is_i64, label %return_i64, label %check_i64_bar
-    
-check_i64_bar:
-    ; Check if it's "|i64|" - skip first char and compare "i64"
-    %type_str_plus1_i64 = getelementptr i8, i8* %type_str, i64 1
-    %i64_cmp_bar = call i32 @strncmp(i8* %type_str_plus1_i64, i8* %i64_str, i32 3)
-    %is_i64_bar = icmp eq i32 %i64_cmp_bar, 0
-    br i1 %is_i64_bar, label %return_i64, label %check_array
+    br i1 %is_i64, label %return_i64, label %check_array
     
 return_i64:
     %i64_type = call %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef %context)
     ret %LLVMTypeRef %i64_type
     
 check_array:
-    ; Check for array types like "[14 x i8]" or "|[14 x i8]|"
+    ; Check for array types like "[14 x i8]" (already normalized by lexer - bars stripped)
     ; Look for opening bracket '['
     %first_char = load i8, i8* %type_str
     %is_bracket = icmp eq i8 %first_char, 91  ; '[' = 91
-    %first_char_bar = icmp eq i8 %first_char, 124  ; '|' = 124
     
     ; Debug: Print that we're checking for array
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_checking_array, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-    br i1 %is_bracket, label %parse_array, label %check_array_bar
-    
-check_array_bar:
-    br i1 %first_char_bar, label %check_array_bar_content, label %error
-    
-check_array_bar_content:
-    ; Skip '|' and check for '['
-    %type_str_plus1_arr = getelementptr i8, i8* %type_str, i64 1
-    %second_char = load i8, i8* %type_str_plus1_arr
-    %is_bracket_bar = icmp eq i8 %second_char, 91  ; '['
-    br i1 %is_bracket_bar, label %parse_array_bar, label %error
-    
-parse_array_bar:
-    ; Parse array with vertical bars: "|[N x i8]|"
-    ; Skip first '|', parse "[N x i8]", skip last '|'
-    %array_start_bar = getelementptr i8, i8* %type_str, i64 1
-    %array_len_minus2_bar = sub i64 %type_len, 2  ; Subtract both '|' chars
-    br label %parse_array_common
+    br i1 %is_bracket, label %parse_array, label %check_named_type
     
 parse_array:
-    ; Parse array without vertical bars: "[N x i8]"
-    %array_start_no_bar = getelementptr i8, i8* %type_str, i64 0
-    %array_len_no_bar = add i64 %type_len, 0
-    br label %parse_array_common
-    
-parse_array_common:
-    ; Merge values from both branches
-    %array_start = phi i8* [ %array_start_bar, %parse_array_bar ], [ %array_start_no_bar, %parse_array ]
-    %array_len_minus2 = phi i64 [ %array_len_minus2_bar, %parse_array_bar ], [ %array_len_no_bar, %parse_array ]
-    ; Common array parsing logic
-    ; Parse "[N x i8]" format where N is a number
+    ; Parse array: "[N x i8]" format where N is a number
     ; We need to extract the number N and create an array type [N x i8]
     
     ; Find the opening bracket position (already at start of array string)
     ; Skip '[' to get to the number
-    %array_start_plus1 = getelementptr i8, i8* %array_start, i64 1
-    %array_len_minus1 = sub i64 %array_len_minus2, 1  ; Subtract '[' from length
+    %array_start_plus1 = getelementptr i8, i8* %type_str, i64 1
+    %array_len_minus1 = sub i64 %type_len, 1  ; Subtract '[' from length
     
     ; Parse the number N
     ; We'll scan for digits until we find " x "

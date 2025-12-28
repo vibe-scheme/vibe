@@ -94,11 +94,52 @@ entry:
     ret i32 %result
 }
 
+; Normalize type atom value (strip % prefix for named types)
+; parse_normalize_type_atom: Normalize type atom value
+; Parameters:
+;   value: Pointer to token value string
+;   len: Length of token value
+; Returns: Pointer to normalized value (newly allocated if changed, original if unchanged), normalized length
+; Note: This function normalizes type syntax:
+;   - Strips % prefix from named types: "%Token" → "Token"
+;   - Keeps pointer indicators (*) as-is
+;   - Vertical bars are already stripped by lexer, so we don't handle them here
+define { i8*, i64 } @parse_normalize_type_atom(i8* %value, i64 %len) {
+entry:
+    %value_null = icmp eq i8* %value, null
+    %len_zero = icmp eq i64 %len, 0
+    %invalid = or i1 %value_null, %len_zero
+    br i1 %invalid, label %return_original, label %check_percent
+    
+check_percent:
+    ; Check if value starts with '%' (named type)
+    %first_char = load i8, i8* %value
+    %is_percent = icmp eq i8 %first_char, 37  ; '%' = 37
+    br i1 %is_percent, label %strip_percent, label %return_original
+    
+strip_percent:
+    ; Strip '%' prefix: create new string without first character
+    %new_len = sub i64 %len, 1
+    %new_value = call i8* @malloc(i64 %new_len)
+    %value_plus1 = getelementptr i8, i8* %value, i64 1
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %new_value, i8* %value_plus1, i64 %new_len, i1 false)
+    %result = insertvalue { i8*, i64 } undef, i8* %new_value, 0
+    %result_with_len = insertvalue { i8*, i64 } %result, i64 %new_len, 1
+    ret { i8*, i64 } %result_with_len
+    
+return_original:
+    ; Return original value (no normalization needed)
+    %result_orig = insertvalue { i8*, i64 } undef, i8* %value, 0
+    %result_orig_with_len = insertvalue { i8*, i64 } %result_orig, i64 %len, 1
+    ret { i8*, i64 } %result_orig_with_len
+}
+
 ; Create atom node
 ; parse_create_atom: Create an AST node for an atom
 ; Parameters:
 ;   token: Pointer to Token structure
 ; Returns: Pointer to ASTNode
+; Note: Normalizes type syntax (strips % prefix from named types)
 define %ASTNode* @parse_create_atom(%Token* %token) {
 entry:
     %node = call i8* @malloc(i64 48)
@@ -115,13 +156,19 @@ entry:
     
     %val_ptr = getelementptr %Token, %Token* %token, i32 0, i32 1
     %value = load i8*, i8** %val_ptr
-    %node_val_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
-    store i8* %value, i8** %node_val_ptr
-    
     %len_ptr = getelementptr %Token, %Token* %token, i32 0, i32 2
     %len = load i64, i64* %len_ptr
+    
+    ; Normalize type syntax (strip % prefix if present)
+    %normalized = call { i8*, i64 } @parse_normalize_type_atom(i8* %value, i64 %len)
+    %normalized_value = extractvalue { i8*, i64 } %normalized, 0
+    %normalized_len = extractvalue { i8*, i64 } %normalized, 1
+    
+    %node_val_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
+    store i8* %normalized_value, i8** %node_val_ptr
+    
     %node_len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
-    store i64 %len, i64* %node_len_ptr
+    store i64 %normalized_len, i64* %node_len_ptr
     
     %car_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 4
     store %ASTNode* null, %ASTNode** %car_ptr

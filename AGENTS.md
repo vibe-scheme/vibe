@@ -67,6 +67,24 @@ Each chat document should include:
 
 **Note**: Early in development, sessions often involve multiple related fixes and investigations. The chat documentation should reflect the full breadth of work accomplished, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 
+### Date Verification for Chat Documents
+
+**CRITICAL**: Always verify the current date before creating or updating chat documents. Incorrect dates can cause confusion in historical records.
+
+**Process**:
+1. Before writing the date in a chat document, run `date +"%Y-%m-%d"` to get the current date
+2. Use ISO 8601 format: `YYYY-MM-DD` (e.g., `2025-12-28`)
+3. If updating an existing chat document, verify the date is still correct
+4. When in doubt, check the system date rather than guessing
+
+**Example**:
+```bash
+$ date +"%Y-%m-%d"
+2025-12-28
+```
+
+Then use this exact date in the chat document: `**Date**: 2025-12-28`
+
 ## Coding Standards and Practices
 
 ### LLVM IR Code
