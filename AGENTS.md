@@ -45,6 +45,42 @@ vibe/
 └── build/             # Build output (gitignored)
 ```
 
+## Build System Overview
+
+**IMPORTANT**: When modifying bootstrap compiler code (`.ll` files in `bootstrap/`), always rebuild before testing:
+- Run `./build.sh bootstrap` to rebuild the bootstrap compiler
+- Or run `./build.sh` which will automatically rebuild if needed
+- Never test with an outdated binary - LLVM IR changes require recompilation
+
+The Vibe project uses a three-phase build system that enables gradual migration from pure LLVM IR to self-hosted Vibe code:
+
+### Build Modes
+
+1. **BOOTSTRAP** (`./build.sh bootstrap`):
+   - Uses pure `.ll` files (no `.vibe` files)
+   - Produces `bootstrap_compiler` executable
+   - This is the initial bootstrap compiler written entirely in LLVM IR
+
+2. **KERNEL** (`./build.sh build_kernel`):
+   - Uses `.vibe` files + `*_no_vibe.ll` files
+   - Compiles `.vibe` files using `bootstrap_compiler`
+   - Produces `vibe_kernel` executable
+   - Represents the transition phase where some code is migrated to Vibe
+
+3. **SELF_HOST** (`./build.sh build`):
+   - Uses `.vibe` files + `*_no_vibe.ll` files
+   - Compiles `.vibe` files using `vibe_kernel` itself
+   - Produces `vibe_kernel` executable (self-compiled)
+   - This is the self-hosting phase where Vibe compiles itself
+
+### File Type Relationships
+
+- **`.ll` files**: Pure LLVM IR implementations used in BOOTSTRAP mode
+- **`*_no_vibe.ll` files**: Contains functions that haven't been migrated to `.vibe` yet, used in KERNEL and SELF_HOST modes alongside `.vibe` files
+- **`.vibe` files**: Vibe source code that gets compiled to LLVM bitcode, used in KERNEL and SELF_HOST modes
+
+**Important**: When functions are migrated from `.ll` to `.vibe`, they are removed from `.ll` but remain in `*_no_vibe.ll` until fully migrated. The `*_no_vibe.ll` files serve as a bridge during the migration process.
+
 ## Development Chat Documentation
 
 **IMPORTANT**: All development conversations must be memorialized in the `doc/chats/` directory. Each conversation should be saved as a numbered markdown file (e.g., `0001-initial-setup.md`, `0002-lexer-implementation.md`, etc.).
@@ -96,13 +132,13 @@ Then use this exact date in the chat document: `**Date**: 2025-12-28`
 
 ### Synchronizing `*_no_vibe.ll` Files
 
-**IMPORTANT**: When making changes to `.ll` files that have corresponding `*_no_vibe.ll` files (e.g., `lexer.ll` and `lexer_no_vibe.ll`), you must synchronize the changes. The `*_no_vibe.ll` files are used when building `vibe_kernel` in KERNEL mode, and they contain the non-migrated functions that haven't been moved to `.vibe` files yet.
+**IMPORTANT**: When making changes to `.ll` files that have corresponding `*_no_vibe.ll` files (e.g., `lexer.ll` and `lexer_no_vibe.ll`), you must synchronize the changes. The `*_no_vibe.ll` files are used when building `vibe_kernel` in KERNEL and SELF_HOST modes, and they contain the non-migrated functions that haven't been moved to `.vibe` files yet.
 
 - **When to synchronize**: Any time you modify a function or logic in a `.ll` file that also exists in the corresponding `*_no_vibe.ll` file
 - **What to synchronize**: Function implementations, type definitions, constants, and any logic changes
 - **Future goal**: Eventually all code will be migrated to `.vibe` files, but until then, keep `*_no_vibe.ll` files in sync with their `.ll` counterparts
 
-Example: If you fix number parsing in `bootstrap/lexer/lexer.ll`, you must also apply the same fix to `bootstrap/lexer/lexer_no_vibe.ll` if that function hasn't been migrated to `lexer.vibe` yet.
+**Example**: If you fix number parsing in `bootstrap/lexer/lexer.ll`, you must also apply the same fix to `bootstrap/lexer/lexer_no_vibe.ll` if that function hasn't been migrated to `lexer.vibe` yet.
 
 ### Error Handling
 
@@ -167,7 +203,7 @@ Example programs and tutorials demonstrating Vibe features.
 
 - **LLVM 21** is required (specifically version 21.x)
 - The bootstrap compiler uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) during build time
-- The bootstrap compiler will link against LLVM libraries via FFI for bitcode generation
+- The bootstrap compiler links against LLVM libraries via FFI for bitcode generation
 - FFI is used to call LLVM C API functions for generating bitcode programmatically
 - Verify installation with: `llvm-as --version`, `llvm-link --version`, `llc --version`
 
@@ -181,7 +217,7 @@ Example programs and tutorials demonstrating Vibe features.
 
 **Current Configuration**:
 - **Apple Silicon (arm64)**: `arm64-apple-darwin` with data layout `"e-m:o-i64:64-i128:128-n32:64-S128"`
-- **Intel macOS (x86_64)**: Previously `x86_64-apple-macosx10.15.0` (now updated to arm64)
+- **Intel macOS (x86_64)**: The codebase currently targets arm64. For x86_64 macOS, update target triples to `x86_64-apple-macosx10.15.0` with appropriate data layout.
 
 When adding new `.ll` files, use the same target triple as existing files. The target triple can be found at the top of any `.ll` file:
 ```
@@ -195,9 +231,9 @@ For Linux builds, update the target triple to match your distribution (e.g., `x8
 
 - The CMake build system finds LLVM tools and LLVM libraries for linking
 - The bootstrap compiler executable links against LLVM C API libraries (Core, IR, Support, Target, etc.)
-- FFI is reintroduced to enable calling LLVM C API functions at runtime
+- FFI enables calling LLVM C API functions at runtime
 - FFI requires dynamic library loading (dlopen/dlsym) - libdl on Linux, built-in on macOS
-- LLVM libraries will be loaded via FFI at runtime for bitcode generation
+- LLVM libraries are loaded via FFI at runtime for bitcode generation
 - Architecture-specific LLVM components are automatically linked based on the target triple (AArch64 for arm64, X86 for x86_64)
 
 ### Platform-Aware Target Initialization
@@ -213,8 +249,7 @@ The function uses `LLVMGetDefaultTargetTriple()` to detect the architecture and 
 
 ### `define-bitcode-*` Primitives
 
-These are the core primitives that enable self-hosting. They allows binding LLVM functions, types, and constants to names,
-enabling core language features to be implemented in Vibe itself. For example:
+These are the core primitives that enable self-hosting. They allow binding LLVM functions, types, and constants to names, enabling core language features to be implemented in Vibe itself. For example:
 
 ```scheme
 (define-bitcode-function (lambda (formals |i8*|) (body |i8*|)) |void*|
@@ -232,19 +267,12 @@ The FFI (Foreign Function Interface) system allows Vibe to call functions from d
 - Platform-specific functionality
 - **LLVM C API integration** - calling LLVM functions for bitcode generation
 
-The FFI system will be implemented in `bootstrap/runtime/ffi.ll` and provides:
+The FFI system is implemented in `bootstrap/runtime/ffi.ll` and provides:
 - Library loading (`ffi_load_library`) - Load LLVM libraries dynamically
 - Symbol resolution (`ffi_get_symbol`) - Get LLVM C API function pointers
 - Function calling (`ffi_call`) - Call foreign functions including LLVM C API
 - Type mapping (`ffi_define_type`) - Map Vibe types to C/LLVM types
 - LLVM-specific wrappers for creating contexts, modules, functions, etc.
-
-## Questions or Issues
-
-If you encounter issues or have questions:
-1. Check existing documentation in `doc/design/` and `doc/chats/`
-2. Review the implementation plan in `doc/design/bootstrap-plan.md`
-3. Document any new insights or decisions in the appropriate chat document
 
 ### LLVM Integration via FFI
 
@@ -261,15 +289,6 @@ The LLVM C API integration via FFI allows:
 - Generating functions, types, and constants via API calls
 - Writing bitcode files directly without text IR intermediate format
 - Better error handling and validation through LLVM's API
-
-## Next Steps After Bootstrap
-
-Once the bootstrap compiler is complete:
-1. Write the core Vibe kernel in Vibe itself (using `define-bitcode`)
-2. Convert bootstrap .ll files to `define-bitcode-*` methods (2nd gen bootstrap)
-3. Implement the macro system
-4. Begin self-hosting the compiler
-5. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation
 
 ### Future: `define-bitcode-ffi-function`
 
@@ -292,6 +311,22 @@ When we begin rewriting `.ll` files in `.vibe`, we should implement `define-bitc
 
 **Current status**: External function declarations (like `printf`) are hardcoded in `codegen_init()`. The infrastructure for FFI exists, but `define-bitcode-ffi-function` is not yet implemented. This will be implemented as part of the 2nd generation bootstrap when rewriting `.ll` files in `.vibe`.
 
+## Next Steps After Bootstrap
+
+Once the bootstrap compiler is complete:
+1. Write the core Vibe kernel in Vibe itself (using `define-bitcode`)
+2. Convert bootstrap .ll files to `define-bitcode-*` methods (2nd gen bootstrap)
+3. Implement the macro system
+4. Begin self-hosting the compiler
+5. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation
+
+## Questions or Issues
+
+If you encounter issues or have questions:
+1. Check existing documentation in `doc/design/` and `doc/chats/`
+2. Review the implementation plan in `doc/design/bootstrap-plan.md`
+3. Document any new insights or decisions in the appropriate chat document
+
 ## End-of-Session Practices
 
 At the end of each development session, the following steps should be completed:
@@ -306,13 +341,13 @@ Create a new chat document in `doc/chats/` following the naming convention:
   - Review `git diff` for each major file to understand all changes
   - Don't just document the final topic - document everything accomplished
 - Include:
- - Date and context
- - **Complete overview** of ALL work completed (not just the last investigation)
- - Key decisions made
- - Implementation details for each major change
- - Technical challenges encountered
- - Files modified (with specific changes)
- - Related documentation references
+  - Date and context
+  - **Complete overview** of ALL work completed (not just the last investigation)
+  - Key decisions made
+  - Implementation details for each major change
+  - Technical challenges encountered
+  - Files modified (with specific changes)
+  - Related documentation references
 
 **Important**: Early in development, sessions often involve multiple fixes, cleanups, and investigations. The chat document should reflect the full breadth of work, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 

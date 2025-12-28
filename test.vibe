@@ -8,4 +8,4 @@
     (llvm:label 'different
       (llvm:ret (llvm:const-int |i8| 0)))))
 
-;(llvm:call printf (llvm:array (bool-test 42)) "")
+(llvm:call printf (llvm:array (bool-test 42)) "")

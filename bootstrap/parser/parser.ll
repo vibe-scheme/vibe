@@ -164,8 +164,25 @@ entry:
     %normalized_value = extractvalue { i8*, i64 } %normalized, 0
     %normalized_len = extractvalue { i8*, i64 } %normalized, 1
     
+    ; Always copy the normalized value to ensure it's isolated and null-terminated
+    ; This prevents reading past token boundaries when tokens are adjacent in source
+    %copied_value_size = add i64 %normalized_len, 1  ; +1 for null terminator
+    %copied_value = call i8* @malloc(i64 %copied_value_size)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %copied_value, i8* %normalized_value, i64 %normalized_len, i1 false)
+    %null_term_ptr = getelementptr i8, i8* %copied_value, i64 %normalized_len
+    store i8 0, i8* %null_term_ptr
+    
+    ; Free the normalized value if it was newly allocated (if it's different from original)
+    %value_changed = icmp ne i8* %normalized_value, %value
+    br i1 %value_changed, label %free_normalized, label %store_copied
+    
+free_normalized:
+    call void @free(i8* %normalized_value)
+    br label %store_copied
+    
+store_copied:
     %node_val_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
-    store i8* %normalized_value, i8** %node_val_ptr
+    store i8* %copied_value, i8** %node_val_ptr
     
     %node_len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
     store i64 %normalized_len, i64* %node_len_ptr

@@ -1388,12 +1388,72 @@ entry:
 ; Returns: 1 if found, 0 if not found
 define i32 @codegen_get_llvm_function(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef* %func_value_out, %LLVMTypeRef* %func_type_out) {
 entry:
+    ; Debug: Looking up function
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_looking_up_function, i32 0, i32 0))
+    ; Print function name if valid
+    %name_not_null = icmp ne i8* %name, null
+    %name_len_valid = icmp ugt i64 %name_len, 0
+    %can_print_name = and i1 %name_not_null, %name_len_valid
+    br i1 %can_print_name, label %print_func_name, label %skip_print_func_name
+    
+print_func_name:
+    %name_buf_func = call i8* @malloc(i64 %name_len)
+    %name_buf_func_null = icmp eq i8* %name_buf_func, null
+    br i1 %name_buf_func_null, label %skip_print_func_name, label %do_print_func_name
+    
+do_print_func_name:
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_func, i8* %name, i64 %name_len, i1 false)
+    %name_null_func = getelementptr i8, i8* %name_buf_func, i64 %name_len
+    store i8 0, i8* %name_null_func
+    call i32 (i8*, ...) @printf(i8* %name_buf_func)
+    call void @free(i8* %name_buf_func)
+    br label %skip_print_func_name
+    
+skip_print_func_name:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ; Get llvm_functions list
     %llvm_functions_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 14
     %functions = load %ASTNode*, %ASTNode** %llvm_functions_ptr
     
     %functions_null = icmp eq %ASTNode* %functions, null
-    br i1 %functions_null, label %not_found_func, label %search_loop_func
+    br i1 %functions_null, label %not_found_func_debug, label %count_functions
+    
+not_found_func_debug:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_function_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %not_found_func
+    
+count_functions:
+    ; Count functions in list for debug output
+    %func_count = alloca i32
+    store i32 0, i32* %func_count
+    %current_func_count = alloca %ASTNode*
+    store %ASTNode* %functions, %ASTNode** %current_func_count
+    br label %count_loop
+    
+count_loop:
+    %current_val_count = load %ASTNode*, %ASTNode** %current_func_count
+    %current_null_count = icmp eq %ASTNode* %current_val_count, null
+    br i1 %current_null_count, label %count_done, label %increment_count
+    
+increment_count:
+    %count_val = load i32, i32* %func_count
+    %count_inc = add i32 %count_val, 1
+    store i32 %count_inc, i32* %func_count
+    %cdr_ptr_count = getelementptr %ASTNode, %ASTNode* %current_val_count, i32 0, i32 5
+    %cdr_count = load %ASTNode*, %ASTNode** %cdr_ptr_count
+    store %ASTNode* %cdr_count, %ASTNode** %current_func_count
+    br label %count_loop
+    
+count_done:
+    %final_count = load i32, i32* %func_count
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.debug_function_list_size, i32 0, i32 0), i32 %final_count)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %search_loop_func
     
 search_loop_func:
     %current_func = alloca %ASTNode*
@@ -1436,6 +1496,11 @@ compare_chars_func:
     br i1 %is_match_func, label %found_func, label %next_func
     
 found_func:
+    ; Debug: Function found
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_function_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
     ; Get (func_value . func_type) from pair.cdr
     %pair_cdr_ptr_func = getelementptr %ASTNode, %ASTNode* %pair_func, i32 0, i32 5
     %value_type_pair = load %ASTNode*, %ASTNode** %pair_cdr_ptr_func
@@ -1493,6 +1558,10 @@ next_func:
     br label %iterate_func
     
 not_found_func:
+    ; Debug: Function not found after searching
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_function_not_found, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret i32 0
 }
 
@@ -3148,6 +3217,14 @@ declare i32 @printf(i8*, ...)
 @.str.debug_pointer_value = private unnamed_addr constant [13 x i8] c", pointer=%p\00"
 @.str.debug_type_fmt = private unnamed_addr constant [3 x i8] c"%s\00"
 @.str.debug_type_len = private unnamed_addr constant [17 x i8] c"Type length: %ld\00"
+@.str.debug_name_len_bounds_check = private unnamed_addr constant [46 x i8] c"ERROR: name_len out of bounds: %ld (max 1000)\00"
+@.str.debug_name_null_check = private unnamed_addr constant [29 x i8] c"ERROR: name pointer is null!\00"
+@.str.debug_atom_val_ptr = private unnamed_addr constant [31 x i8] c"Atom val pointer: %p, len: %ld\00"
+@.str.debug_atom_first_bytes = private unnamed_addr constant [27 x i8] c"Atom first bytes: %c%c%c%c\00"
+@.str.debug_looking_up_function = private unnamed_addr constant [27 x i8] c"Looking up function: name=\00"
+@.str.debug_function_list_size = private unnamed_addr constant [29 x i8] c"Function list has %d entries\00"
+@.str.debug_function_found = private unnamed_addr constant [19 x i8] c"Function found: OK\00"
+@.str.debug_function_not_found = private unnamed_addr constant [21 x i8] c"Function not found: \00"
 @.str.debug_checking_array = private unnamed_addr constant [22 x i8] c"Checking for array...\00"
 @.str.debug_reached_array_check = private unnamed_addr constant [26 x i8] c"Reached check_array block\00"
 @.str.debug_first_char = private unnamed_addr constant [21 x i8] c"First char: %d (dec)\00"
@@ -3894,6 +3971,42 @@ handle_atom:
     %atom_val = load i8*, i8** %atom_val_ptr
     %atom_len_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 3
     %atom_len = load i64, i64* %atom_len_ptr
+    
+    ; Debug: Print atom value pointer and length to verify they're not corrupted
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_atom_val_ptr, i32 0, i32 0), i8* %atom_val, i64 %atom_len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    
+    ; Debug: Print first few bytes of atom_val to verify it's not corrupted
+    %atom_val_not_null = icmp ne i8* %atom_val, null
+    %atom_len_gt_zero = icmp ugt i64 %atom_len, 0
+    %can_print_bytes = and i1 %atom_val_not_null, %atom_len_gt_zero
+    br i1 %can_print_bytes, label %print_first_bytes, label %skip_print_bytes
+    
+print_first_bytes:
+    ; Print first 4 bytes (or fewer if atom_len < 4)
+    %atom_len_ge_4 = icmp uge i64 %atom_len, 4
+    br i1 %atom_len_ge_4, label %print_4_bytes, label %print_less_than_4
+    
+print_4_bytes:
+    %byte0_ptr = getelementptr i8, i8* %atom_val, i64 0
+    %byte0 = load i8, i8* %byte0_ptr
+    %byte1_ptr = getelementptr i8, i8* %atom_val, i64 1
+    %byte1 = load i8, i8* %byte1_ptr
+    %byte2_ptr = getelementptr i8, i8* %atom_val, i64 2
+    %byte2 = load i8, i8* %byte2_ptr
+    %byte3_ptr = getelementptr i8, i8* %atom_val, i64 3
+    %byte3 = load i8, i8* %byte3_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_atom_first_bytes, i32 0, i32 0), i8 %byte0, i8 %byte1, i8 %byte2, i8 %byte3)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    br label %skip_print_bytes
+    
+print_less_than_4:
+    ; For shorter atoms, just print what we have
+    br label %skip_print_bytes
+    
+skip_print_bytes:
     %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 1
     %atom_type = load i32, i32* %atom_type_ptr
     
@@ -3925,22 +4038,37 @@ create_int_const:
     ret %LLVMValueRef %int_const
     
 try_resolve_symbol:
-    ; Resolution order per R7RS: let* bindings shadow parameters
+    ; Resolution order: Check functions before parameters to avoid crashes
     ; 1. Local values (let* bindings) - most local scope
-    ; 2. Parameters - function parameters
-    ; 3. Constants - module-level constants
-    ; 4. Functions - module-level functions
+    ; 2. Functions - module-level functions (check before parameters to find function names)
+    ; 3. Parameters - function parameters
+    ; 4. Constants - module-level constants
     
     ; Try to resolve as local value name first (let* bindings shadow parameters)
     %local_value_first = call %LLVMValueRef @codegen_dsl_resolve_local(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
     %local_not_null_first = icmp ne %LLVMValueRef %local_value_first, null
-    br i1 %local_not_null_first, label %return_local_first, label %try_param
+    br i1 %local_not_null_first, label %return_local_first, label %try_function_first
     
 return_local_first:
     ret %LLVMValueRef %local_value_first
     
+try_function_first:
+    ; Try to resolve as function name (before checking parameters)
+    ; This prevents crashes when a function name is mistaken for a parameter
+    ; Allocate space for function value and type output
+    %func_value_out_first = alloca %LLVMValueRef
+    %func_type_out_first = alloca %LLVMTypeRef
+    %func_found_first = call i32 @codegen_get_llvm_function(%CodeGen* %cg, i8* %atom_val, i64 %atom_len, %LLVMValueRef* %func_value_out_first, %LLVMTypeRef* %func_type_out_first)
+    %func_found_bool_first = icmp ne i32 %func_found_first, 0
+    br i1 %func_found_bool_first, label %return_function_first, label %try_param
+    
+return_function_first:
+    ; Get function value from output parameter
+    %func_value_first = load %LLVMValueRef, %LLVMValueRef* %func_value_out_first
+    ret %LLVMValueRef %func_value_first
+    
 try_param:
-    ; Try to resolve as parameter name (after checking locals)
+    ; Try to resolve as parameter name (after checking locals and functions)
     %param_value = call %LLVMValueRef @codegen_dsl_resolve_param(%CodeGen* %cg, i8* %atom_val, i64 %atom_len)
     %param_not_null = icmp ne %LLVMValueRef %param_value, null
     br i1 %param_not_null, label %return_param, label %try_constant
@@ -3975,13 +4103,14 @@ try_constant:
     br i1 %constant_not_null, label %return_constant, label %constant_not_found
     
 constant_not_found:
-    ; Debug: Constant not found (locals were already checked, so try function)
+    ; Debug: Constant not found (locals, functions, and parameters were already checked)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_global_not_found, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([7 x i8], [7 x i8]* @.str.debug_name_colon_space, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* %atom_val)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %try_function
+    ; All resolution attempts failed, return null
+    br label %return_null_atom
     
 return_constant:
     ; Check if constant is an array type and convert to pointer if needed
@@ -4065,20 +4194,6 @@ return_gep:
 return_constant_as_is:
     ; Return constant value as-is (not an array or GEP failed)
     ret %LLVMValueRef %constant_value
-    
-try_function:
-    ; Try to resolve as function name (from llvm_functions list)
-    ; Allocate space for function value and type output
-    %func_value_out = alloca %LLVMValueRef
-    %func_type_out = alloca %LLVMTypeRef
-    %func_found = call i32 @codegen_get_llvm_function(%CodeGen* %cg, i8* %atom_val, i64 %atom_len, %LLVMValueRef* %func_value_out, %LLVMTypeRef* %func_type_out)
-    %func_found_bool = icmp ne i32 %func_found, 0
-    br i1 %func_found_bool, label %return_function, label %return_null_atom
-    
-return_function:
-    ; Get function value from output parameter
-    %func_value = load %LLVMValueRef, %LLVMValueRef* %func_value_out
-    ret %LLVMValueRef %func_value
     
 return_null_atom:
     ret %LLVMValueRef null
@@ -4396,16 +4511,49 @@ no_match:
 ; Returns: LLVMValueRef for parameter, or null if not found
 define %LLVMValueRef @codegen_dsl_resolve_param(%CodeGen* %cg, i8* %name, i64 %name_len) {
 entry:
+    ; Safety checks: validate input parameters before proceeding
+    ; Check if name pointer is null
+    %name_is_null = icmp eq i8* %name, null
+    br i1 %name_is_null, label %return_null_safety, label %check_name_len
+    
+return_null_safety:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_name_null_check, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    ret %LLVMValueRef null
+    
+check_name_len:
+    ; Check if name_len is within reasonable bounds (max 1000 characters)
+    %name_len_too_large = icmp ugt i64 %name_len, 1000
+    br i1 %name_len_too_large, label %return_null_bounds, label %debug_and_proceed
+    
+return_null_bounds:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([45 x i8], [45 x i8]* @.str.debug_name_len_bounds_check, i32 0, i32 0), i64 %name_len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    ret %LLVMValueRef null
+    
+debug_and_proceed:
     ; Debug logging
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_resolving_param, i32 0, i32 0))
-    ; Print name
+    ; Debug: Print name pointer and length before malloc
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_atom_val_ptr, i32 0, i32 0), i8* %name, i64 %name_len)
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    ; Print name (check malloc result)
     %name_buf_debug = call i8* @malloc(i64 %name_len)
+    %name_buf_debug_null = icmp eq i8* %name_buf_debug, null
+    br i1 %name_buf_debug_null, label %skip_name_print, label %copy_name
+    
+copy_name:
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_debug, i8* %name, i64 %name_len, i1 false)
     %name_null_debug = getelementptr i8, i8* %name_buf_debug, i64 %name_len
     store i8 0, i8* %name_null_debug
     call i32 (i8*, ...) @printf(i8* %name_buf_debug)
     call void @free(i8* %name_buf_debug)
+    br label %skip_name_print
+    
+skip_name_print:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
     ; Get param_names list from CodeGen
@@ -4746,7 +4894,27 @@ entry:
     ; Debug: Looking up local value
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_local, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* %name)
+    ; Print name safely using length (create null-terminated copy)
+    %name_not_null = icmp ne i8* %name, null
+    %name_len_valid = icmp ugt i64 %name_len, 0
+    %can_print_name = and i1 %name_not_null, %name_len_valid
+    br i1 %can_print_name, label %print_name_safe, label %skip_print_name
+    
+print_name_safe:
+    %name_buf_size = add i64 %name_len, 1
+    %name_buf = call i8* @malloc(i64 %name_buf_size)
+    %name_buf_null = icmp eq i8* %name_buf, null
+    br i1 %name_buf_null, label %skip_print_name, label %copy_and_print
+    
+copy_and_print:
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
+    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
+    store i8 0, i8* %name_null_ptr
+    call i32 (i8*, ...) @printf(i8* %name_buf)
+    call void @free(i8* %name_buf)
+    br label %skip_print_name
+    
+skip_print_name:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
     ; Get local_values list from CodeGen
@@ -5313,11 +5481,11 @@ build_call:
     
     ; Additional safety checks before calling
     %func_check = icmp eq %LLVMValueRef %func, null
-    br i1 %func_check, label %error, label %check_func_type_again
+    br i1 %func_check, label %error_with_free, label %check_func_type_again
     
 check_func_type_again:
     %func_type_check = icmp eq %LLVMTypeRef %func_type, null
-    br i1 %func_type_check, label %error, label %do_call
+    br i1 %func_type_check, label %error_with_free, label %do_call
     
 do_call:
     ; Validate arguments array - check if any argument is null
@@ -5364,6 +5532,11 @@ call_with_no_args:
     %call_result_no_args = call %LLVMValueRef @llvm_build_call(%LLVMBuilderRef %builder, %LLVMTypeRef %func_type, %LLVMValueRef %func, %LLVMValueRef* null, i32 0, i8* %name_phi_call)
     call void @free(i8* %args_array)
     ret %LLVMValueRef %call_result_no_args
+    
+error_with_free:
+    ; Free args_array if it was allocated before returning error
+    call void @free(i8* %args_array)
+    br label %error
     
 call_with_args:
     ; Debug logging before call
@@ -6537,22 +6710,40 @@ position_builder:
     ; The builder should now be positioned at the label block, so instructions will go there
     call void @codegen_eval_dsl_body(%CodeGen* %cg, %ASTNode* %body)
     
-    ; Restore builder to saved position (if it was positioned)
-    ; This ensures subsequent expressions continue in the correct block
-    ; If saved_block is null, builder wasn't positioned initially, so we can't restore
-    ; In practice, builder should always be positioned when llvm:label is called
+    ; Restore builder to saved position after processing label body
+    ; Assumption: The label body correctly terminates the block (contains a terminator like llvm:br, llvm:ret, etc.)
+    ; If the block is not terminated, that's a syntax error and we don't need to handle it gracefully
+    ; Restoring maintains the visitor pattern: process node, restore context, move to next sibling
+    ; However, if the label block was terminated, we cannot add more instructions to it
+    ; Check if current insert block is the label block (meaning it was terminated)
+    %current_block_after = call %LLVMBasicBlockRef @llvm_get_insert_block(%LLVMBuilderRef %builder)
+    %current_block_null = icmp eq %LLVMBasicBlockRef %current_block_after, null
+    br i1 %current_block_null, label %no_restore, label %check_if_terminated
+    
+check_if_terminated:
+    %label_block_was_terminated = icmp eq %LLVMBasicBlockRef %current_block_after, %block
+    br i1 %label_block_was_terminated, label %no_restore, label %check_saved_null
+    
+no_restore:
+    ; Label block was terminated - don't restore builder position
+    ; The next sibling (likely another llvm:label) will create a new block and position builder there
+    ; Restoring to a terminated block or entry block would break the control flow
+    br label %return_block
+    
+check_saved_null:
     %saved_block_null = icmp eq %LLVMBasicBlockRef %saved_block, null
     br i1 %saved_block_null, label %return_block, label %restore_position
     
 restore_position:
     ; Restore builder to the position it was at before we positioned it at the label block
-    ; This is critical: without this, subsequent expressions would be generated in the label block
+    ; This ensures subsequent sibling expressions continue in the correct block
+    ; This only happens when the label block was NOT terminated (unusual but possible)
     call void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %saved_block)
     br label %return_block
     
 return_block:
     ; Return basic block as LLVMValueRef (cast)
-    %block_phi = phi %LLVMBasicBlockRef [ %block, %position_builder ], [ %block, %restore_position ]
+    %block_phi = phi %LLVMBasicBlockRef [ %block, %no_restore ], [ %block, %restore_position ], [ %block, %check_saved_null ]
     %block_as_value = bitcast %LLVMBasicBlockRef %block_phi to %LLVMValueRef
     ret %LLVMValueRef %block_as_value
     
@@ -7061,6 +7252,11 @@ entry:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([40 x i8], [40 x i8]* @.str.debug_define_llvm_function_start, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
+    ; Clear local_values list at start of function definition
+    ; This ensures bindings from previous functions don't leak into the new function
+    %local_values_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 10
+    store %ASTNode* null, %ASTNode** %local_values_ptr
+    
     ; AST structure: LIST { ATOM: "define-llvm-function", LIST: signature, ATOM: return-type, LIST: dsl-body }
     ; Get signature list (second element)
     %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
@@ -7254,6 +7450,11 @@ cleanup_builder:
     store %LLVMValueRef null, %LLVMValueRef* %current_function_ptr
     store %LLVMBuilderRef null, %LLVMBuilderRef* %builder_ptr
     store %ASTNode* null, %ASTNode** %param_names_ptr
+    
+    ; Clear local_values list at end of function definition
+    ; This ensures bindings don't leak to the next function
+    %local_values_cleanup_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 10
+    store %ASTNode* null, %ASTNode** %local_values_cleanup_ptr
     
     ; Free param types array
     call void @free(i8* %param_types_array)
