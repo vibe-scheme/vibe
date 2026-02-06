@@ -1,6 +1,7 @@
 # Chat 0001: Initial Bootstrap Compiler Setup
 
 **Date**: 2025-11-27
+**Model**: Cursor Composer 1
 **Context**: Setting up the bootstrap compiler project structure and initial implementation plan
 
 ## Overview

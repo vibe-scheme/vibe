@@ -1,6 +1,7 @@
 # Chat 0017: Temp Module Disposal Fix and DSL Extension Patterns
 
 **Date**: 2025-12-23
+**Model**: Cursor Composer 1
 **Context**: Fixing memory leak in temp module disposal after linking, and documenting DSL extension patterns discovered during bootstrap development
 
 ## Overview

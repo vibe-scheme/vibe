@@ -1,6 +1,7 @@
 # Chat 0018: llvm:label Position Fix, Debug Cleanup, and Array Type Parsing
 
 **Date**: 2025-12-26
+**Model**: Cursor Composer 1
 **Context**: Fixing llvm:label builder position management, cleaning up debug file generation, fixing lexer printf security issue, and investigating array type parsing for constant creation
 
 ## Overview

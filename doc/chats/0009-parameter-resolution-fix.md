@@ -1,6 +1,7 @@
 # Chat 0009: Parameter Resolution Fix for DSL Builder
 
 **Date**: 2025-12-15
+**Model**: Cursor Composer 1
 **Context**: Continuing work on the LLVM Builder DSL migration. The DSL body generation was working, but parameter resolution was failing. The `name` parameter in `hello_world.vibe` was not being resolved correctly, causing `ERROR: Argument 1 is null!` when trying to call `printf` with the parameter.
 
 ## Problem

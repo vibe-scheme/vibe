@@ -88,7 +88,8 @@ The Vibe project uses a three-phase build system that enables gradual migration 
 ### Chat Documentation Format
 
 Each chat document should include:
-- Date and context of the conversation
+- Date, model used, and context of the conversation
+  - **Model tracking**: Always record which AI model was used for the session (e.g., `**Model**: Cursor Composer 1`, `**Model**: Claude claude-4.6-opus-high-thinking`). This helps track which model contributed to which parts of the codebase.
 - **Complete session overview**: Document ALL work done in the session, not just the final topic investigated. Review git diff to ensure comprehensive coverage of:
   - Bug fixes
   - Feature implementations

@@ -1,6 +1,7 @@
 # Chat 0012: FFI Refactor and Segfault Fix
 
 **Date**: 2025-12-17
+**Model**: Cursor Composer 1
 **Context**: Fixing LLVM call segfault and refactoring C function calls to use FFI
 
 ## Overview

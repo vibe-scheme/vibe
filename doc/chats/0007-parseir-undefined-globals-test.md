@@ -1,6 +1,7 @@
 # Chat 0007: Testing LLVM parseIR Behavior with Undefined Globals
 
 **Date**: 2025-12-11
+**Model**: Cursor Composer 1
 **Context**: Testing whether LLVM's `LLVMParseIRInContext` automatically creates implicit external declarations for undefined globals, or requires explicit declarations
 
 ## Overview

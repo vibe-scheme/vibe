@@ -1,6 +1,7 @@
 # Chat 0014: llvm:gep Type Inference Fix
 
 **Date**: 2025-12-19
+**Model**: Cursor Composer 1
 **Context**: Fixing `llvm:gep` DSL primitive to infer type from pointer value instead of requiring explicit type argument
 
 ## Overview
