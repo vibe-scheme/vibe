@@ -34,41 +34,7 @@ declare i32 @lex_is_eof(%Lexer*)
 declare i8 @lex_current_char(%Lexer*)
 declare void @lex_advance(%Lexer*)
 declare void @lex_skip_whitespace(%Lexer*)
-
-; Check if character is a delimiter
-; lex_is_delimiter: Check if character is a delimiter
-; Parameters:
-;   char: Character to check
-; Returns: 1 if delimiter, 0 otherwise
-define i32 @lex_is_delimiter(i8 %char) {
-entry:
-    %char_int = zext i8 %char to i32
-    
-    ; Delimiters: whitespace, parens, quote, semicolon
-    %is_space = icmp eq i32 %char_int, 32
-    %is_tab = icmp eq i32 %char_int, 9
-    %is_newline = icmp eq i32 %char_int, 10
-    %is_cr = icmp eq i32 %char_int, 13
-    %is_lparen = icmp eq i32 %char_int, 40
-    %is_rparen = icmp eq i32 %char_int, 41
-    %is_quote = icmp eq i32 %char_int, 39
-    %is_semicolon = icmp eq i32 %char_int, 59
-    %is_eof = icmp eq i32 %char_int, 0
-    
-    %ws1 = or i1 %is_space, %is_tab
-    %ws2 = or i1 %is_newline, %is_cr
-    %ws = or i1 %ws1, %ws2
-    
-    %punct1 = or i1 %is_lparen, %is_rparen
-    %punct2 = or i1 %is_quote, %is_semicolon
-    %punct = or i1 %punct1, %punct2
-    
-    %delim = or i1 %ws, %punct
-    %result = or i1 %delim, %is_eof
-    
-    %res = zext i1 %result to i32
-    ret i32 %res
-}
+declare i32 @lex_is_delimiter(i8)
 
 ; Read identifier or symbol
 ; lex_read_identifier: Read an identifier or symbol token
@@ -274,33 +240,7 @@ error:
     ret %Token* null
 }
 
-; Peek at character at offset from current position
-; lex_peek_char: Peek at character at given offset
-; Parameters:
-;   lexer: Pointer to Lexer structure
-;   offset: Offset from current position
-; Returns: Character at offset, or 0 if out of bounds
-define i8 @lex_peek_char(%Lexer* %lexer, i64 %offset) {
-entry:
-    %pos_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 2
-    %pos = load i64, i64* %pos_ptr
-    %peek_pos = add i64 %pos, %offset
-    
-    %len_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 1
-    %len = load i64, i64* %len_ptr
-    %is_oob = icmp uge i64 %peek_pos, %len
-    br i1 %is_oob, label %out_of_bounds, label %in_bounds
-
-out_of_bounds:
-    ret i8 0
-
-in_bounds:
-    %source_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 0
-    %source = load i8*, i8** %source_ptr
-    %char_ptr = getelementptr i8, i8* %source, i64 %peek_pos
-    %char = load i8, i8* %char_ptr
-    ret i8 %char
-}
+declare i8 @lex_peek_char(%Lexer*, i64)
 
 ; Read vertical bar delimited symbol
 ; lex_read_vertical_bar_symbol: Read a symbol delimited by vertical bars
@@ -499,32 +439,7 @@ error:
     ret %Token* %error_msg
 }
 
-; Skip comment
-; lex_skip_comment: Skip a line comment (semicolon to newline)
-; Parameters:
-;   lexer: Pointer to Lexer structure
-define void @lex_skip_comment(%Lexer* %lexer) {
-entry:
-    br label %loop
-
-loop:
-    %char = call i8 @lex_current_char(%Lexer* %lexer)
-    %char_int = zext i8 %char to i32
-    %is_eof = call i32 @lex_is_eof(%Lexer* %lexer)
-    %is_newline = icmp eq i32 %char_int, 10
-    
-    %eof_bool = icmp ne i32 %is_eof, 0
-    %done = or i1 %eof_bool, %is_newline
-    
-    br i1 %done, label %exit, label %continue
-
-continue:
-    call void @lex_advance(%Lexer* %lexer)
-    br label %loop
-
-exit:
-    ret void
-}
+declare void @lex_skip_comment(%Lexer*)
 
 ; Get next token
 ; lex_next: Get the next token from source
@@ -683,55 +598,9 @@ done_id:
 ; Parameters:
 ;   lexer: Pointer to Lexer structure
 ; Returns: Pointer to Token structure
-define %Token* @lex_peek(%Lexer* %lexer) {
-entry:
-    %pos_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 2
-    %saved_pos = load i64, i64* %pos_ptr
-    
-    %line_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 3
-    %saved_line = load i32, i32* %line_ptr
-    
-    %col_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
-    %saved_col = load i32, i32* %col_ptr
-    
-    %token = call %Token* @lex_next(%Lexer* %lexer)
-    
-    ; Restore position
-    store i64 %saved_pos, i64* %pos_ptr
-    store i32 %saved_line, i32* %line_ptr
-    store i32 %saved_col, i32* %col_ptr
-    
-    ret %Token* %token
-}
+declare %Token* @lex_peek(%Lexer*)
 
-; Report lexing error
-; lex_error: Report a lexing error
-; Parameters:
-;   lexer: Pointer to Lexer structure
-;   message: Error message string
-; Returns: Pointer to error token
-define %Token* @lex_error(%Lexer* %lexer, i8* %message) {
-entry:
-    %error_token = call i8* @malloc(i64 32)
-    %error_token_ptr = bitcast i8* %error_token to %Token*
-    %type_ptr = getelementptr %Token, %Token* %error_token_ptr, i32 0, i32 0
-    store i32 12, i32* %type_ptr  ; TOKEN_ERROR
-    
-    %val_ptr = getelementptr %Token, %Token* %error_token_ptr, i32 0, i32 1
-    store i8* %message, i8** %val_ptr
-    
-    %line_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 3
-    %line = load i32, i32* %line_ptr
-    %line_val_ptr = getelementptr %Token, %Token* %error_token_ptr, i32 0, i32 3
-    store i32 %line, i32* %line_val_ptr
-    
-    %col_ptr = getelementptr %Lexer, %Lexer* %lexer, i32 0, i32 4
-    %col = load i32, i32* %col_ptr
-    %col_val_ptr = getelementptr %Token, %Token* %error_token_ptr, i32 0, i32 4
-    store i32 %col, i32* %col_val_ptr
-    
-    ret %Token* %error_token_ptr
-}
+declare %Token* @lex_error(%Lexer*, i8*)
 
 ; String literals
 @.str.unclosed_vbar = private unnamed_addr constant [29 x i8] c"Unclosed vertical bar symbol\00"

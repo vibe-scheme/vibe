@@ -3132,6 +3132,7 @@ declare i32 @printf(i8*, ...)
 @.str.debug_newline = private unnamed_addr constant [2 x i8] c"\0A\00"
 @.str.debug_define_llvm_function_start = private unnamed_addr constant [39 x i8] c"codegen_define_llvm_function: starting\00"
 @.str.debug_define_llvm_ffi_function_start = private unnamed_addr constant [43 x i8] c"codegen_define_llvm_ffi_function: starting\00"
+@.str.debug_declare_llvm_function_start = private unnamed_addr constant [40 x i8] c"codegen_declare_llvm_function: starting\00"
 @.str.debug_extracting_dsl_body = private unnamed_addr constant [29 x i8] c"Extracting DSL body from AST\00"
 @.str.debug_dsl_body_extracted = private unnamed_addr constant [32 x i8] c"DSL body extracted successfully\00"
 @.str.debug_evaluating_dsl_body = private unnamed_addr constant [20 x i8] c"Evaluating DSL body\00"
@@ -7684,6 +7685,132 @@ set_external_linkage:
     ret i32 0
     
 error:
+    ret i32 -1
+}
+
+; ============================================================================
+; declare-llvm-function Implementation
+; ============================================================================
+
+; Handle declare-llvm-function AST node
+; codegen_declare_llvm_function: Process declare-llvm-function form
+; Creates a function declaration (no body) so that other .vibe functions can
+; call functions defined in separately-linked modules (e.g. _no_vibe.ll files).
+; Parameters:
+;   cg: Pointer to CodeGen structure
+;   node: AST node for declare-llvm-function form
+; Returns: 0 on success, -1 on error
+; Syntax: (declare-llvm-function (name (param1 type1) (param2 type2) ...) return-type)
+define i32 @codegen_declare_llvm_function(%CodeGen* %cg, %ASTNode* %node) {
+entry:
+    ; Debug logging
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([40 x i8], [40 x i8]* @.str.debug_declare_llvm_function_start, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+
+    ; AST structure: LIST { ATOM: "declare-llvm-function", LIST: signature, ATOM: return-type }
+    ; Get signature list (second element)
+    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
+    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
+    %sig_list_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
+    %sig_list = load %ASTNode*, %ASTNode** %sig_list_node_ptr
+
+    ; Extract function name (first element of signature list)
+    %sig_car_ptr = getelementptr %ASTNode, %ASTNode* %sig_list, i32 0, i32 4
+    %func_name_node = load %ASTNode*, %ASTNode** %sig_car_ptr
+    %func_name_val_ptr = getelementptr %ASTNode, %ASTNode* %func_name_node, i32 0, i32 2
+    %func_name = load i8*, i8** %func_name_val_ptr
+    %func_name_len_ptr = getelementptr %ASTNode, %ASTNode* %func_name_node, i32 0, i32 3
+    %func_name_len = load i64, i64* %func_name_len_ptr
+
+    ; Get parameters with types (rest of signature list)
+    %sig_cdr_ptr = getelementptr %ASTNode, %ASTNode* %sig_list, i32 0, i32 5
+    %params_list = load %ASTNode*, %ASTNode** %sig_cdr_ptr
+
+    ; Get return type (third element)
+    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
+    %cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
+    %return_type_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 4
+    %return_type_node = load %ASTNode*, %ASTNode** %return_type_node_ptr
+    %return_type_val_ptr = getelementptr %ASTNode, %ASTNode* %return_type_node, i32 0, i32 2
+    %return_type = load i8*, i8** %return_type_val_ptr
+    %return_type_len_ptr = getelementptr %ASTNode, %ASTNode* %return_type_node, i32 0, i32 3
+    %return_type_len = load i64, i64* %return_type_len_ptr
+
+    ; Get LLVM context and module
+    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
+    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
+    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
+    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
+
+    %context_null = icmp eq %LLVMContextRef %context, null
+    %module_null = icmp eq %LLVMModuleRef %module, null
+    %any_null = or i1 %context_null, %module_null
+    br i1 %any_null, label %decl_error, label %resolve_return_type_decl
+
+resolve_return_type_decl:
+    ; Resolve return type string to LLVMTypeRef
+    %return_type_ref = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %return_type, i64 %return_type_len)
+    %return_type_null = icmp eq %LLVMTypeRef %return_type_ref, null
+    br i1 %return_type_null, label %decl_error, label %collect_params_decl
+
+collect_params_decl:
+    ; Collect parameter types
+    %param_types_array = call i8* @malloc(i64 80)  ; 10 * 8 bytes
+    %param_types_ptr = bitcast i8* %param_types_array to %LLVMTypeRef*
+
+    ; Count and resolve parameter types
+    %param_count = call i32 @codegen_collect_param_types(%CodeGen* %cg, %ASTNode* %params_list, %LLVMTypeRef* %param_types_ptr, i32 10)
+
+    ; Create function type
+    %has_params = icmp ne i32 %param_count, 0
+    br i1 %has_params, label %create_func_type_with_params_decl, label %create_func_type_no_params_decl
+
+create_func_type_with_params_decl:
+    %func_type = call %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %return_type_ref, %LLVMTypeRef* %param_types_ptr, i32 %param_count, i32 0)
+    br label %check_func_type_decl
+
+create_func_type_no_params_decl:
+    %func_type_no_params = call %LLVMTypeRef @llvm_create_function_type(%LLVMTypeRef %return_type_ref, %LLVMTypeRef* null, i32 0, i32 0)
+    br label %check_func_type_decl
+
+check_func_type_decl:
+    %func_type_phi = phi %LLVMTypeRef [ %func_type, %create_func_type_with_params_decl ], [ %func_type_no_params, %create_func_type_no_params_decl ]
+    %func_type_null = icmp eq %LLVMTypeRef %func_type_phi, null
+    br i1 %func_type_null, label %free_param_types_decl, label %add_function_decl
+
+free_param_types_decl:
+    call void @free(i8* %param_types_array)
+    br label %decl_error
+
+add_function_decl:
+    ; Add function declaration to module (no body, external linkage)
+    %func_name_buf_size = add i64 %func_name_len, 1
+    %func_name_buf = call i8* @malloc(i64 %func_name_buf_size)
+    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %func_name_buf, i8* %func_name, i64 %func_name_len, i1 false)
+    %func_null_ptr = getelementptr i8, i8* %func_name_buf, i64 %func_name_len
+    store i8 0, i8* %func_null_ptr
+
+    %func = call %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %func_name_buf, %LLVMTypeRef %func_type_phi)
+    call void @free(i8* %func_name_buf)
+
+    %func_null = icmp eq %LLVMValueRef %func, null
+    br i1 %func_null, label %free_param_types_decl, label %set_external_linkage_decl
+
+set_external_linkage_decl:
+    ; Set external linkage (ExternalLinkage = 0)
+    call void @llvm_set_linkage(%LLVMValueRef %func, i32 0)
+
+    ; Store function and type for later retrieval during llvm:call
+    call void @codegen_store_llvm_function(%CodeGen* %cg, i8* %func_name, i64 %func_name_len, %LLVMValueRef %func, %LLVMTypeRef %func_type_phi)
+    call void @codegen_store_function_type(%CodeGen* %cg, i8* %func_name, i64 %func_name_len, %LLVMTypeRef %func_type_phi)
+
+    ; Free param types array
+    call void @free(i8* %param_types_array)
+
+    ret i32 0
+
+decl_error:
     ret i32 -1
 }
 

@@ -109,6 +109,53 @@
     (llvm:label 'done
                 (llvm:ret-void))))
 
+; lex_peek_char: Peek at character at given offset from current position
+; Returns the character (i8) at current position + offset, or 0 if out of bounds.
+; Computes peek position by adding offset to current pos, then checks against
+; source length. If out of bounds, returns 0. Otherwise loads and returns the char.
+(llvm:define-function (lex_peek_char (lexer |%Lexer*|) (offset |i64|)) |i8|
+  (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+         (pos (llvm:load pos_ptr |i64|))
+         (peek_pos (llvm:add pos offset))
+         (len_ptr (llvm:gep |%Lexer| lexer 0 1))
+         (len (llvm:load len_ptr |i64|))
+         (is_oob (llvm:icmp 'uge peek_pos len)))
+    (llvm:br is_oob 'out_of_bounds 'in_bounds)
+    (llvm:label 'out_of_bounds
+      (llvm:ret (llvm:const-int |i8| 0)))
+    (llvm:label 'in_bounds
+      (let* ((source_ptr (llvm:gep |%Lexer| lexer 0 0))
+             (source (llvm:load source_ptr |i8*|))
+             (char_ptr (llvm:gep |i8| source peek_pos))
+             (char (llvm:load char_ptr |i8|)))
+        (llvm:ret char)))))
+
+; lex_is_delimiter: Check if character is a delimiter
+; Returns 1 if delimiter, 0 otherwise. Checks for whitespace (space, tab,
+; newline, carriage return), punctuation (parens, quote, semicolon), and EOF (0).
+; Uses zero extension to convert boolean result (i1) to i32 return type.
+(llvm:define-function (lex_is_delimiter (char |i8|)) |i32|
+  (let* ((char_int (llvm:zext char |i8| |i32|))
+         (is_space (llvm:icmp 'eq char_int (llvm:const-int |i32| 32)))
+         (is_tab (llvm:icmp 'eq char_int (llvm:const-int |i32| 9)))
+         (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
+         (is_cr (llvm:icmp 'eq char_int (llvm:const-int |i32| 13)))
+         (is_lparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 40)))
+         (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41)))
+         (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 39)))
+         (is_semicolon (llvm:icmp 'eq char_int (llvm:const-int |i32| 59)))
+         (is_eof (llvm:icmp 'eq char_int (llvm:const-int |i32| 0)))
+         (ws1 (llvm:or is_space is_tab))
+         (ws2 (llvm:or is_newline is_cr))
+         (ws (llvm:or ws1 ws2))
+         (punct1 (llvm:or is_lparen is_rparen))
+         (punct2 (llvm:or is_quote is_semicolon))
+         (punct (llvm:or punct1 punct2))
+         (delim (llvm:or ws punct))
+         (result (llvm:or delim is_eof))
+         (res (llvm:zext result |i1| |i32|)))
+    (llvm:ret res)))
+
 ; lex_skip_whitespace: Skip whitespace characters (space, tab, newline, carriage return)
 ; Repeatedly calls lex_current_char and lex_advance until a non-whitespace character 
 ; is encountered or EOF is reached. Uses a loop that checks if current character is 
@@ -132,3 +179,63 @@
     (llvm:br 'loop))
   (llvm:label 'done
     (llvm:ret-void)))
+
+; lex_skip_comment: Skip a line comment (semicolon to newline)
+; Advances through characters until a newline or EOF is encountered.
+; Uses a loop that checks for newline (10) or EOF, branching to exit
+; when found, or advancing and looping otherwise.
+(llvm:define-function (lex_skip_comment (lexer |%Lexer*|)) |void|
+  (llvm:br 'loop)
+  (llvm:label 'loop
+    (let* ((char (llvm:call lex_current_char lexer))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_eof (llvm:call lex_is_eof lexer))
+           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
+           (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+           (done (llvm:or eof_bool is_newline)))
+      (llvm:br done 'exit 'continue)))
+  (llvm:label 'continue
+    (llvm:call lex_advance lexer)
+    (llvm:br 'loop))
+  (llvm:label 'exit
+    (llvm:ret-void)))
+
+; Forward declaration for lex_next, which is defined in lexer_no_vibe.ll
+; and will be linked at build time. Needed so lex_peek can call it.
+(llvm:declare-function (lex_next (lexer |%Lexer*|)) |%Token*|)
+
+; lex_peek: Peek at the next token without consuming it
+; Saves the current position, line, and column, calls lex_next to get the
+; next token, then restores the lexer state. Returns the peeked token.
+(llvm:define-function (lex_peek (lexer |%Lexer*|)) |%Token*|
+  (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+         (saved_pos (llvm:load pos_ptr |i64|))
+         (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+         (saved_line (llvm:load line_ptr |i32|))
+         (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+         (saved_col (llvm:load col_ptr |i32|))
+         (token (llvm:call lex_next lexer)))
+    (llvm:store saved_pos pos_ptr)
+    (llvm:store saved_line line_ptr)
+    (llvm:store saved_col col_ptr)
+    (llvm:ret token)))
+
+; lex_error: Create an error token with the given message
+; Allocates a Token, sets type to TOKEN_ERROR (12), stores the message pointer
+; as the value, and copies the current line and column from the lexer.
+(llvm:define-function (lex_error (lexer |%Lexer*|) (message |i8*|)) |%Token*|
+  (let* ((error_token (llvm:call malloc (llvm:const-int |i64| 32)))
+         (error_token_ptr (llvm:bitcast error_token |%Token*|))
+         (type_ptr (llvm:gep |%Token| error_token_ptr 0 0))
+         (val_ptr (llvm:gep |%Token| error_token_ptr 0 1))
+         (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+         (line (llvm:load line_ptr |i32|))
+         (line_val_ptr (llvm:gep |%Token| error_token_ptr 0 3))
+         (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+         (col (llvm:load col_ptr |i32|))
+         (col_val_ptr (llvm:gep |%Token| error_token_ptr 0 4)))
+    (llvm:store (llvm:const-int |i32| 12) type_ptr)
+    (llvm:store message val_ptr)
+    (llvm:store line line_val_ptr)
+    (llvm:store col col_val_ptr)
+    (llvm:ret error_token_ptr)))
