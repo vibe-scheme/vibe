@@ -302,6 +302,7 @@ declare %LLVMBasicBlockRef @LLVMAppendBasicBlock(%LLVMValueRef, i8*)
 declare %LLVMBasicBlockRef @LLVMGetFirstBasicBlock(%LLVMValueRef)
 declare %LLVMBasicBlockRef @LLVMGetNextBasicBlock(%LLVMBasicBlockRef)
 declare i8* @LLVMGetBasicBlockName(%LLVMBasicBlockRef)
+declare %LLVMValueRef @LLVMGetBasicBlockTerminator(%LLVMBasicBlockRef)
 
 ; Builder management
 declare %LLVMBuilderRef @LLVMCreateBuilderInContext(%LLVMContextRef)
@@ -855,6 +856,16 @@ define i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef %block) {
 entry:
     %name = call i8* @LLVMGetBasicBlockName(%LLVMBasicBlockRef %block)
     ret i8* %name
+}
+
+; llvm_get_basic_block_terminator: Get the terminator instruction of a basic block
+; Parameters:
+;   block: LLVMBasicBlockRef
+; Returns: LLVMValueRef for terminator instruction, or null if block has no terminator
+define %LLVMValueRef @llvm_get_basic_block_terminator(%LLVMBasicBlockRef %block) {
+entry:
+    %term = call %LLVMValueRef @LLVMGetBasicBlockTerminator(%LLVMBasicBlockRef %block)
+    ret %LLVMValueRef %term
 }
 
 ; Build return void

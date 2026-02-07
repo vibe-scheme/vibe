@@ -79,6 +79,7 @@ declare %LLVMBasicBlockRef @llvm_append_basic_block(%LLVMValueRef, i8*)
 declare %LLVMBasicBlockRef @llvm_get_first_basic_block(%LLVMValueRef)
 declare %LLVMBasicBlockRef @llvm_get_next_basic_block(%LLVMBasicBlockRef)
 declare i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef)
+declare %LLVMValueRef @llvm_get_basic_block_terminator(%LLVMBasicBlockRef)
 declare %LLVMBuilderRef @llvm_create_builder(%LLVMContextRef)
 declare void @llvm_dispose_builder(%LLVMBuilderRef)
 declare void @llvm_position_builder_at_end(%LLVMBuilderRef, %LLVMBasicBlockRef)
@@ -3334,6 +3335,8 @@ declare i32 @printf(i8*, ...)
 @.str.dsl_add = private unnamed_addr constant [9 x i8] c"llvm:add\00"
 @.str.dsl_or = private unnamed_addr constant [8 x i8] c"llvm:or\00"
 @.str.dsl_label = private unnamed_addr constant [11 x i8] c"llvm:label\00"
+@.str.err_label_no_terminator = private unnamed_addr constant [37 x i8] c"error: label '%s' has no terminator\0A\00"
+@.str.err_entry_no_terminator = private unnamed_addr constant [55 x i8] c"error: entry block of function '%s' has no terminator\0A\00"
 @.str.pred_eq = private unnamed_addr constant [3 x i8] c"eq\00"
 @.str.pred_ne = private unnamed_addr constant [3 x i8] c"ne\00"
 @.str.pred_uge = private unnamed_addr constant [4 x i8] c"uge\00"
@@ -6332,7 +6335,7 @@ check_uge:
     br i1 %is_uge_bool, label %return_uge, label %check_ult
     
 return_uge:
-    ret i32 36  ; LLVMIntUGE
+    ret i32 35  ; LLVMIntUGE
     
 check_ult:
     %is_ult = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ult, i32 0, i32 0), i64 3)
@@ -6340,7 +6343,7 @@ check_ult:
     br i1 %is_ult_bool, label %return_ult, label %check_ugt
     
 return_ult:
-    ret i32 35  ; LLVMIntULT
+    ret i32 36  ; LLVMIntULT
     
 check_ugt:
     %is_ugt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ugt, i32 0, i32 0), i64 3)
@@ -6348,7 +6351,7 @@ check_ugt:
     br i1 %is_ugt_bool, label %return_ugt, label %check_ule
     
 return_ugt:
-    ret i32 37  ; LLVMIntUGT
+    ret i32 34  ; LLVMIntUGT
     
 check_ule:
     %is_ule = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ule, i32 0, i32 0), i64 3)
@@ -6356,7 +6359,7 @@ check_ule:
     br i1 %is_ule_bool, label %return_ule, label %check_sge
     
 return_ule:
-    ret i32 34  ; LLVMIntULE
+    ret i32 37  ; LLVMIntULE
     
 check_sge:
     %is_sge = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sge, i32 0, i32 0), i64 3)
@@ -6364,7 +6367,7 @@ check_sge:
     br i1 %is_sge_bool, label %return_sge, label %check_slt
     
 return_sge:
-    ret i32 14  ; LLVMIntSGE
+    ret i32 39  ; LLVMIntSGE
     
 check_slt:
     %is_slt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_slt, i32 0, i32 0), i64 3)
@@ -6372,7 +6375,7 @@ check_slt:
     br i1 %is_slt_bool, label %return_slt, label %check_sgt
     
 return_slt:
-    ret i32 13  ; LLVMIntSLT
+    ret i32 40  ; LLVMIntSLT
     
 check_sgt:
     %is_sgt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sgt, i32 0, i32 0), i64 3)
@@ -6380,7 +6383,7 @@ check_sgt:
     br i1 %is_sgt_bool, label %return_sgt, label %check_sle
     
 return_sgt:
-    ret i32 15  ; LLVMIntSGT
+    ret i32 38  ; LLVMIntSGT
     
 check_sle:
     %is_sle = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sle, i32 0, i32 0), i64 3)
@@ -6388,7 +6391,7 @@ check_sle:
     br i1 %is_sle_bool, label %return_sle, label %error
     
 return_sle:
-    ret i32 12  ; LLVMIntSLE
+    ret i32 41  ; LLVMIntSLE
     
 error:
     ret i32 -1
@@ -6710,24 +6713,36 @@ position_builder:
     ; The builder should now be positioned at the label block, so instructions will go there
     call void @codegen_eval_dsl_body(%CodeGen* %cg, %ASTNode* %body)
     
-    ; Restore builder to saved position after processing label body
-    ; Assumption: The label body correctly terminates the block (contains a terminator like llvm:br, llvm:ret, etc.)
-    ; If the block is not terminated, that's a syntax error and we don't need to handle it gracefully
-    ; Restoring maintains the visitor pattern: process node, restore context, move to next sibling
-    ; However, if the label block was terminated, we cannot add more instructions to it
-    ; Check if current insert block is the label block (meaning it was terminated)
+    ; Visitor pattern exit check: verify the label's block has a terminator
+    ; We check the label's own block (%block), NOT the current insert block,
+    ; because nested labels may have moved the builder to a different block.
+    %label_terminator = call %LLVMValueRef @llvm_get_basic_block_terminator(%LLVMBasicBlockRef %block)
+    %label_has_no_term = icmp eq %LLVMValueRef %label_terminator, null
+    br i1 %label_has_no_term, label %label_missing_terminator, label %check_restore
+    
+label_missing_terminator:
+    ; Report compilation error: label body has no terminator
+    call i32 (i8*, ...) @printf(
+        i8* getelementptr inbounds ([37 x i8], [37 x i8]* @.str.err_label_no_terminator, i32 0, i32 0),
+        i8* %label_name)
+    br label %error
+    
+check_restore:
+    ; Label block is properly terminated. Now restore builder position.
+    ; Check if current insert block has moved (due to nested labels in the body).
     %current_block_after = call %LLVMBasicBlockRef @llvm_get_insert_block(%LLVMBuilderRef %builder)
     %current_block_null = icmp eq %LLVMBasicBlockRef %current_block_after, null
-    br i1 %current_block_null, label %no_restore, label %check_if_terminated
+    br i1 %current_block_null, label %no_restore, label %check_if_still_on_label
     
-check_if_terminated:
-    %label_block_was_terminated = icmp eq %LLVMBasicBlockRef %current_block_after, %block
-    br i1 %label_block_was_terminated, label %no_restore, label %check_saved_null
+check_if_still_on_label:
+    ; If builder is still on the label block, it was terminated - don't restore
+    ; If builder moved (nested labels), also don't restore to saved_block
+    %still_on_label = icmp eq %LLVMBasicBlockRef %current_block_after, %block
+    br i1 %still_on_label, label %no_restore, label %check_saved_null
     
 no_restore:
     ; Label block was terminated - don't restore builder position
     ; The next sibling (likely another llvm:label) will create a new block and position builder there
-    ; Restoring to a terminated block or entry block would break the control flow
     br label %return_block
     
 check_saved_null:
@@ -6737,7 +6752,6 @@ check_saved_null:
 restore_position:
     ; Restore builder to the position it was at before we positioned it at the label block
     ; This ensures subsequent sibling expressions continue in the correct block
-    ; This only happens when the label block was NOT terminated (unusual but possible)
     call void @llvm_position_builder_at_end(%LLVMBuilderRef %builder, %LLVMBasicBlockRef %saved_block)
     br label %return_block
     
@@ -7436,11 +7450,19 @@ position_builder:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     call void @codegen_eval_dsl_body(%CodeGen* %cg, %ASTNode* %dsl_body)
     
-    ; Note: DSL body evaluation generates instructions in the LLVM function being built.
-    ; It is the responsibility of the DSL code to ensure a return statement is generated.
-    ; No fallback return is added - the DSL must be structured correctly.
+    ; Visitor pattern exit check: verify the entry block has a terminator
+    ; Every basic block must have a terminator (br, ret, etc.)
+    ; If the DSL body didn't terminate the entry block, that's a compilation error.
+    %entry_terminator = call %LLVMValueRef @llvm_get_basic_block_terminator(%LLVMBasicBlockRef %entry_bb)
+    %entry_has_no_term = icmp eq %LLVMValueRef %entry_terminator, null
+    br i1 %entry_has_no_term, label %entry_missing_terminator, label %cleanup_builder
     
-    br label %cleanup_builder
+entry_missing_terminator:
+    ; Report compilation error: entry block has no terminator
+    call i32 (i8*, ...) @printf(
+        i8* getelementptr inbounds ([55 x i8], [55 x i8]* @.str.err_entry_no_terminator, i32 0, i32 0),
+        i8* %func_name)
+    br label %error
     
 cleanup_builder:
     ; Clean up builder
