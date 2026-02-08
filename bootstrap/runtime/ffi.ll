@@ -323,7 +323,15 @@ declare %LLVMValueRef @LLVMBuildBr(%LLVMBuilderRef, %LLVMBasicBlockRef)
 declare %LLVMValueRef @LLVMBuildCondBr(%LLVMBuilderRef, %LLVMValueRef, %LLVMBasicBlockRef, %LLVMBasicBlockRef)
 declare %LLVMValueRef @LLVMBuildZExt(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
 declare %LLVMValueRef @LLVMBuildAdd(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildSub(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildMul(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildAnd(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
 declare %LLVMValueRef @LLVMBuildOr(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildAlloca(%LLVMBuilderRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @LLVMBuildTrunc(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @LLVMBuildSelect(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @LLVMBuildPhi(%LLVMBuilderRef, %LLVMTypeRef, i8*)
+declare void @LLVMAddIncoming(%LLVMValueRef, %LLVMValueRef*, %LLVMBasicBlockRef*, i32)
 
 ; Global variable management
 declare %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef, %LLVMTypeRef, i8*)
@@ -1036,6 +1044,108 @@ define %LLVMValueRef @llvm_build_or(%LLVMBuilderRef %builder, %LLVMValueRef %lhs
 entry:
     %or = call %LLVMValueRef @LLVMBuildOr(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
     ret %LLVMValueRef %or
+}
+
+; llvm_build_sub: Build a subtraction instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for difference
+define %LLVMValueRef @llvm_build_sub(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %sub = call %LLVMValueRef @LLVMBuildSub(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %sub
+}
+
+; llvm_build_mul: Build a multiplication instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for product
+define %LLVMValueRef @llvm_build_mul(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %mul = call %LLVMValueRef @LLVMBuildMul(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %mul
+}
+
+; llvm_build_and: Build a bitwise AND instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   lhs: LLVMValueRef for left-hand side
+;   rhs: LLVMValueRef for right-hand side
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for result
+define %LLVMValueRef @llvm_build_and(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name) {
+entry:
+    %and = call %LLVMValueRef @LLVMBuildAnd(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %name)
+    ret %LLVMValueRef %and
+}
+
+; llvm_build_alloca: Build a stack allocation instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   ty: LLVMTypeRef for type to allocate
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for allocated pointer
+define %LLVMValueRef @llvm_build_alloca(%LLVMBuilderRef %builder, %LLVMTypeRef %ty, i8* %name) {
+entry:
+    %alloca = call %LLVMValueRef @LLVMBuildAlloca(%LLVMBuilderRef %builder, %LLVMTypeRef %ty, i8* %name)
+    ret %LLVMValueRef %alloca
+}
+
+; llvm_build_trunc: Build an integer truncation instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   value: LLVMValueRef to truncate
+;   target_type: LLVMTypeRef for target type
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for truncated value
+define %LLVMValueRef @llvm_build_trunc(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name) {
+entry:
+    %trunc = call %LLVMValueRef @LLVMBuildTrunc(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %target_type, i8* %name)
+    ret %LLVMValueRef %trunc
+}
+
+; llvm_build_select: Build a select instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   cond: LLVMValueRef for condition (i1)
+;   then_val: LLVMValueRef for true value
+;   else_val: LLVMValueRef for false value
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for selected value
+define %LLVMValueRef @llvm_build_select(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMValueRef %then_val, %LLVMValueRef %else_val, i8* %name) {
+entry:
+    %sel = call %LLVMValueRef @LLVMBuildSelect(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMValueRef %then_val, %LLVMValueRef %else_val, i8* %name)
+    ret %LLVMValueRef %sel
+}
+
+; llvm_build_phi: Build a phi node instruction
+; Parameters:
+;   builder: LLVMBuilderRef
+;   ty: LLVMTypeRef for the phi node type
+;   name: Name for instruction (null-terminated, can be null)
+; Returns: LLVMValueRef for phi node (use llvm_add_incoming to add values)
+define %LLVMValueRef @llvm_build_phi(%LLVMBuilderRef %builder, %LLVMTypeRef %ty, i8* %name) {
+entry:
+    %phi = call %LLVMValueRef @LLVMBuildPhi(%LLVMBuilderRef %builder, %LLVMTypeRef %ty, i8* %name)
+    ret %LLVMValueRef %phi
+}
+
+; llvm_add_incoming: Add incoming values to a phi node
+; Parameters:
+;   phi: LLVMValueRef for phi node
+;   values: Array of LLVMValueRef incoming values
+;   blocks: Array of LLVMBasicBlockRef incoming blocks
+;   count: Number of incoming values
+define void @llvm_add_incoming(%LLVMValueRef %phi, %LLVMValueRef* %values, %LLVMBasicBlockRef* %blocks, i32 %count) {
+entry:
+    call void @LLVMAddIncoming(%LLVMValueRef %phi, %LLVMValueRef* %values, %LLVMBasicBlockRef* %blocks, i32 %count)
+    ret void
 }
 
 ; Add global variable

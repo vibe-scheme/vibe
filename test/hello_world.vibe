@@ -3,18 +3,23 @@
 ; Define a type (using vertical bar delimited symbols for LLVM types)
 (llvm:define-type Point (x |i32|) (y |i32|))
 
-; Define a constant (using vertical bar for type, bytevector for value)
-(llvm:define-constant hello-string |[11 x i8]| #u8(72 101 108 108 111 44 32 37 115 33 0))
+; Define constants (using vertical bar for type, bytevector for value)
+; "Hello, %s!\n\0" (12 bytes)
+(llvm:define-constant .str.hello |[12 x i8]| #u8(72 101 108 108 111 44 32 37 115 33 10 0))
+; "World\0" (6 bytes)
+(llvm:define-constant .str.world |[6 x i8]| #u8(87 111 114 108 100 0))
 
-; ; Define printf via FFI (external C library function)
-; ; On macOS, printf is in libSystem, so we use the library path
-; ; Syntax: (llvm:define-ffi-function (name (param1 type1) ...) return-type (library-name symbol-name) [is-vararg])
-; (llvm:define-ffi-function (printf (fmt-string |i8*|)) |i32| ("/usr/lib/libSystem.B.dylib" "printf") #t)
+; Define printf via FFI (external C library function)
+; On macOS, printf is in libSystem, so we use the library path
+; Syntax: (llvm:define-ffi-function (name (param1 type1) ...) return-type (library-name symbol-name) [is-vararg])
+(llvm:define-ffi-function (printf (fmt |i8*|)) |i32| ("/usr/lib/libSystem.B.dylib" "printf") #t)
 
-; ; Define a function with typed parameters using DSL (new approach)
-; (llvm:define-function (hello (name |i8*|)) |void|
-;   (llvm:call printf (llvm:array hello-string name) "")
-;   (llvm:ret-void))
+; Define a function with typed parameters using DSL
+(llvm:define-function (hello (name |i8*|)) |void|
+  (llvm:call printf .str.hello name)
+  (llvm:ret-void))
 
-; ; Call the function
-; (hello "World")
+; Main entry point - calls hello with "World"
+(llvm:define-function (main) |i32|
+  (llvm:call hello .str.world)
+  (llvm:ret (llvm:const-int |i32| 0)))

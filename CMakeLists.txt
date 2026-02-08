@@ -127,11 +127,9 @@ if(BUILD_MODE STREQUAL "BOOTSTRAP")
 elseif(BUILD_MODE STREQUAL "KERNEL")
     set(USE_VIBE_FILES ON)
     set(USE_VIBE_KERNEL OFF)
-    set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll)
 elseif(BUILD_MODE STREQUAL "SELF_HOST")
     set(USE_VIBE_FILES ON)
     set(USE_VIBE_KERNEL ON)
-    set(LEXER_SOURCE ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll)
 else()
     message(FATAL_ERROR "Invalid BUILD_MODE: ${BUILD_MODE}. Must be BOOTSTRAP, KERNEL, or SELF_HOST")
 endif()
@@ -148,17 +146,9 @@ add_custom_target(bootstrap_types DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc
 
 # Bootstrap Lexer - LLVM bitcode module
 if(USE_VIBE_FILES)
-    # KERNEL mode: Use _no_vibe.ll + compile .vibe files
+    # KERNEL/SELF_HOST mode: Compile lexer.vibe (all lexer functions are now in Vibe)
     # Note: bootstrap_compiler must exist (build.sh checks this)
-    # Step 1: Assemble lexer_no_vibe.ll to bitcode
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer/lexer_no_vibe.ll
-        COMMENT "Assembling lexer_no_vibe bitcode (temp)"
-    )
-    
-    # Step 2: Compile lexer.vibe to bitcode
+    # Step 1: Compile lexer.vibe to bitcode
     if(USE_VIBE_KERNEL)
         # SELF_HOST mode: Use vibe_kernel to compile .vibe files
         add_custom_command(
@@ -192,17 +182,15 @@ if(USE_VIBE_FILES)
         )
     endif()
     
-    # Step 3: Create final lexer.bc (with Vibe code)
+    # Step 2: Create final lexer.bc by linking types with compiled Vibe code
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
         COMMAND ${LLVM_LINK}
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
             ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
             -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
         DEPENDS
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
             ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
         COMMENT "Linking lexer with types and Vibe code"
     )

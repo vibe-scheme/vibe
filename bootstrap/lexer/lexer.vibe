@@ -4,6 +4,13 @@
 ; Declare FFI functions
 (llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
 (llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+(llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
+
+; Error message string constants
+; "Unclosed vertical bar symbol\0"
+(llvm:define-constant .str.unclosed_vbar |[29 x i8]| #u8(85 110 99 108 111 115 101 100 32 118 101 114 116 105 99 97 108 32 98 97 114 32 115 121 109 98 111 108 0))
+; "Invalid bytevector syntax\0"
+(llvm:define-constant .str.invalid_bytevector |[26 x i8]| #u8(73 110 118 97 108 105 100 32 98 121 116 101 118 101 99 116 111 114 32 115 121 110 116 97 120 0))
 
 ; Define Token type
 (llvm:define-type Token
@@ -78,36 +85,36 @@
 ; already at EOF. Uses lex_current_char to get current character, then branches 
 ; based on whether it's a newline.
 (llvm:define-function (lex_advance (lexer |%Lexer*|)) |void|
-    (let* ((is_eof (llvm:call lex_is_eof lexer))
-            (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
-    (llvm:br eof_bool 'done 'advance)
-    (llvm:label 'advance
-                (let* ((char (llvm:call lex_current_char lexer))
-                        (char_int (llvm:zext char |i8| |i32|))
-                        (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10))))
-                    (llvm:br is_newline 'newline 'normal)
-                    (llvm:label 'newline
-                                (let* ((line_ptr (llvm:gep |%Lexer| lexer 0 3))
-                                        (line (llvm:load line_ptr |i32|))
-                                        (new_line (llvm:add line (llvm:const-int |i32| 1)))
-                                        (col_ptr (llvm:gep |%Lexer| lexer 0 4)))
-                                (llvm:store new_line line_ptr)
-                                (llvm:store (llvm:const-int |i32| 1) col_ptr)
-                                (llvm:br 'increment_pos)))
-                    (llvm:label 'normal
-                                (let* ((col_ptr (llvm:gep |%Lexer| lexer 0 4))
-                                        (col (llvm:load col_ptr |i32|))
-                                        (new_col (llvm:add col (llvm:const-int |i32| 1))))
-                                (llvm:store new_col col_ptr)
-                                (llvm:br 'increment_pos)))
-                    (llvm:label 'increment_pos
-                                (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
-                                        (pos (llvm:load pos_ptr |i64|))
-                                        (new_pos (llvm:add pos (llvm:const-int |i64| 1))))
-                                (llvm:store new_pos pos_ptr)
-                                (llvm:br 'done)))))
-    (llvm:label 'done
-                (llvm:ret-void))))
+  (let* ((is_eof (llvm:call lex_is_eof lexer))
+         (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+    (llvm:br eof_bool 'done 'advance))
+  (llvm:label 'advance
+    (let* ((char (llvm:call lex_current_char lexer))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10))))
+      (llvm:br is_newline 'newline 'normal)))
+  (llvm:label 'newline
+    (let* ((line_ptr (llvm:gep |%Lexer| lexer 0 3))
+           (line (llvm:load line_ptr |i32|))
+           (new_line (llvm:add line (llvm:const-int |i32| 1)))
+           (col_ptr (llvm:gep |%Lexer| lexer 0 4)))
+      (llvm:store new_line line_ptr)
+      (llvm:store (llvm:const-int |i32| 1) col_ptr)
+      (llvm:br 'increment_pos)))
+  (llvm:label 'normal
+    (let* ((col_ptr (llvm:gep |%Lexer| lexer 0 4))
+           (col (llvm:load col_ptr |i32|))
+           (new_col (llvm:add col (llvm:const-int |i32| 1))))
+      (llvm:store new_col col_ptr)
+      (llvm:br 'increment_pos)))
+  (llvm:label 'increment_pos
+    (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+           (pos (llvm:load pos_ptr |i64|))
+           (new_pos (llvm:add pos (llvm:const-int |i64| 1))))
+      (llvm:store new_pos pos_ptr)
+      (llvm:br 'done)))
+  (llvm:label 'done
+    (llvm:ret-void)))
 
 ; lex_peek_char: Peek at character at given offset from current position
 ; Returns the character (i8) at current position + offset, or 0 if out of bounds.
@@ -200,8 +207,8 @@
   (llvm:label 'exit
     (llvm:ret-void)))
 
-; Forward declaration for lex_next, which is defined in lexer_no_vibe.ll
-; and will be linked at build time. Needed so lex_peek can call it.
+; Forward declaration for lex_next so lex_peek can call it.
+; lex_next is defined later in this file.
 (llvm:declare-function (lex_next (lexer |%Lexer*|)) |%Token*|)
 
 ; lex_peek: Peek at the next token without consuming it
@@ -239,3 +246,412 @@
     (llvm:store line line_val_ptr)
     (llvm:store col col_val_ptr)
     (llvm:ret error_token_ptr)))
+
+; lex_read_string: Read a string token (handles escape sequences)
+; Reads characters between double quotes into a buffer. On EOF before closing
+; quote, returns null. Otherwise creates a TOKEN_STRING token.
+(llvm:define-function (lex_read_string (lexer |%Lexer*|)) |%Token*|
+  (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 1024)))
+         (buffer_pos (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i64| 0) buffer_pos)
+    (llvm:call lex_advance lexer)  ; Skip opening quote
+    (llvm:br 'loop)
+    (llvm:label 'loop
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_eof (llvm:call lex_is_eof lexer))
+             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+        (llvm:br eof_bool 'error 'check_quote)))
+    (llvm:label 'check_quote
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 34))))
+        (llvm:br is_quote 'done 'check_escape)))
+    (llvm:label 'check_escape
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_backslash (llvm:icmp 'eq char_int (llvm:const-int |i32| 92))))
+        (llvm:br is_backslash 'escape 'normal_char)))
+    (llvm:label 'escape
+      (llvm:call lex_advance lexer)
+      (let* ((next_char (llvm:call lex_current_char lexer))
+             (pos_escape (llvm:load buffer_pos |i64|))
+             (char_ptr_escape (llvm:gep |i8| buffer pos_escape))
+             (new_pos_escape (llvm:add pos_escape (llvm:const-int |i64| 1))))
+        (llvm:store next_char char_ptr_escape)
+        (llvm:store new_pos_escape buffer_pos)
+        (llvm:call lex_advance lexer)
+        (llvm:br 'loop)))
+    (llvm:label 'normal_char
+      (let* ((char (llvm:call lex_current_char lexer))
+             (pos_normal (llvm:load buffer_pos |i64|))
+             (char_ptr_normal (llvm:gep |i8| buffer pos_normal))
+             (new_pos_normal (llvm:add pos_normal (llvm:const-int |i64| 1))))
+        (llvm:store char char_ptr_normal)
+        (llvm:store new_pos_normal buffer_pos)
+        (llvm:call lex_advance lexer)
+        (llvm:br 'loop)))
+    (llvm:label 'done
+      (llvm:call lex_advance lexer)  ; Skip closing quote
+      (let* ((token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (token_ptr (llvm:bitcast token |%Token*|))
+             (len (llvm:load buffer_pos |i64|))
+             (value (llvm:call malloc len))
+             (_ (llvm:call memcpy value buffer len))
+             (type_ptr (llvm:gep |%Token| token_ptr 0 0))
+             (val_ptr (llvm:gep |%Token| token_ptr 0 1))
+             (len_val_ptr (llvm:gep |%Token| token_ptr 0 2))
+             (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+             (line (llvm:load line_ptr |i32|))
+             (line_val_ptr (llvm:gep |%Token| token_ptr 0 3))
+             (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+             (col (llvm:load col_ptr |i32|))
+             (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
+        (llvm:store (llvm:const-int |i32| 3) type_ptr)  ; TOKEN_STRING
+        (llvm:store value val_ptr)
+        (llvm:store len len_val_ptr)
+        (llvm:store line line_val_ptr)
+        (llvm:store col col_val_ptr)
+        (llvm:call free buffer)
+        (llvm:ret token_ptr)))
+    (llvm:label 'error
+      (llvm:call free buffer)
+      (llvm:ret (llvm:const-null |%Token*|)))))
+
+; lex_read_vertical_bar_symbol: Read a symbol delimited by vertical bars
+; Reads characters between | delimiters into a buffer. On EOF before closing |,
+; returns an error token. Otherwise creates a TOKEN_IDENTIFIER token.
+(llvm:define-function (lex_read_vertical_bar_symbol (lexer |%Lexer*|)) |%Token*|
+  (llvm:call lex_advance lexer)  ; Skip opening |
+  (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 1024)))
+         (buffer_pos (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i64| 0) buffer_pos)
+    (llvm:br 'loop)
+    (llvm:label 'loop
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_eof (llvm:call lex_is_eof lexer))
+             (is_vbar (llvm:icmp 'eq char_int (llvm:const-int |i32| 124)))
+             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+             (done (llvm:or eof_bool is_vbar)))
+        (llvm:br done 'check_closing 'append_char)))
+    (llvm:label 'append_char
+      (let* ((char (llvm:call lex_current_char lexer))
+             (pos (llvm:load buffer_pos |i64|))
+             (char_ptr (llvm:gep |i8| buffer pos))
+             (new_pos (llvm:add pos (llvm:const-int |i64| 1))))
+        (llvm:store char char_ptr)
+        (llvm:store new_pos buffer_pos)
+        (llvm:call lex_advance lexer)
+        (llvm:br 'loop)))
+    (llvm:label 'check_closing
+      (let* ((is_eof (llvm:call lex_is_eof lexer))
+             (eof_bool_check (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+        (llvm:br eof_bool_check 'error 'done_ok)))
+    (llvm:label 'done_ok
+      (llvm:call lex_advance lexer)  ; Skip closing |
+      (let* ((token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (token_ptr (llvm:bitcast token |%Token*|))
+             (len (llvm:load buffer_pos |i64|))
+             (value (llvm:call malloc len))
+             (_ (llvm:call memcpy value buffer len))
+             (type_ptr (llvm:gep |%Token| token_ptr 0 0))
+             (val_ptr (llvm:gep |%Token| token_ptr 0 1))
+             (len_val_ptr (llvm:gep |%Token| token_ptr 0 2))
+             (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+             (line (llvm:load line_ptr |i32|))
+             (line_val_ptr (llvm:gep |%Token| token_ptr 0 3))
+             (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+             (col (llvm:load col_ptr |i32|))
+             (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
+        (llvm:store (llvm:const-int |i32| 1) type_ptr)  ; TOKEN_IDENTIFIER
+        (llvm:store value val_ptr)
+        (llvm:store len len_val_ptr)
+        (llvm:store line line_val_ptr)
+        (llvm:store col col_val_ptr)
+        (llvm:call free buffer)
+        (llvm:ret token_ptr)))
+    (llvm:label 'error
+      (llvm:call free buffer)
+      (let* ((error_msg (llvm:call lex_error lexer .str.unclosed_vbar)))
+        (llvm:ret error_msg)))))
+
+; lex_read_bytevector: Read a R7RS bytevector #u8(...)
+; Skips the #u8( prefix, reads decimal byte values separated by whitespace,
+; and creates a TOKEN_BYTEVECTOR token. Allocas for buffer_pos and num_val
+; are placed at entry level so they're accessible across all labels.
+(llvm:define-function (lex_read_bytevector (lexer |%Lexer*|)) |%Token*|
+  ; Allocate mutable state at entry level (accessible from all labels)
+  (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 1024)))
+         (buffer_pos (llvm:alloca |i64|))
+         (num_val (llvm:alloca |i32|)))
+    ; Skip #u8(
+    (llvm:call lex_advance lexer)
+    (llvm:call lex_advance lexer)
+    (llvm:call lex_advance lexer)
+    (llvm:call lex_advance lexer)
+    (llvm:store (llvm:const-int |i64| 0) buffer_pos)
+    (llvm:br 'loop)
+    (llvm:label 'loop
+      (llvm:call lex_skip_whitespace lexer)
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_eof (llvm:call lex_is_eof lexer))
+             (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41)))
+             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+             (done (llvm:or eof_bool is_rparen)))
+        (llvm:br done 'check_closing 'read_number)))
+    (llvm:label 'read_number
+      (let* ((num_start (llvm:call lex_current_char lexer))
+             (num_start_int (llvm:zext num_start |i8| |i32|))
+             (is_digit (llvm:icmp 'uge num_start_int (llvm:const-int |i32| 48)))
+             (is_digit2 (llvm:icmp 'ule num_start_int (llvm:const-int |i32| 57)))
+             (is_digit_both (llvm:and is_digit is_digit2)))
+        (llvm:br is_digit_both 'read_digits 'error)))
+    (llvm:label 'read_digits
+      (llvm:store (llvm:const-int |i32| 0) num_val)
+      (llvm:br 'digit_loop))
+    (llvm:label 'digit_loop
+      (let* ((digit_char (llvm:call lex_current_char lexer))
+             (digit_int (llvm:zext digit_char |i8| |i32|))
+             (is_digit_check (llvm:icmp 'uge digit_int (llvm:const-int |i32| 48)))
+             (is_digit_check2 (llvm:icmp 'ule digit_int (llvm:const-int |i32| 57)))
+             (is_digit_ok (llvm:and is_digit_check is_digit_check2)))
+        (llvm:br is_digit_ok 'accumulate 'store_byte)))
+    (llvm:label 'accumulate
+      (let* ((digit_char (llvm:call lex_current_char lexer))
+             (digit_int (llvm:zext digit_char |i8| |i32|))
+             (current_val (llvm:load num_val |i32|))
+             (new_val (llvm:mul current_val (llvm:const-int |i32| 10)))
+             (digit_val (llvm:sub digit_int (llvm:const-int |i32| 48)))
+             (final_val (llvm:add new_val digit_val)))
+        (llvm:store final_val num_val)
+        (llvm:call lex_advance lexer)
+        (llvm:br 'digit_loop)))
+    (llvm:label 'store_byte
+      (let* ((byte_val (llvm:load num_val |i32|))
+             (byte_val_trunc (llvm:trunc byte_val |i32| |i8|))
+             (pos (llvm:load buffer_pos |i64|))
+             (byte_ptr (llvm:gep |i8| buffer pos))
+             (new_pos (llvm:add pos (llvm:const-int |i64| 1))))
+        (llvm:store byte_val_trunc byte_ptr)
+        (llvm:store new_pos buffer_pos)
+        (llvm:br 'loop)))
+    (llvm:label 'check_closing
+      (let* ((is_eof (llvm:call lex_is_eof lexer))
+             (eof_bool_check (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+        (llvm:br eof_bool_check 'error 'done_ok)))
+    (llvm:label 'done_ok
+      (llvm:call lex_advance lexer)  ; Skip closing )
+      (let* ((token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (token_ptr (llvm:bitcast token |%Token*|))
+             (len (llvm:load buffer_pos |i64|))
+             (value (llvm:call malloc len))
+             (_ (llvm:call memcpy value buffer len))
+             (type_ptr (llvm:gep |%Token| token_ptr 0 0))
+             (val_ptr (llvm:gep |%Token| token_ptr 0 1))
+             (len_val_ptr (llvm:gep |%Token| token_ptr 0 2))
+             (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+             (line (llvm:load line_ptr |i32|))
+             (line_val_ptr (llvm:gep |%Token| token_ptr 0 3))
+             (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+             (col (llvm:load col_ptr |i32|))
+             (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
+        (llvm:store (llvm:const-int |i32| 13) type_ptr)  ; TOKEN_BYTEVECTOR
+        (llvm:store value val_ptr)
+        (llvm:store len len_val_ptr)
+        (llvm:store line line_val_ptr)
+        (llvm:store col col_val_ptr)
+        (llvm:call free buffer)
+        (llvm:ret token_ptr)))
+    (llvm:label 'error
+      (llvm:call free buffer)
+      (let* ((error_msg (llvm:call lex_error lexer .str.invalid_bytevector)))
+        (llvm:ret error_msg)))))
+
+; lex_read_identifier: Read an identifier, symbol, or number token
+; Determines token type by examining first character: # prefix means symbol,
+; digit prefix triggers all-digit check for number, otherwise identifier.
+; Uses alloca at entry level for the digit-checking loop counter.
+(llvm:define-function (lex_read_identifier (lexer |%Lexer*|) (start |i64|) (start_len |i64|)) |%Token*|
+  (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+         (pos (llvm:load pos_ptr |i64|))
+         (len (llvm:sub pos start))
+         (token (llvm:call malloc (llvm:const-int |i64| 32)))
+         (token_ptr (llvm:bitcast token |%Token*|))
+         (source_ptr (llvm:gep |%Lexer| lexer 0 0))
+         (source (llvm:load source_ptr |i8*|))
+         (first_char_ptr (llvm:gep |i8| source start))
+         (first_char (llvm:load first_char_ptr |i8|))
+         (first_int (llvm:zext first_char |i8| |i32|))
+         (is_hash (llvm:icmp 'eq first_int (llvm:const-int |i32| 35)))
+         (is_digit_first (llvm:icmp 'uge first_int (llvm:const-int |i32| 48)))
+         (is_digit_first2 (llvm:icmp 'ule first_int (llvm:const-int |i32| 57)))
+         (is_digit_first_both (llvm:and is_digit_first is_digit_first2))
+         (i_counter (llvm:alloca |i64|)))
+    (llvm:br is_digit_first_both 'check_all_digits 'check_hash)
+    (llvm:label 'check_all_digits
+      (llvm:store (llvm:const-int |i64| 0) i_counter)
+      (llvm:br 'digit_check_loop))
+    (llvm:label 'digit_check_loop
+      (let* ((i_val (llvm:load i_counter |i64|))
+             (done_check (llvm:icmp 'uge i_val len)))
+        (llvm:br done_check 'all_digits 'check_char)))
+    (llvm:label 'check_char
+      (let* ((i_val (llvm:load i_counter |i64|))
+             (char_idx_ptr (llvm:gep |i8| first_char_ptr i_val))
+             (char_idx (llvm:load char_idx_ptr |i8|))
+             (char_idx_int (llvm:zext char_idx |i8| |i32|))
+             (is_digit_char (llvm:icmp 'uge char_idx_int (llvm:const-int |i32| 48)))
+             (is_digit_char2 (llvm:icmp 'ule char_idx_int (llvm:const-int |i32| 57)))
+             (is_digit_char_both (llvm:and is_digit_char is_digit_char2)))
+        (llvm:br is_digit_char_both 'next_char 'not_all_digits)))
+    (llvm:label 'next_char
+      (let* ((i_val (llvm:load i_counter |i64|))
+             (i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+        (llvm:store i_new i_counter)
+        (llvm:br 'digit_check_loop)))
+    (llvm:label 'all_digits
+      (llvm:br 'set_token_type))
+    (llvm:label 'not_all_digits
+      (llvm:br 'check_hash))
+    (llvm:label 'check_hash
+      (let* ((token_type (llvm:select is_hash (llvm:const-int |i32| 4) (llvm:const-int |i32| 1))))
+        (llvm:br 'set_token_type)))
+    (llvm:label 'set_token_type
+      (let* ((token_type_phi (llvm:phi |i32| (token_type 'check_hash) ((llvm:const-int |i32| 2) 'all_digits)))
+             (value (llvm:call malloc len))
+             (_ (llvm:call memcpy value first_char_ptr len))
+             (type_ptr (llvm:gep |%Token| token_ptr 0 0))
+             (val_ptr (llvm:gep |%Token| token_ptr 0 1))
+             (len_val_ptr (llvm:gep |%Token| token_ptr 0 2))
+             (line_ptr (llvm:gep |%Lexer| lexer 0 3))
+             (line (llvm:load line_ptr |i32|))
+             (line_val_ptr (llvm:gep |%Token| token_ptr 0 3))
+             (col_ptr (llvm:gep |%Lexer| lexer 0 4))
+             (col (llvm:load col_ptr |i32|))
+             (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
+        (llvm:store token_type_phi type_ptr)
+        (llvm:store value val_ptr)
+        (llvm:store len len_val_ptr)
+        (llvm:store line line_val_ptr)
+        (llvm:store col col_val_ptr)
+        (llvm:ret token_ptr)))))
+
+; lex_next: Get the next token from source
+; Main lexer dispatch function. Skips whitespace, then examines current
+; character to determine token type and delegates to appropriate reader.
+; Uses alloca for start_pos so it persists from 'identifier to 'done_id.
+(llvm:define-function (lex_next (lexer |%Lexer*|)) |%Token*|
+  (let* ((saved_start_pos (llvm:alloca |i64|)))
+    (llvm:call lex_skip_whitespace lexer)
+    (let* ((is_eof (llvm:call lex_is_eof lexer))
+           (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+    (llvm:br eof_bool 'eof 'not_eof)
+    (llvm:label 'eof
+      (let* ((eof_token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (eof_token_ptr (llvm:bitcast eof_token |%Token*|))
+             (type_ptr_eof (llvm:gep |%Token| eof_token_ptr 0 0)))
+        (llvm:store (llvm:const-int |i32| 0) type_ptr_eof)
+        (llvm:ret eof_token_ptr)))
+    (llvm:label 'not_eof
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_semicolon (llvm:icmp 'eq char_int (llvm:const-int |i32| 59))))
+        (llvm:br is_semicolon 'comment 'check_string)))
+    (llvm:label 'comment
+      (llvm:call lex_skip_comment lexer)
+      (let* ((next_token (llvm:call lex_next lexer)))
+        (llvm:ret next_token)))
+    (llvm:label 'check_string
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_dquote (llvm:icmp 'eq char_int (llvm:const-int |i32| 34))))
+        (llvm:br is_dquote 'string 'check_vertical_bar)))
+    (llvm:label 'string
+      (let* ((str_token (llvm:call lex_read_string lexer)))
+        (llvm:ret str_token)))
+    (llvm:label 'check_vertical_bar
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_vbar (llvm:icmp 'eq char_int (llvm:const-int |i32| 124))))
+        (llvm:br is_vbar 'vertical_bar_symbol 'check_hash)))
+    (llvm:label 'vertical_bar_symbol
+      (let* ((vbar_token (llvm:call lex_read_vertical_bar_symbol lexer)))
+        (llvm:ret vbar_token)))
+    (llvm:label 'check_hash
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_hash (llvm:icmp 'eq char_int (llvm:const-int |i32| 35))))
+        (llvm:br is_hash 'check_bytevector 'check_lparen)))
+    (llvm:label 'check_bytevector
+      (let* ((peek1 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 1)))
+             (peek1_int (llvm:zext peek1 |i8| |i32|))
+             (is_u (llvm:icmp 'eq peek1_int (llvm:const-int |i32| 117))))
+        (llvm:br is_u 'check_u8 'identifier)))
+    (llvm:label 'check_u8
+      (let* ((peek2 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 2)))
+             (peek2_int (llvm:zext peek2 |i8| |i32|))
+             (is_8 (llvm:icmp 'eq peek2_int (llvm:const-int |i32| 56))))
+        (llvm:br is_8 'check_u8_lparen 'identifier)))
+    (llvm:label 'check_u8_lparen
+      (let* ((peek3 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 3)))
+             (peek3_int (llvm:zext peek3 |i8| |i32|))
+             (is_lparen_u8 (llvm:icmp 'eq peek3_int (llvm:const-int |i32| 40))))
+        (llvm:br is_lparen_u8 'bytevector 'identifier)))
+    (llvm:label 'bytevector
+      (let* ((bytevec_token (llvm:call lex_read_bytevector lexer)))
+        (llvm:ret bytevec_token)))
+    (llvm:label 'check_lparen
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_lparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 40))))
+        (llvm:br is_lparen 'lparen 'check_rparen)))
+    (llvm:label 'lparen
+      (let* ((lparen_token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (lparen_token_ptr (llvm:bitcast lparen_token |%Token*|))
+             (type_ptr_lparen (llvm:gep |%Token| lparen_token_ptr 0 0)))
+        (llvm:store (llvm:const-int |i32| 5) type_ptr_lparen)
+        (llvm:call lex_advance lexer)
+        (llvm:ret lparen_token_ptr)))
+    (llvm:label 'check_rparen
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41))))
+        (llvm:br is_rparen 'rparen 'check_quote_char)))
+    (llvm:label 'rparen
+      (let* ((rparen_token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (rparen_token_ptr (llvm:bitcast rparen_token |%Token*|))
+             (type_ptr_rparen (llvm:gep |%Token| rparen_token_ptr 0 0)))
+        (llvm:store (llvm:const-int |i32| 6) type_ptr_rparen)
+        (llvm:call lex_advance lexer)
+        (llvm:ret rparen_token_ptr)))
+    (llvm:label 'check_quote_char
+      (let* ((char (llvm:call lex_current_char lexer))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 39))))
+        (llvm:br is_quote 'quote 'identifier)))
+    (llvm:label 'quote
+      (let* ((quote_token (llvm:call malloc (llvm:const-int |i64| 32)))
+             (quote_token_ptr (llvm:bitcast quote_token |%Token*|))
+             (type_ptr_quote (llvm:gep |%Token| quote_token_ptr 0 0)))
+        (llvm:store (llvm:const-int |i32| 7) type_ptr_quote)
+        (llvm:call lex_advance lexer)
+        (llvm:ret quote_token_ptr)))
+    (llvm:label 'identifier
+      (let* ((start_pos_ptr (llvm:gep |%Lexer| lexer 0 2))
+             (start_pos (llvm:load start_pos_ptr |i64|)))
+        (llvm:store start_pos saved_start_pos)
+        (llvm:br 'read_loop)))
+    (llvm:label 'read_loop
+      (let* ((char_loop (llvm:call lex_current_char lexer))
+             (is_delim (llvm:call lex_is_delimiter char_loop))
+             (delim_bool (llvm:icmp 'ne is_delim (llvm:const-int |i32| 0))))
+        (llvm:br delim_bool 'done_id 'continue_id)))
+    (llvm:label 'continue_id
+      (llvm:call lex_advance lexer)
+      (llvm:br 'read_loop))
+    (llvm:label 'done_id
+      (let* ((start_pos (llvm:load saved_start_pos |i64|))
+             (id_token (llvm:call lex_read_identifier lexer start_pos (llvm:const-int |i64| 0))))
+        (llvm:ret id_token))))))

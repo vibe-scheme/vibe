@@ -96,7 +96,15 @@ declare %LLVMValueRef @llvm_build_br(%LLVMBuilderRef, %LLVMBasicBlockRef)
 declare %LLVMValueRef @llvm_build_cond_br(%LLVMBuilderRef, %LLVMValueRef, %LLVMBasicBlockRef, %LLVMBasicBlockRef)
 declare %LLVMValueRef @llvm_build_zext(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
 declare %LLVMValueRef @llvm_build_add(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_sub(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_mul(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_and(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
 declare %LLVMValueRef @llvm_build_or(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_alloca(%LLVMBuilderRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @llvm_build_trunc(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeRef, i8*)
+declare %LLVMValueRef @llvm_build_select(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, %LLVMValueRef, i8*)
+declare %LLVMValueRef @llvm_build_phi(%LLVMBuilderRef, %LLVMTypeRef, i8*)
+declare void @llvm_add_incoming(%LLVMValueRef, %LLVMValueRef*, %LLVMBasicBlockRef*, i32)
 declare %LLVMValueRef @llvm_add_global(%LLVMModuleRef, %LLVMTypeRef, i8*)
 declare void @llvm_set_initializer(%LLVMValueRef, %LLVMValueRef)
 declare void @llvm_set_global_constant(%LLVMValueRef, i32)
@@ -1399,7 +1407,8 @@ entry:
     br i1 %can_print_name, label %print_func_name, label %skip_print_func_name
     
 print_func_name:
-    %name_buf_func = call i8* @malloc(i64 %name_len)
+    %name_len_plus1_func = add i64 %name_len, 1
+    %name_buf_func = call i8* @malloc(i64 %name_len_plus1_func)
     %name_buf_func_null = icmp eq i8* %name_buf_func, null
     br i1 %name_buf_func_null, label %skip_print_func_name, label %do_print_func_name
     
@@ -3336,6 +3345,13 @@ declare i32 @printf(i8*, ...)
 @.str.dsl_add = private unnamed_addr constant [9 x i8] c"llvm:add\00"
 @.str.dsl_or = private unnamed_addr constant [8 x i8] c"llvm:or\00"
 @.str.dsl_label = private unnamed_addr constant [11 x i8] c"llvm:label\00"
+@.str.dsl_alloca = private unnamed_addr constant [12 x i8] c"llvm:alloca\00"
+@.str.dsl_sub = private unnamed_addr constant [9 x i8] c"llvm:sub\00"
+@.str.dsl_and = private unnamed_addr constant [9 x i8] c"llvm:and\00"
+@.str.dsl_mul = private unnamed_addr constant [9 x i8] c"llvm:mul\00"
+@.str.dsl_trunc = private unnamed_addr constant [11 x i8] c"llvm:trunc\00"
+@.str.dsl_select = private unnamed_addr constant [12 x i8] c"llvm:select\00"
+@.str.dsl_phi = private unnamed_addr constant [9 x i8] c"llvm:phi\00"
 @.str.err_label_no_terminator = private unnamed_addr constant [37 x i8] c"error: label '%s' has no terminator\0A\00"
 @.str.err_entry_no_terminator = private unnamed_addr constant [55 x i8] c"error: entry block of function '%s' has no terminator\0A\00"
 @.str.pred_eq = private unnamed_addr constant [3 x i8] c"eq\00"
@@ -3566,7 +3582,8 @@ print_type_valid:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.debug_type_len, i32 0, i32 0), i64 %type_len)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     
-    %type_buf_debug = call i8* @malloc(i64 %type_len)
+    %type_len_plus1_debug = add i64 %type_len, 1
+    %type_buf_debug = call i8* @malloc(i64 %type_len_plus1_debug)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %type_buf_debug, i8* %type_str, i64 %type_len, i1 false)
     %type_null_ptr_debug = getelementptr i8, i8* %type_buf_debug, i64 %type_len
     store i8 0, i8* %type_null_ptr_debug
@@ -3872,9 +3889,9 @@ accumulate_digit:
     
 check_element_type:
     ; Verify that after " x " we have "i8]"
-    ; num_end points to the space before "x", so we need to check position + 4 for "i8]"
+    ; num_end points to the space before "x": ' '(+0) 'x'(+1) ' '(+2) 'i'(+3) '8'(+4) ']'(+5)
     %num_end_val_check = load i8*, i8** %num_end
-    %check_pos = getelementptr i8, i8* %num_end_val_check, i64 4  ; After " x "
+    %check_pos = getelementptr i8, i8* %num_end_val_check, i64 3  ; Skip " x " to reach 'i'
     %check_char_i = load i8, i8* %check_pos
     %check_pos_plus1 = getelementptr i8, i8* %check_pos, i64 1
     %check_char_8 = load i8, i8* %check_pos_plus1
@@ -4326,7 +4343,7 @@ call_get_function:
     ret %LLVMValueRef %get_function_result
     
 check_get_param:
-    %is_get_param = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([14 x i8], [14 x i8]* @.str.dsl_get_param, i32 0, i32 0), i64 13)
+    %is_get_param = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([15 x i8], [15 x i8]* @.str.dsl_get_param, i32 0, i32 0), i64 14)
     %is_get_param_bool = icmp ne i32 %is_get_param, 0
     br i1 %is_get_param_bool, label %call_get_param, label %check_const_int
     
@@ -4344,7 +4361,7 @@ call_const_int:
     ret %LLVMValueRef %const_int_result
     
 check_const_null:
-    %is_const_null = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([15 x i8], [15 x i8]* @.str.dsl_const_null, i32 0, i32 0), i64 14)
+    %is_const_null = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([16 x i8], [16 x i8]* @.str.dsl_const_null, i32 0, i32 0), i64 15)
     %is_const_null_bool = icmp ne i32 %is_const_null, 0
     br i1 %is_const_null_bool, label %call_const_null, label %check_list
     
@@ -4461,12 +4478,75 @@ check_label:
     ; Check for "llvm:label" form
     %is_label = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.dsl_label, i32 0, i32 0), i64 10)
     %is_label_bool = icmp ne i32 %is_label, 0
-    br i1 %is_label_bool, label %call_label, label %unknown_primitive
+    br i1 %is_label_bool, label %call_label, label %check_alloca
     
 call_label:
     %label_result = call %LLVMValueRef @codegen_dsl_label(%CodeGen* %cg, %ASTNode* %args_list)
     ret %LLVMValueRef %label_result
     
+check_alloca:
+    %is_alloca = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.dsl_alloca, i32 0, i32 0), i64 11)
+    %is_alloca_bool = icmp ne i32 %is_alloca, 0
+    br i1 %is_alloca_bool, label %call_alloca, label %check_sub
+
+call_alloca:
+    %alloca_result = call %LLVMValueRef @codegen_dsl_alloca(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %alloca_result
+
+check_sub:
+    %is_sub = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_sub, i32 0, i32 0), i64 8)
+    %is_sub_bool = icmp ne i32 %is_sub, 0
+    br i1 %is_sub_bool, label %call_sub, label %check_and
+
+call_sub:
+    %sub_result = call %LLVMValueRef @codegen_dsl_sub(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %sub_result
+
+check_and:
+    %is_and = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_and, i32 0, i32 0), i64 8)
+    %is_and_bool = icmp ne i32 %is_and, 0
+    br i1 %is_and_bool, label %call_and, label %check_mul
+
+call_and:
+    %and_result = call %LLVMValueRef @codegen_dsl_and(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %and_result
+
+check_mul:
+    %is_mul = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_mul, i32 0, i32 0), i64 8)
+    %is_mul_bool = icmp ne i32 %is_mul, 0
+    br i1 %is_mul_bool, label %call_mul, label %check_trunc
+
+call_mul:
+    %mul_result = call %LLVMValueRef @codegen_dsl_mul(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %mul_result
+
+check_trunc:
+    %is_trunc = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.dsl_trunc, i32 0, i32 0), i64 10)
+    %is_trunc_bool = icmp ne i32 %is_trunc, 0
+    br i1 %is_trunc_bool, label %call_trunc, label %check_select
+
+call_trunc:
+    %trunc_result = call %LLVMValueRef @codegen_dsl_trunc(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %trunc_result
+
+check_select:
+    %is_select = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.dsl_select, i32 0, i32 0), i64 11)
+    %is_select_bool = icmp ne i32 %is_select, 0
+    br i1 %is_select_bool, label %call_select, label %check_phi
+
+call_select:
+    %select_result = call %LLVMValueRef @codegen_dsl_select(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %select_result
+
+check_phi:
+    %is_phi = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_phi, i32 0, i32 0), i64 8)
+    %is_phi_bool = icmp ne i32 %is_phi, 0
+    br i1 %is_phi_bool, label %call_phi, label %unknown_primitive
+
+call_phi:
+    %phi_result = call %LLVMValueRef @codegen_dsl_phi(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %phi_result
+
 handle_array_form:
     ; For "llvm-array" form, we return null and let the caller handle it
     ; The caller (codegen_dsl_call) will evaluate each element when needed
@@ -4545,7 +4625,8 @@ debug_and_proceed:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_atom_val_ptr, i32 0, i32 0), i8* %name, i64 %name_len)
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ; Print name (check malloc result)
-    %name_buf_debug = call i8* @malloc(i64 %name_len)
+    %name_len_plus1_debug = add i64 %name_len, 1
+    %name_buf_debug = call i8* @malloc(i64 %name_len_plus1_debug)
     %name_buf_debug_null = icmp eq i8* %name_buf_debug, null
     br i1 %name_buf_debug_null, label %skip_name_print, label %copy_name
     
@@ -4706,7 +4787,8 @@ print_stored_null_or_empty:
     
 print_stored_value:
     ; Print stored name if it exists
-    %stored_name_buf = call i8* @malloc(i64 %stored_name_len)
+    %stored_name_len_plus1 = add i64 %stored_name_len, 1
+    %stored_name_buf = call i8* @malloc(i64 %stored_name_len_plus1)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %stored_name_buf, i8* %stored_name, i64 %stored_name_len, i1 false)
     %stored_name_null_ptr = getelementptr i8, i8* %stored_name_buf, i64 %stored_name_len
     store i8 0, i8* %stored_name_null_ptr
@@ -5695,7 +5777,8 @@ get_name_node:
     ; Debug: Print global name being looked up
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_looking_up_global, i32 0, i32 0))
-    %name_buf_global = call i8* @malloc(i64 %name_len)
+    %name_len_plus1_global = add i64 %name_len, 1
+    %name_buf_global = call i8* @malloc(i64 %name_len_plus1_global)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_global, i8* %name, i64 %name_len, i1 false)
     %name_null_global = getelementptr i8, i8* %name_buf_global, i64 %name_len
     store i8 0, i8* %name_null_global
@@ -6241,6 +6324,397 @@ build_or:
     %or_result = call %LLVMValueRef @llvm_build_or(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
     ret %LLVMValueRef %or_result
     
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_alloca: Handle llvm:alloca form
+; Syntax: (llvm:alloca type)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (type)
+; Returns: LLVMValueRef for allocated pointer
+define %LLVMValueRef @codegen_dsl_alloca(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_type
+
+get_type:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %extract_type
+
+extract_type:
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_node_null = icmp eq %ASTNode* %type_node, null
+    br i1 %type_node_null, label %error, label %get_type_string
+
+get_type_string:
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_val = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+
+    ; Resolve type string to LLVMTypeRef
+    %alloca_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_val, i64 %type_len)
+    %alloca_type_null = icmp eq %LLVMTypeRef %alloca_type, null
+    br i1 %alloca_type_null, label %error, label %build_alloca
+
+build_alloca:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %alloca_result = call %LLVMValueRef @llvm_build_alloca(%LLVMBuilderRef %builder, %LLVMTypeRef %alloca_type, i8* %empty_str)
+    ret %LLVMValueRef %alloca_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_sub: Handle llvm:sub form
+; Syntax: (llvm:sub lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (lhs rhs)
+; Returns: LLVMValueRef for difference
+define %LLVMValueRef @codegen_dsl_sub(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_lhs
+
+get_lhs:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_lhs
+
+eval_lhs:
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+
+get_rhs:
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_sub
+
+build_sub:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %sub_result = call %LLVMValueRef @llvm_build_sub(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %sub_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_and: Handle llvm:and form
+; Syntax: (llvm:and lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (lhs rhs)
+; Returns: LLVMValueRef for result
+define %LLVMValueRef @codegen_dsl_and(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_lhs
+
+get_lhs:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_lhs
+
+eval_lhs:
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+
+get_rhs:
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_and
+
+build_and:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %and_result = call %LLVMValueRef @llvm_build_and(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %and_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_mul: Handle llvm:mul form
+; Syntax: (llvm:mul lhs rhs)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (lhs rhs)
+; Returns: LLVMValueRef for product
+define %LLVMValueRef @codegen_dsl_mul(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_lhs
+
+get_lhs:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_lhs
+
+eval_lhs:
+    %lhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %lhs_node = load %ASTNode*, %ASTNode** %lhs_node_ptr
+    %lhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %lhs_node)
+    %lhs_null = icmp eq %LLVMValueRef %lhs, null
+    br i1 %lhs_null, label %error, label %get_rhs
+
+get_rhs:
+    %args_cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr = load %ASTNode*, %ASTNode** %args_cdr_ptr
+    %rhs_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr, i32 0, i32 4
+    %rhs_node = load %ASTNode*, %ASTNode** %rhs_node_ptr
+    %rhs = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %rhs_node)
+    %rhs_null = icmp eq %LLVMValueRef %rhs, null
+    br i1 %rhs_null, label %error, label %build_mul
+
+build_mul:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %mul_result = call %LLVMValueRef @llvm_build_mul(%LLVMBuilderRef %builder, %LLVMValueRef %lhs, %LLVMValueRef %rhs, i8* %empty_str)
+    ret %LLVMValueRef %mul_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_trunc: Handle llvm:trunc form
+; Syntax: (llvm:trunc value source-type target-type)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (value source-type target-type)
+; Returns: LLVMValueRef for truncated value
+define %LLVMValueRef @codegen_dsl_trunc(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_value
+
+get_value:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_value
+
+eval_value:
+    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
+    %value = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %value_node)
+    %value_null = icmp eq %LLVMValueRef %value, null
+    br i1 %value_null, label %error, label %get_target_type
+
+get_target_type:
+    ; Get target-type (third element, skip source-type)
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %target_type_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %target_type_node = load %ASTNode*, %ASTNode** %target_type_node_ptr
+    %target_type_node_null = icmp eq %ASTNode* %target_type_node, null
+    br i1 %target_type_node_null, label %error, label %extract_target_type_string
+
+extract_target_type_string:
+    %target_type_node_type_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 0
+    %target_type_node_type = load i32, i32* %target_type_node_type_ptr
+    %is_atom = icmp eq i32 %target_type_node_type, 0  ; AST_ATOM
+    br i1 %is_atom, label %get_target_type_string, label %error
+
+get_target_type_string:
+    %target_type_val_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 2
+    %target_type_val = load i8*, i8** %target_type_val_ptr
+    %target_type_len_ptr = getelementptr %ASTNode, %ASTNode* %target_type_node, i32 0, i32 3
+    %target_type_len = load i64, i64* %target_type_len_ptr
+
+    ; Resolve target type string to LLVMTypeRef
+    %trunc_target_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %target_type_val, i64 %target_type_len)
+    %trunc_target_type_null = icmp eq %LLVMTypeRef %trunc_target_type, null
+    br i1 %trunc_target_type_null, label %error, label %build_trunc
+
+build_trunc:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %trunc_result = call %LLVMValueRef @llvm_build_trunc(%LLVMBuilderRef %builder, %LLVMValueRef %value, %LLVMTypeRef %trunc_target_type, i8* %empty_str)
+    ret %LLVMValueRef %trunc_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_select: Handle llvm:select form
+; Syntax: (llvm:select cond then-value else-value)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (cond then-value else-value)
+; Returns: LLVMValueRef for selected value
+define %LLVMValueRef @codegen_dsl_select(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_cond
+
+get_cond:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_cond
+
+eval_cond:
+    %cond_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %cond_node = load %ASTNode*, %ASTNode** %cond_node_ptr
+    %cond = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %cond_node)
+    %cond_null = icmp eq %LLVMValueRef %cond, null
+    br i1 %cond_null, label %error, label %get_then
+
+get_then:
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %then_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 4
+    %then_node = load %ASTNode*, %ASTNode** %then_node_ptr
+    %then_val = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %then_node)
+    %then_null = icmp eq %LLVMValueRef %then_val, null
+    br i1 %then_null, label %error, label %get_else
+
+get_else:
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %else_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %else_node = load %ASTNode*, %ASTNode** %else_node_ptr
+    %else_val = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %else_node)
+    %else_null = icmp eq %LLVMValueRef %else_val, null
+    br i1 %else_null, label %error, label %build_select
+
+build_select:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %select_result = call %LLVMValueRef @llvm_build_select(%LLVMBuilderRef %builder, %LLVMValueRef %cond, %LLVMValueRef %then_val, %LLVMValueRef %else_val, i8* %empty_str)
+    ret %LLVMValueRef %select_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_phi: Handle llvm:phi form
+; Syntax: (llvm:phi type (value1 'label1) (value2 'label2) ...)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (type (value1 'label1) (value2 'label2) ...)
+; Returns: LLVMValueRef for phi node
+define %LLVMValueRef @codegen_dsl_phi(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_phi_type
+
+get_phi_type:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %extract_phi_type
+
+extract_phi_type:
+    ; First arg is the type
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_val = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+
+    %phi_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_val, i64 %type_len)
+    %phi_type_null = icmp eq %LLVMTypeRef %phi_type, null
+    br i1 %phi_type_null, label %error, label %build_phi_node
+
+build_phi_node:
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %phi = call %LLVMValueRef @llvm_build_phi(%LLVMBuilderRef %builder, %LLVMTypeRef %phi_type, i8* %empty_str)
+    %phi_null = icmp eq %LLVMValueRef %phi, null
+    br i1 %phi_null, label %error, label %get_incoming_pairs
+
+get_incoming_pairs:
+    ; Remaining args are (value 'label) pairs
+    %pairs_start_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %pairs_start = load %ASTNode*, %ASTNode** %pairs_start_ptr
+    br label %phi_loop
+
+phi_loop:
+    %current_pair_phi = phi %ASTNode* [ %pairs_start, %get_incoming_pairs ], [ %next_pair, %add_incoming_done ]
+    %current_pair_null = icmp eq %ASTNode* %current_pair_phi, null
+    br i1 %current_pair_null, label %phi_done, label %process_pair
+
+process_pair:
+    ; Get the pair list node (car is the pair list)
+    %pair_node_ptr = getelementptr %ASTNode, %ASTNode* %current_pair_phi, i32 0, i32 4
+    %pair_node = load %ASTNode*, %ASTNode** %pair_node_ptr
+    %pair_node_null = icmp eq %ASTNode* %pair_node, null
+    br i1 %pair_node_null, label %phi_done, label %extract_value_from_pair
+
+extract_value_from_pair:
+    ; pair_node is a LIST with (value 'label)
+    ; Get value (car of pair)
+    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %pair_node, i32 0, i32 4
+    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
+    %incoming_value = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %value_node)
+    %incoming_value_null = icmp eq %LLVMValueRef %incoming_value, null
+    br i1 %incoming_value_null, label %error, label %extract_label_from_pair
+
+extract_label_from_pair:
+    ; Get label (cadr of pair) - it's a quoted atom
+    %pair_cdr_ptr = getelementptr %ASTNode, %ASTNode* %pair_node, i32 0, i32 5
+    %pair_cdr = load %ASTNode*, %ASTNode** %pair_cdr_ptr
+    %label_node_ptr = getelementptr %ASTNode, %ASTNode* %pair_cdr, i32 0, i32 4
+    %label_node = load %ASTNode*, %ASTNode** %label_node_ptr
+
+    ; Extract label name from quoted atom using output parameters
+    %phi_label_name_out = alloca i8*
+    %phi_label_len_out = alloca i64
+    %phi_extract_result = call i32 @codegen_extract_quoted_atom(%ASTNode* %label_node, i8** %phi_label_name_out, i64* %phi_label_len_out)
+    %phi_extract_failed = icmp ne i32 %phi_extract_result, 0
+    br i1 %phi_extract_failed, label %error, label %get_phi_bb
+
+get_phi_bb:
+    %phi_label_name = load i8*, i8** %phi_label_name_out
+    %phi_label_len = load i64, i64* %phi_label_len_out
+
+    ; Look up the basic block by label name using get_or_create
+    %phi_func_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 8
+    %phi_func = load %LLVMValueRef, %LLVMValueRef* %phi_func_ptr
+    %incoming_bb = call %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %phi_func, i8* %phi_label_name, i64 %phi_label_len)
+    %incoming_bb_null = icmp eq %LLVMBasicBlockRef %incoming_bb, null
+    br i1 %incoming_bb_null, label %error, label %add_one_incoming
+
+add_one_incoming:
+    ; Allocate arrays for one incoming value/block pair
+    %val_array = alloca %LLVMValueRef
+    %bb_array = alloca %LLVMBasicBlockRef
+    store %LLVMValueRef %incoming_value, %LLVMValueRef* %val_array
+    store %LLVMBasicBlockRef %incoming_bb, %LLVMBasicBlockRef* %bb_array
+    call void @llvm_add_incoming(%LLVMValueRef %phi, %LLVMValueRef* %val_array, %LLVMBasicBlockRef* %bb_array, i32 1)
+    br label %add_incoming_done
+
+add_incoming_done:
+    ; Move to next pair
+    %next_pair_ptr = getelementptr %ASTNode, %ASTNode* %current_pair_phi, i32 0, i32 5
+    %next_pair = load %ASTNode*, %ASTNode** %next_pair_ptr
+    br label %phi_loop
+
+phi_done:
+    ret %LLVMValueRef %phi
+
 error:
     ret %LLVMValueRef null
 }
@@ -7399,22 +7873,34 @@ free_param_types:
     br label %error
     
 add_function:
-    ; Add function to module
+    ; Add function to module (or reuse existing forward declaration)
     ; Create null-terminated function name
-    %func_name_buf = call i8* @malloc(i64 %func_name_len)
     %func_name_buf_plus1 = add i64 %func_name_len, 1
     %func_name_buf_full = call i8* @malloc(i64 %func_name_buf_plus1)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %func_name_buf_full, i8* %func_name, i64 %func_name_len, i1 false)
     %null_ptr = getelementptr i8, i8* %func_name_buf_full, i64 %func_name_len
     store i8 0, i8* %null_ptr
     
-    %func = call %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %func_name_buf_full, %LLVMTypeRef %func_type_phi)
+    ; Check if function already exists (e.g. from a forward declaration)
+    %existing_func = call %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %module, i8* %func_name_buf_full)
+    %existing_null = icmp eq %LLVMValueRef %existing_func, null
+    br i1 %existing_null, label %create_new_function, label %reuse_existing_function
+
+create_new_function:
+    %new_func = call %LLVMValueRef @llvm_add_function(%LLVMModuleRef %module, i8* %func_name_buf_full, %LLVMTypeRef %func_type_phi)
     call void @free(i8* %func_name_buf_full)
-    
-    %func_null = icmp eq %LLVMValueRef %func, null
-    br i1 %func_null, label %free_param_types, label %set_param_names
+    %new_func_null = icmp eq %LLVMValueRef %new_func, null
+    br i1 %new_func_null, label %free_param_types, label %set_param_names
+
+reuse_existing_function:
+    ; Reuse the existing forward declaration - the definition body will be added to it
+    call void @free(i8* %func_name_buf_full)
+    br label %set_param_names
     
 set_param_names:
+    ; Merge function value from either new creation or reuse of existing declaration
+    %func = phi %LLVMValueRef [ %new_func, %create_new_function ], [ %existing_func, %reuse_existing_function ]
+    
     ; Create entry basic block FIRST (required before accessing parameters)
     ; Use non-null name (some LLVM versions may require this)
     %entry_block_name = bitcast [6 x i8]* @.str.entry_block_name to i8*
@@ -7555,17 +8041,20 @@ entry:
     %symbol_name_len_ptr = getelementptr %ASTNode, %ASTNode* %symbol_name_node, i32 0, i32 3
     %symbol_name_len = load i64, i64* %symbol_name_len_ptr
     
-    ; Check for optional vararg flag (fifth element)
-    %lib_info_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %lib_info_cdr, i32 0, i32 5
-    %lib_info_cdr_cdr = load %ASTNode*, %ASTNode** %lib_info_cdr_cdr_ptr
+    ; Check for optional vararg flag (fifth element of top-level form)
+    ; The vararg flag is after the library info in the top-level list, not inside it
+    ; Top-level: (define-ffi-function signature return-type (lib sym) [vararg])
+    ; cdr_cdr_cdr = cell4 (lib info), cdr_cdr_cdr.cdr = cell5 (vararg flag)
+    %vararg_cell_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr_cdr, i32 0, i32 5
+    %vararg_cell = load %ASTNode*, %ASTNode** %vararg_cell_ptr
     %is_vararg = alloca i32
     store i32 0, i32* %is_vararg
-    %has_vararg_flag = icmp ne %ASTNode* %lib_info_cdr_cdr, null
+    %has_vararg_flag = icmp ne %ASTNode* %vararg_cell, null
     br i1 %has_vararg_flag, label %check_vararg_flag, label %load_library
     
 check_vararg_flag:
     ; Check if vararg flag is present (should be #t or #f)
-    %vararg_flag_node_ptr = getelementptr %ASTNode, %ASTNode* %lib_info_cdr_cdr, i32 0, i32 4
+    %vararg_flag_node_ptr = getelementptr %ASTNode, %ASTNode* %vararg_cell, i32 0, i32 4
     %vararg_flag_node = load %ASTNode*, %ASTNode** %vararg_flag_node_ptr
     %vararg_flag_val_ptr = getelementptr %ASTNode, %ASTNode* %vararg_flag_node, i32 0, i32 2
     %vararg_flag = load i8*, i8** %vararg_flag_val_ptr
@@ -7921,7 +8410,8 @@ type_invalid_debug:
     br label %return_count
     
 print_type_str:
-    %type_buf = call i8* @malloc(i64 %type_len)
+    %type_len_plus1 = add i64 %type_len, 1
+    %type_buf = call i8* @malloc(i64 %type_len_plus1)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %type_buf, i8* %type_str, i64 %type_len, i1 false)
     %type_null_ptr = getelementptr i8, i8* %type_buf, i64 %type_len
     store i8 0, i8* %type_null_ptr
