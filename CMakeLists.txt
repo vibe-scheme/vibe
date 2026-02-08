@@ -227,21 +227,90 @@ else()
 endif()
 
 # Bootstrap Parser - LLVM bitcode module
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll -o ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll
-    COMMENT "Assembling parser bitcode (temp)"
-)
+if(USE_VIBE_FILES)
+    # KERNEL/SELF_HOST mode: Compile parser.vibe + assemble parser_no_vibe.ll
+    # Step 1a: Compile parser.vibe to bitcode
+    if(USE_VIBE_KERNEL)
+        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
+                ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.vibe
+            COMMENT "Compiling parser.vibe to bitcode using vibe_kernel"
+        )
+    else()
+        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
+        # Write IR text first, then convert with llvm-as (same workaround as lexer)
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
+            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
+                ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
+            DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.vibe
+            COMMENT "Compiling parser.vibe to IR text using bootstrap_compiler"
+        )
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
+                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
+            COMMENT "Converting parser IR text to bitcode using llvm-as"
+        )
+    endif()
 
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-    COMMENT "Linking parser with types"
-)
+    # Step 1b: Assemble parser_no_vibe.ll (un-migrated functions)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser_no_vibe.ll
+            -o ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser_no_vibe.ll
+        COMMENT "Assembling parser_no_vibe bitcode"
+    )
 
-add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
+    # Step 2: Create final parser.bc by linking types + Vibe code + no_vibe code
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
+        COMMENT "Linking parser with types, Vibe code, and no_vibe code"
+    )
+
+    add_custom_target(bootstrap_parser_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc)
+    add_custom_target(bootstrap_parser_no_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc)
+    add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
+    add_dependencies(bootstrap_parser bootstrap_parser_vibe_temp bootstrap_parser_no_vibe_temp)
+else()
+    # BOOTSTRAP mode: Use .ll files only
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll -o ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser.ll
+        COMMENT "Assembling parser bitcode (temp)"
+    )
+
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
+        COMMENT "Linking parser with types"
+    )
+
+    add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
+endif()
 
 # Bootstrap Runtime - LLVM bitcode module
 add_custom_command(

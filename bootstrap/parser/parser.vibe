@@ -1,0 +1,218 @@
+; Bootstrap Parser for Vibe - Partially migrated to Vibe DSL
+; This file contains the core parsing functions migrated from parser.ll
+; Functions requiring llvm:insertvalue/extractvalue remain in parser_no_vibe.ll
+
+; Declare FFI functions
+(llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
+
+; Define Token type
+(llvm:define-type Token
+  (type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; Define Lexer type
+(llvm:define-type Lexer
+  (source |i8*|)
+  (source_len |i64|)
+  (pos |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; Define ASTNode type
+; Note: car and cdr use |i8*| instead of |%ASTNode*| because the codegen
+; resolves field types before storing the type, so self-referential types
+; can't be resolved. In LLVM 21 opaque pointer mode, both are just 'ptr'.
+(llvm:define-type ASTNode
+  (type |i32|)
+  (atom_type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (car |i8*|)
+  (cdr |i8*|)
+  (line |i32|)
+  (column |i32|))
+
+; Define Parser type
+(llvm:define-type Parser
+  (lexer |%Lexer*|)
+  (current |%Token*|))
+
+; External declaration: lex_next (from lexer module)
+(llvm:declare-function (lex_next (lexer |%Lexer*|)) |%Token*|)
+
+; External declaration: parse_create_atom (from parser_no_vibe.ll)
+(llvm:declare-function (parse_create_atom (token |%Token*|)) |%ASTNode*|)
+
+; Forward declaration: parse_expr (mutually recursive with parse_list/parse_list_tail)
+(llvm:declare-function (parse_expr (parser |%Parser*|)) |%ASTNode*|)
+
+; parse_init: Initialize a parser with a lexer
+; Allocates a Parser struct, stores the lexer pointer, and fetches the
+; first token by calling lex_next. Returns a pointer to the initialized Parser.
+(llvm:define-function (parse_init (lexer |%Lexer*|)) |%Parser*|
+  (let* ((parser (llvm:call malloc (llvm:const-int |i64| 16)))
+         (parser_ptr (llvm:bitcast parser |%Parser*|))
+         (lexer_ptr (llvm:gep |%Parser| parser_ptr 0 0))
+         (first_token (llvm:call lex_next lexer))
+         (token_ptr (llvm:gep |%Parser| parser_ptr 0 1)))
+    (llvm:store lexer lexer_ptr)
+    (llvm:store first_token token_ptr)
+    (llvm:ret parser_ptr)))
+
+; parse_advance: Advance parser to next token
+; Loads the lexer from the parser, calls lex_next to get the next token,
+; and stores it as the parser's current token.
+(llvm:define-function (parse_advance (parser |%Parser*|)) |void|
+  (let* ((lexer_ptr (llvm:gep |%Parser| parser 0 0))
+         (lexer (llvm:load lexer_ptr |%Lexer*|))
+         (next_token (llvm:call lex_next lexer))
+         (token_ptr (llvm:gep |%Parser| parser 0 1)))
+    (llvm:store next_token token_ptr)
+    (llvm:ret-void)))
+
+; parse_current: Get current token from parser
+; Loads and returns the current token pointer from the parser struct.
+(llvm:define-function (parse_current (parser |%Parser*|)) |%Token*|
+  (let* ((token_ptr (llvm:gep |%Parser| parser 0 1))
+         (token (llvm:load token_ptr |%Token*|)))
+    (llvm:ret token)))
+
+; parse_check: Check if current token matches given type
+; Returns 1 if the current token's type matches token_type, 0 otherwise.
+; Calls parse_current to get the token, loads its type field, and compares.
+(llvm:define-function (parse_check (parser |%Parser*|) (token_type |i32|)) |i32|
+  (let* ((token (llvm:call parse_current parser))
+         (type_ptr (llvm:gep |%Token| token 0 0))
+         (type_val (llvm:load type_ptr |i32|))
+         (matches (llvm:icmp 'eq type_val token_type))
+         (result (llvm:zext matches |i1| |i32|)))
+    (llvm:ret result)))
+
+; parse_error: Report a parsing error
+; Currently a stub that returns null. Will be expanded when the full
+; compiler adds proper error reporting.
+(llvm:define-function (parse_error (parser |%Parser*|) (message |i8*|)) |%ASTNode*|
+  (llvm:ret (llvm:const-null |%ASTNode*|)))
+
+; parse_atom: Parse an atomic value
+; Gets the current token, creates an AST atom node from it via
+; parse_create_atom (in parser_no_vibe.ll), advances past the token,
+; and returns the new node.
+(llvm:define-function (parse_atom (parser |%Parser*|)) |%ASTNode*|
+  (let* ((token (llvm:call parse_current parser))
+         (node (llvm:call parse_create_atom token)))
+    (llvm:call parse_advance parser)
+    (llvm:ret node)))
+
+; parse_list_tail: Parse the tail of a list (recursive helper)
+; If the current token is RPAREN, consumes it and returns null (end of list).
+; Otherwise, creates a cons cell (AST_LIST node), parses the car via parse_expr,
+; recursively parses the cdr, and returns the cons cell.
+(llvm:define-function (parse_list_tail (parser |%Parser*|)) |%ASTNode*|
+  (let* ((is_rparen (llvm:call parse_check parser (llvm:const-int |i32| 6)))
+         (rparen_bool (llvm:icmp 'ne is_rparen (llvm:const-int |i32| 0))))
+    (llvm:br rparen_bool 'empty 'has_elements))
+  (llvm:label 'empty
+    (llvm:call parse_advance parser)
+    (llvm:ret (llvm:const-null |%ASTNode*|)))
+  (llvm:label 'has_elements
+    (let* ((cons_node (llvm:call malloc (llvm:const-int |i64| 48)))
+           (cons_node_ptr (llvm:bitcast cons_node |%ASTNode*|))
+           (node_type_ptr (llvm:gep |%ASTNode| cons_node_ptr 0 0)))
+      (llvm:store (llvm:const-int |i32| 1) node_type_ptr)
+      (let* ((car (llvm:call parse_expr parser))
+             (car_ptr (llvm:gep |%ASTNode| cons_node_ptr 0 4)))
+        (llvm:store car car_ptr)
+        (let* ((cdr (llvm:call parse_list_tail parser))
+               (cdr_ptr (llvm:gep |%ASTNode| cons_node_ptr 0 5)))
+          (llvm:store cdr cdr_ptr)
+          (llvm:ret cons_node_ptr))))))
+
+; parse_list: Parse a list structure
+; Expects LPAREN as the current token. After consuming it, checks for empty
+; list (RPAREN immediately). If not empty, parses the first element, then
+; checks for dot notation (improper list) or continues parsing the rest.
+; Returns an AST_LIST node, or null on error.
+(llvm:define-function (parse_list (parser |%Parser*|)) |%ASTNode*|
+  ; Entry: check for left parenthesis
+  (let* ((is_lparen (llvm:call parse_check parser (llvm:const-int |i32| 5)))
+         (lparen_bool (llvm:icmp 'eq is_lparen (llvm:const-int |i32| 0))))
+    (llvm:br lparen_bool 'error 'parse_start))
+  (llvm:label 'parse_start
+    (llvm:call parse_advance parser)
+    (let* ((list_node (llvm:call malloc (llvm:const-int |i64| 48)))
+           (list_node_ptr (llvm:bitcast list_node |%ASTNode*|))
+           (node_type_ptr (llvm:gep |%ASTNode| list_node_ptr 0 0)))
+      (llvm:store (llvm:const-int |i32| 1) node_type_ptr)
+      (let* ((is_rparen (llvm:call parse_check parser (llvm:const-int |i32| 6)))
+             (rparen_bool (llvm:icmp 'ne is_rparen (llvm:const-int |i32| 0))))
+        (llvm:br rparen_bool 'empty_list 'parse_elements))))
+  (llvm:label 'empty_list
+    (llvm:call parse_advance parser)
+    (let* ((car_ptr_empty (llvm:gep |%ASTNode| list_node_ptr 0 4))
+           (cdr_ptr_empty (llvm:gep |%ASTNode| list_node_ptr 0 5)))
+      (llvm:store (llvm:const-null |%ASTNode*|) car_ptr_empty)
+      (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr_empty)
+      (llvm:ret list_node_ptr)))
+  (llvm:label 'parse_elements
+    (let* ((first (llvm:call parse_expr parser))
+           (car_ptr_elements (llvm:gep |%ASTNode| list_node_ptr 0 4)))
+      (llvm:store first car_ptr_elements)
+      (let* ((is_dot (llvm:call parse_check parser (llvm:const-int |i32| 11)))
+             (dot_bool (llvm:icmp 'ne is_dot (llvm:const-int |i32| 0))))
+        (llvm:br dot_bool 'dot_notation 'parse_rest))))
+  (llvm:label 'dot_notation
+    (llvm:call parse_advance parser)
+    (let* ((cdr_expr (llvm:call parse_expr parser))
+           (cdr_ptr_dot (llvm:gep |%ASTNode| list_node_ptr 0 5)))
+      (llvm:store cdr_expr cdr_ptr_dot)
+      (let* ((is_rparen2 (llvm:call parse_check parser (llvm:const-int |i32| 6)))
+             (rparen_bool2 (llvm:icmp 'eq is_rparen2 (llvm:const-int |i32| 0))))
+        (llvm:br rparen_bool2 'error 'done_dot))))
+  (llvm:label 'done_dot
+    (llvm:call parse_advance parser)
+    (llvm:ret list_node_ptr))
+  (llvm:label 'parse_rest
+    (let* ((rest (llvm:call parse_list_tail parser))
+           (cdr_ptr_rest (llvm:gep |%ASTNode| list_node_ptr 0 5)))
+      (llvm:store rest cdr_ptr_rest)
+      (llvm:ret list_node_ptr)))
+  (llvm:label 'error
+    (llvm:ret (llvm:const-null |%ASTNode*|))))
+
+; parse_expr: Parse a single expression (atom or list)
+; Dispatches based on the current token type:
+;   - TOKEN_QUOTE (7): consume quote, recursively parse quoted expression,
+;     wrap in AST_QUOTE node
+;   - TOKEN_LPAREN (5): delegate to parse_list
+;   - Otherwise: delegate to parse_atom
+(llvm:define-function (parse_expr (parser |%Parser*|)) |%ASTNode*|
+  (let* ((token (llvm:call parse_current parser))
+         (type_ptr (llvm:gep |%Token| token 0 0))
+         (token_type (llvm:load type_ptr |i32|))
+         (is_quote (llvm:icmp 'eq token_type (llvm:const-int |i32| 7))))
+    (llvm:br is_quote 'quote 'check_quasiquote))
+  (llvm:label 'quote
+    (llvm:call parse_advance parser)
+    (let* ((quoted (llvm:call parse_expr parser))
+           (quote_node (llvm:call malloc (llvm:const-int |i64| 48)))
+           (quote_node_ptr (llvm:bitcast quote_node |%ASTNode*|))
+           (node_type_ptr (llvm:gep |%ASTNode| quote_node_ptr 0 0))
+           (car_ptr (llvm:gep |%ASTNode| quote_node_ptr 0 4))
+           (cdr_ptr (llvm:gep |%ASTNode| quote_node_ptr 0 5)))
+      (llvm:store (llvm:const-int |i32| 2) node_type_ptr)
+      (llvm:store quoted car_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
+      (llvm:ret quote_node_ptr)))
+  (llvm:label 'check_quasiquote
+    (let* ((is_lparen (llvm:icmp 'eq token_type (llvm:const-int |i32| 5))))
+      (llvm:br is_lparen 'list 'atom)))
+  (llvm:label 'list
+    (let* ((list_node (llvm:call parse_list parser)))
+      (llvm:ret list_node)))
+  (llvm:label 'atom
+    (let* ((atom_node (llvm:call parse_atom parser)))
+      (llvm:ret atom_node))))
