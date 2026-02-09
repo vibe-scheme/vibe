@@ -75,11 +75,34 @@ The Vibe project uses a three-phase build system that enables gradual migration 
 
 ### File Type Relationships
 
-- **`.ll` files**: Pure LLVM IR implementations used in BOOTSTRAP mode
-- **`*_no_vibe.ll` files**: Contains functions that haven't been migrated to `.vibe` yet, used in KERNEL and SELF_HOST modes alongside `.vibe` files
+- **`.ll` files**: Pure LLVM IR implementations used in BOOTSTRAP mode for lexer and parser; shared across all modes for codegen, ffi, runtime, main
+- **`*_no_vibe.ll` files**: Contains functions that haven't been migrated to `.vibe` yet, used in KERNEL and SELF_HOST modes alongside `.vibe` files. As migration progresses, these files are eliminated (e.g., `parser_no_vibe.ll` was removed when parser migration completed)
 - **`.vibe` files**: Vibe source code that gets compiled to LLVM bitcode, used in KERNEL and SELF_HOST modes
 
-**Important**: When functions are migrated from `.ll` to `.vibe`, they are removed from `.ll` but remain in `*_no_vibe.ll` until fully migrated. The `*_no_vibe.ll` files serve as a bridge during the migration process.
+**Important**: When functions are migrated from `.ll` to `.vibe`, they are removed from `.ll` but remain in `*_no_vibe.ll` until fully migrated. The `*_no_vibe.ll` files serve as a bridge during the migration process. Once all functions in a `*_no_vibe.ll` file are migrated, the file is deleted and the CMakeLists.txt is simplified.
+
+### Bootstrap/Kernel Sync Strategy
+
+When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same module, they must be kept in behavioral sync. This section documents the strategy for maintaining this sync.
+
+**Current migration status:**
+- `lexer.ll` / `lexer.vibe` -- fully migrated, both complete
+- `parser.ll` / `parser.vibe` -- fully migrated, both complete
+- `codegen.ll` -- shared by all modes (no `.vibe` equivalent yet)
+- `ffi.ll`, `runtime.ll`, `main.ll`, `types.ll` -- shared by all modes
+
+**Sync rules:**
+1. The `.vibe` file is the **canonical source** for function behavior in the kernel
+2. The `.ll` file must **match functionally** but may include additional debug logging
+3. **Bug fixes** must be applied to both `.ll` and `.vibe` versions of the same function
+4. **New functions** added to `.vibe` must have equivalents in the `.ll` file (and vice versa)
+5. When modifying `codegen.ll` (shared), changes automatically apply to all build modes
+6. **Debug logging divergence is acceptable**: bootstrap `.ll` files retain debug logging (printf calls) while kernel `.vibe` files remain silent. This is intentional -- bootstrap logging aids development, while kernel builds are cleaner
+
+**When to sync:**
+- After fixing a bug in either the `.ll` or `.vibe` version of a function
+- After adding new DSL methods that enable migrating more functions
+- After any behavioral change to a function that exists in both forms
 
 ## Development Chat Documentation
 
@@ -131,15 +154,15 @@ Then use this exact date in the chat document: `**Date**: 2025-12-28`
 - Use consistent type definitions across modules
 - Document all functions with their purpose and parameters
 
-### Synchronizing `*_no_vibe.ll` Files
+### Synchronizing Bootstrap and Kernel Files
 
-**IMPORTANT**: When making changes to `.ll` files that have corresponding `*_no_vibe.ll` files (e.g., `lexer.ll` and `lexer_no_vibe.ll`), you must synchronize the changes. The `*_no_vibe.ll` files are used when building `vibe_kernel` in KERNEL and SELF_HOST modes, and they contain the non-migrated functions that haven't been moved to `.vibe` files yet.
+**IMPORTANT**: When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same module (e.g., `lexer.ll` and `lexer.vibe`, `parser.ll` and `parser.vibe`), you must keep them functionally synchronized. See the "Bootstrap/Kernel Sync Strategy" section under Build System Overview for detailed rules.
 
-- **When to synchronize**: Any time you modify a function or logic in a `.ll` file that also exists in the corresponding `*_no_vibe.ll` file
-- **What to synchronize**: Function implementations, type definitions, constants, and any logic changes
-- **Future goal**: Eventually all code will be migrated to `.vibe` files, but until then, keep `*_no_vibe.ll` files in sync with their `.ll` counterparts
+- **When to synchronize**: Any time you modify function behavior in a `.ll` file that also exists in the corresponding `.vibe` file (or vice versa)
+- **What to synchronize**: Function logic and semantics. Debug logging differences are acceptable.
+- **Future goal**: Eventually all code will be migrated to `.vibe` files, making the `.ll` versions unnecessary for KERNEL/SELF_HOST builds
 
-**Example**: If you fix number parsing in `bootstrap/lexer/lexer.ll`, you must also apply the same fix to `bootstrap/lexer/lexer_no_vibe.ll` if that function hasn't been migrated to `lexer.vibe` yet.
+**Note on `*_no_vibe.ll` files**: These files existed as a bridge during migration, containing functions not yet migrated to `.vibe`. As of the current codebase, both lexer and parser are fully migrated and have no `*_no_vibe.ll` files. If future modules use this pattern during their migration, the same sync rules apply.
 
 ### Error Handling
 

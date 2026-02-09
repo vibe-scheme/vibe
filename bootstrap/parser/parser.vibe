@@ -1,9 +1,10 @@
-; Bootstrap Parser for Vibe - Partially migrated to Vibe DSL
-; This file contains the core parsing functions migrated from parser.ll
-; Functions requiring llvm:insertvalue/extractvalue remain in parser_no_vibe.ll
+; Bootstrap Parser for Vibe - Fully migrated to Vibe DSL
+; This file contains all parsing functions migrated from parser.ll
 
 ; Declare FFI functions
 (llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
+(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+(llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
 
 ; Define Token type
 (llvm:define-type Token
@@ -40,10 +41,16 @@
   (lexer |%Lexer*|)
   (current |%Token*|))
 
+; Define NormalizeResult type for parse_normalize_type_atom return value
+; Equivalent to anonymous struct { i8*, i64 } used in the bootstrap parser.ll
+(llvm:define-type NormalizeResult
+  (value |i8*|)
+  (len |i64|))
+
 ; External declaration: lex_next (from lexer module)
 (llvm:declare-function (lex_next (lexer |%Lexer*|)) |%Token*|)
 
-; External declaration: parse_create_atom (from parser_no_vibe.ll)
+; Forward declaration: parse_create_atom (defined later in this file)
 (llvm:declare-function (parse_create_atom (token |%Token*|)) |%ASTNode*|)
 
 ; Forward declaration: parse_expr (mutually recursive with parse_list/parse_list_tail)
@@ -99,8 +106,7 @@
 
 ; parse_atom: Parse an atomic value
 ; Gets the current token, creates an AST atom node from it via
-; parse_create_atom (in parser_no_vibe.ll), advances past the token,
-; and returns the new node.
+; parse_create_atom, advances past the token, and returns the new node.
 (llvm:define-function (parse_atom (parser |%Parser*|)) |%ASTNode*|
   (let* ((token (llvm:call parse_current parser))
          (node (llvm:call parse_create_atom token)))
@@ -216,3 +222,99 @@
   (llvm:label 'atom
     (let* ((atom_node (llvm:call parse_atom parser)))
       (llvm:ret atom_node))))
+
+; parse_normalize_type_atom: Normalize type atom value (strip % prefix for named types)
+; Parameters:
+;   value: Pointer to token value string
+;   len: Length of token value
+; Returns: NormalizeResult struct with pointer to normalized value and length
+; Note: This function normalizes type syntax:
+;   - Strips % prefix from named types: "%Token" -> "Token"
+;   - Keeps pointer indicators (*) as-is
+;   - Vertical bars are already stripped by lexer, so we don't handle them here
+(llvm:define-function (parse_normalize_type_atom (value |i8*|) (len |i64|)) |%NormalizeResult|
+  ; Check for invalid input (null pointer or zero length)
+  (let* ((value_null (llvm:icmp 'eq value (llvm:const-null |i8*|)))
+         (len_zero (llvm:icmp 'eq len (llvm:const-int |i64| 0)))
+         (invalid (llvm:or value_null len_zero)))
+    (llvm:br invalid 'return_original 'check_percent))
+  (llvm:label 'check_percent
+    ; Check if value starts with '%' (named type)
+    (let* ((first_char (llvm:load value |i8|))
+           (first_int (llvm:zext first_char |i8| |i32|))
+           (is_percent (llvm:icmp 'eq first_int (llvm:const-int |i32| 37))))
+      (llvm:br is_percent 'strip_percent 'return_original)))
+  (llvm:label 'strip_percent
+    ; Strip '%' prefix: create new string without first character
+    (let* ((new_len (llvm:sub len (llvm:const-int |i64| 1)))
+           (new_value (llvm:call malloc new_len))
+           (value_plus1 (llvm:gep |i8| value (llvm:const-int |i64| 1)))
+           (_ (llvm:call memcpy new_value value_plus1 new_len))
+           (result (llvm:insertvalue (llvm:undef |%NormalizeResult|) new_value 0))
+           (result_with_len (llvm:insertvalue result new_len 1)))
+      (llvm:ret result_with_len)))
+  (llvm:label 'return_original
+    ; Return original value (no normalization needed)
+    (let* ((result_orig (llvm:insertvalue (llvm:undef |%NormalizeResult|) value 0))
+           (result_orig_with_len (llvm:insertvalue result_orig len 1)))
+      (llvm:ret result_orig_with_len))))
+
+; parse_create_atom: Create an AST node for an atom
+; Parameters:
+;   token: Pointer to Token structure
+; Returns: Pointer to ASTNode
+; Note: Normalizes type syntax (strips % prefix from named types)
+(llvm:define-function (parse_create_atom (token |%Token*|)) |%ASTNode*|
+  (let* ((node (llvm:call malloc (llvm:const-int |i64| 48)))
+         (node_ptr (llvm:bitcast node |%ASTNode*|))
+         ; Load token type
+         (type_ptr (llvm:gep |%Token| token 0 0))
+         (token_type (llvm:load type_ptr |i32|))
+         ; Set AST_ATOM type (0)
+         (node_type_ptr (llvm:gep |%ASTNode| node_ptr 0 0)))
+    (llvm:store (llvm:const-int |i32| 0) node_type_ptr)
+    (let* (
+         ; Set atom_type from token type
+         (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1)))
+      (llvm:store token_type atom_type_ptr)
+      (let* (
+           ; Load token value and length
+           (val_ptr (llvm:gep |%Token| token 0 1))
+           (value (llvm:load val_ptr |i8*|))
+           (len_ptr (llvm:gep |%Token| token 0 2))
+           (len (llvm:load len_ptr |i64|))
+           ; Normalize type syntax (strip % prefix if present)
+           (normalized (llvm:call parse_normalize_type_atom value len))
+           (normalized_value (llvm:extractvalue normalized 0))
+           (normalized_len (llvm:extractvalue normalized 1))
+           ; Always copy the normalized value to ensure it's isolated and null-terminated
+           ; This prevents reading past token boundaries when tokens are adjacent in source
+           (copied_value_size (llvm:add normalized_len (llvm:const-int |i64| 1)))
+           (copied_value (llvm:call malloc copied_value_size))
+           (_ (llvm:call memcpy copied_value normalized_value normalized_len))
+           (null_term_ptr (llvm:gep |i8| copied_value normalized_len)))
+        (llvm:store (llvm:const-int |i8| 0) null_term_ptr)
+        ; Check if value was newly allocated by normalize (different from original)
+        (let* ((value_changed (llvm:icmp 'ne normalized_value value)))
+          (llvm:br value_changed 'free_normalized 'store_copied)))))
+  (llvm:label 'free_normalized
+    (llvm:call free normalized_value)
+    (llvm:br 'store_copied))
+  (llvm:label 'store_copied
+    (let* ((node_val_ptr (llvm:gep |%ASTNode| node_ptr 0 2)))
+      (llvm:store copied_value node_val_ptr)
+      (let* ((node_len_ptr (llvm:gep |%ASTNode| node_ptr 0 3)))
+        (llvm:store normalized_len node_len_ptr)
+        (let* ((car_ptr (llvm:gep |%ASTNode| node_ptr 0 4)))
+          (llvm:store (llvm:const-null |%ASTNode*|) car_ptr)
+          (let* ((cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5)))
+            (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
+            (let* ((line_ptr (llvm:gep |%Token| token 0 3))
+                   (line (llvm:load line_ptr |i32|))
+                   (node_line_ptr (llvm:gep |%ASTNode| node_ptr 0 6)))
+              (llvm:store line node_line_ptr)
+              (let* ((col_ptr (llvm:gep |%Token| token 0 4))
+                     (col (llvm:load col_ptr |i32|))
+                     (node_col_ptr (llvm:gep |%ASTNode| node_ptr 0 7)))
+                (llvm:store col node_col_ptr)
+                (llvm:ret node_ptr)))))))))

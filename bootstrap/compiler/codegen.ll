@@ -105,6 +105,9 @@ declare %LLVMValueRef @llvm_build_trunc(%LLVMBuilderRef, %LLVMValueRef, %LLVMTyp
 declare %LLVMValueRef @llvm_build_select(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, %LLVMValueRef, i8*)
 declare %LLVMValueRef @llvm_build_phi(%LLVMBuilderRef, %LLVMTypeRef, i8*)
 declare void @llvm_add_incoming(%LLVMValueRef, %LLVMValueRef*, %LLVMBasicBlockRef*, i32)
+declare %LLVMValueRef @llvm_get_undef(%LLVMTypeRef)
+declare %LLVMValueRef @llvm_build_insert_value(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i32, i8*)
+declare %LLVMValueRef @llvm_build_extract_value(%LLVMBuilderRef, %LLVMValueRef, i32, i8*)
 declare %LLVMValueRef @llvm_add_global(%LLVMModuleRef, %LLVMTypeRef, i8*)
 declare void @llvm_set_initializer(%LLVMValueRef, %LLVMValueRef)
 declare void @llvm_set_global_constant(%LLVMValueRef, i32)
@@ -3352,6 +3355,9 @@ declare i32 @printf(i8*, ...)
 @.str.dsl_trunc = private unnamed_addr constant [11 x i8] c"llvm:trunc\00"
 @.str.dsl_select = private unnamed_addr constant [12 x i8] c"llvm:select\00"
 @.str.dsl_phi = private unnamed_addr constant [9 x i8] c"llvm:phi\00"
+@.str.dsl_undef = private unnamed_addr constant [11 x i8] c"llvm:undef\00"
+@.str.dsl_insertvalue = private unnamed_addr constant [17 x i8] c"llvm:insertvalue\00"
+@.str.dsl_extractvalue = private unnamed_addr constant [18 x i8] c"llvm:extractvalue\00"
 @.str.err_label_no_terminator = private unnamed_addr constant [37 x i8] c"error: label '%s' has no terminator\0A\00"
 @.str.err_entry_no_terminator = private unnamed_addr constant [55 x i8] c"error: entry block of function '%s' has no terminator\0A\00"
 @.str.pred_eq = private unnamed_addr constant [3 x i8] c"eq\00"
@@ -4541,11 +4547,38 @@ call_select:
 check_phi:
     %is_phi = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([9 x i8], [9 x i8]* @.str.dsl_phi, i32 0, i32 0), i64 8)
     %is_phi_bool = icmp ne i32 %is_phi, 0
-    br i1 %is_phi_bool, label %call_phi, label %unknown_primitive
+    br i1 %is_phi_bool, label %call_phi, label %check_undef
 
 call_phi:
     %phi_result = call %LLVMValueRef @codegen_dsl_phi(%CodeGen* %cg, %ASTNode* %args_list)
     ret %LLVMValueRef %phi_result
+
+check_undef:
+    %is_undef = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.dsl_undef, i32 0, i32 0), i64 10)
+    %is_undef_bool = icmp ne i32 %is_undef, 0
+    br i1 %is_undef_bool, label %call_undef, label %check_insertvalue
+
+call_undef:
+    %undef_result = call %LLVMValueRef @codegen_dsl_undef(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %undef_result
+
+check_insertvalue:
+    %is_insertvalue = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([17 x i8], [17 x i8]* @.str.dsl_insertvalue, i32 0, i32 0), i64 16)
+    %is_insertvalue_bool = icmp ne i32 %is_insertvalue, 0
+    br i1 %is_insertvalue_bool, label %call_insertvalue, label %check_extractvalue
+
+call_insertvalue:
+    %insertvalue_result = call %LLVMValueRef @codegen_dsl_insertvalue(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %insertvalue_result
+
+check_extractvalue:
+    %is_extractvalue = call i32 @codegen_dsl_check_primitive(i8* %func_name, i64 %func_name_len, i8* getelementptr inbounds ([18 x i8], [18 x i8]* @.str.dsl_extractvalue, i32 0, i32 0), i64 17)
+    %is_extractvalue_bool = icmp ne i32 %is_extractvalue, 0
+    br i1 %is_extractvalue_bool, label %call_extractvalue, label %unknown_primitive
+
+call_extractvalue:
+    %extractvalue_result = call %LLVMValueRef @codegen_dsl_extractvalue(%CodeGen* %cg, %ASTNode* %args_list)
+    ret %LLVMValueRef %extractvalue_result
 
 handle_array_form:
     ; For "llvm-array" form, we return null and let the caller handle it
@@ -9062,6 +9095,148 @@ next_by_value:
     
 not_found_by_value:
     ret %LLVMTypeRef null
+}
+
+; codegen_dsl_undef: Handle llvm:undef form
+; Syntax: (llvm:undef type)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (type)
+; Returns: LLVMValueRef for undef value of given type
+define %LLVMValueRef @codegen_dsl_undef(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %extract_type
+
+extract_type:
+    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
+    %type_node_null = icmp eq %ASTNode* %type_node, null
+    br i1 %type_node_null, label %error, label %get_type_string
+
+get_type_string:
+    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
+    %type_val = load i8*, i8** %type_val_ptr
+    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
+    %type_len = load i64, i64* %type_len_ptr
+
+    ; Resolve type string to LLVMTypeRef
+    %undef_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_val, i64 %type_len)
+    %undef_type_null = icmp eq %LLVMTypeRef %undef_type, null
+    br i1 %undef_type_null, label %error, label %build_undef
+
+build_undef:
+    %undef_result = call %LLVMValueRef @llvm_get_undef(%LLVMTypeRef %undef_type)
+    ret %LLVMValueRef %undef_result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_insertvalue: Handle llvm:insertvalue form
+; Syntax: (llvm:insertvalue agg-val elt-val index)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (agg-val elt-val index)
+; Returns: LLVMValueRef for new aggregate with value inserted
+define %LLVMValueRef @codegen_dsl_insertvalue(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_agg
+
+get_agg:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_agg
+
+eval_agg:
+    ; First argument: aggregate value
+    %agg_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %agg_node = load %ASTNode*, %ASTNode** %agg_node_ptr
+    %agg = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %agg_node)
+    %agg_null = icmp eq %LLVMValueRef %agg, null
+    br i1 %agg_null, label %error, label %get_elt
+
+get_elt:
+    ; Second argument: element value
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %args_cdr1_null = icmp eq %ASTNode* %args_cdr1, null
+    br i1 %args_cdr1_null, label %error, label %eval_elt
+
+eval_elt:
+    %elt_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 4
+    %elt_node = load %ASTNode*, %ASTNode** %elt_node_ptr
+    %elt = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %elt_node)
+    %elt_null = icmp eq %LLVMValueRef %elt, null
+    br i1 %elt_null, label %error, label %get_index
+
+get_index:
+    ; Third argument: index (integer literal)
+    %args_cdr2_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 5
+    %args_cdr2 = load %ASTNode*, %ASTNode** %args_cdr2_ptr
+    %args_cdr2_null = icmp eq %ASTNode* %args_cdr2, null
+    br i1 %args_cdr2_null, label %error, label %parse_index
+
+parse_index:
+    %index_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr2, i32 0, i32 4
+    %index_node = load %ASTNode*, %ASTNode** %index_node_ptr
+    %index = call i32 @codegen_parse_int_from_ast(%ASTNode* %index_node)
+
+    ; Build insertvalue instruction
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %result = call %LLVMValueRef @llvm_build_insert_value(%LLVMBuilderRef %builder, %LLVMValueRef %agg, %LLVMValueRef %elt, i32 %index, i8* %empty_str)
+    ret %LLVMValueRef %result
+
+error:
+    ret %LLVMValueRef null
+}
+
+; codegen_dsl_extractvalue: Handle llvm:extractvalue form
+; Syntax: (llvm:extractvalue agg-val index)
+; Parameters:
+;   cg: CodeGen pointer
+;   args: AST node list with (agg-val index)
+; Returns: LLVMValueRef for extracted element
+define %LLVMValueRef @codegen_dsl_extractvalue(%CodeGen* %cg, %ASTNode* %args) {
+entry:
+    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
+    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
+    %builder_null = icmp eq %LLVMBuilderRef %builder, null
+    br i1 %builder_null, label %error, label %get_agg
+
+get_agg:
+    %args_null = icmp eq %ASTNode* %args, null
+    br i1 %args_null, label %error, label %eval_agg
+
+eval_agg:
+    ; First argument: aggregate value
+    %agg_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
+    %agg_node = load %ASTNode*, %ASTNode** %agg_node_ptr
+    %agg = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %agg_node)
+    %agg_null = icmp eq %LLVMValueRef %agg, null
+    br i1 %agg_null, label %error, label %get_index
+
+get_index:
+    ; Second argument: index (integer literal)
+    %args_cdr1_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
+    %args_cdr1 = load %ASTNode*, %ASTNode** %args_cdr1_ptr
+    %args_cdr1_null = icmp eq %ASTNode* %args_cdr1, null
+    br i1 %args_cdr1_null, label %error, label %parse_index
+
+parse_index:
+    %index_node_ptr = getelementptr %ASTNode, %ASTNode* %args_cdr1, i32 0, i32 4
+    %index_node = load %ASTNode*, %ASTNode** %index_node_ptr
+    %index = call i32 @codegen_parse_int_from_ast(%ASTNode* %index_node)
+
+    ; Build extractvalue instruction
+    %empty_str = getelementptr [1 x i8], [1 x i8]* @.str.empty, i32 0, i32 0
+    %result = call %LLVMValueRef @llvm_build_extract_value(%LLVMBuilderRef %builder, %LLVMValueRef %agg, i32 %index, i8* %empty_str)
+    ret %LLVMValueRef %result
+
+error:
+    ret %LLVMValueRef null
 }
 
 ; Evaluate DSL body (list of expressions)

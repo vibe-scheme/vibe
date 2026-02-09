@@ -332,6 +332,9 @@ declare %LLVMValueRef @LLVMBuildTrunc(%LLVMBuilderRef, %LLVMValueRef, %LLVMTypeR
 declare %LLVMValueRef @LLVMBuildSelect(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, %LLVMValueRef, i8*)
 declare %LLVMValueRef @LLVMBuildPhi(%LLVMBuilderRef, %LLVMTypeRef, i8*)
 declare void @LLVMAddIncoming(%LLVMValueRef, %LLVMValueRef*, %LLVMBasicBlockRef*, i32)
+declare %LLVMValueRef @LLVMGetUndef(%LLVMTypeRef)
+declare %LLVMValueRef @LLVMBuildInsertValue(%LLVMBuilderRef, %LLVMValueRef, %LLVMValueRef, i32, i8*)
+declare %LLVMValueRef @LLVMBuildExtractValue(%LLVMBuilderRef, %LLVMValueRef, i32, i8*)
 
 ; Global variable management
 declare %LLVMValueRef @LLVMAddGlobal(%LLVMModuleRef, %LLVMTypeRef, i8*)
@@ -1146,6 +1149,46 @@ define void @llvm_add_incoming(%LLVMValueRef %phi, %LLVMValueRef* %values, %LLVM
 entry:
     call void @LLVMAddIncoming(%LLVMValueRef %phi, %LLVMValueRef* %values, %LLVMBasicBlockRef* %blocks, i32 %count)
     ret void
+}
+
+; Get undef value
+; llvm_get_undef: Get an undef value of the given type
+; Parameters:
+;   type: LLVMTypeRef for the desired type
+; Returns: LLVMValueRef for undef value
+define %LLVMValueRef @llvm_get_undef(%LLVMTypeRef %type) {
+entry:
+    %undef_val = call %LLVMValueRef @LLVMGetUndef(%LLVMTypeRef %type)
+    ret %LLVMValueRef %undef_val
+}
+
+; Insert value into aggregate
+; llvm_build_insert_value: Insert a value into an aggregate (struct/array) at given index
+; Parameters:
+;   builder: LLVMBuilderRef
+;   agg: LLVMValueRef for aggregate value
+;   val: LLVMValueRef for element value to insert
+;   index: Index within the aggregate
+;   name: Name for instruction (null-terminated, can be empty)
+; Returns: LLVMValueRef for new aggregate with value inserted
+define %LLVMValueRef @llvm_build_insert_value(%LLVMBuilderRef %builder, %LLVMValueRef %agg, %LLVMValueRef %val, i32 %index, i8* %name) {
+entry:
+    %result = call %LLVMValueRef @LLVMBuildInsertValue(%LLVMBuilderRef %builder, %LLVMValueRef %agg, %LLVMValueRef %val, i32 %index, i8* %name)
+    ret %LLVMValueRef %result
+}
+
+; Extract value from aggregate
+; llvm_build_extract_value: Extract a value from an aggregate (struct/array) at given index
+; Parameters:
+;   builder: LLVMBuilderRef
+;   agg: LLVMValueRef for aggregate value
+;   index: Index within the aggregate
+;   name: Name for instruction (null-terminated, can be empty)
+; Returns: LLVMValueRef for extracted element
+define %LLVMValueRef @llvm_build_extract_value(%LLVMBuilderRef %builder, %LLVMValueRef %agg, i32 %index, i8* %name) {
+entry:
+    %result = call %LLVMValueRef @LLVMBuildExtractValue(%LLVMBuilderRef %builder, %LLVMValueRef %agg, i32 %index, i8* %name)
+    ret %LLVMValueRef %result
 }
 
 ; Add global variable

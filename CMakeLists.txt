@@ -228,8 +228,9 @@ endif()
 
 # Bootstrap Parser - LLVM bitcode module
 if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile parser.vibe + assemble parser_no_vibe.ll
-    # Step 1a: Compile parser.vibe to bitcode
+    # KERNEL/SELF_HOST mode: Compile parser.vibe (all parser functions are now in Vibe)
+    # Note: bootstrap_compiler must exist (build.sh checks this)
+    # Step 1: Compile parser.vibe to bitcode
     if(USE_VIBE_KERNEL)
         # SELF_HOST mode: Use vibe_kernel to compile .vibe files
         add_custom_command(
@@ -260,34 +261,22 @@ if(USE_VIBE_FILES)
         )
     endif()
 
-    # Step 1b: Assemble parser_no_vibe.ll (un-migrated functions)
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser_no_vibe.ll
-            -o ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser/parser_no_vibe.ll
-        COMMENT "Assembling parser_no_vibe bitcode"
-    )
-
-    # Step 2: Create final parser.bc by linking types + Vibe code + no_vibe code
+    # Step 2: Create final parser.bc by linking types with compiled Vibe code
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
         COMMAND ${LLVM_LINK}
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
             ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
             -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
         DEPENDS
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
             ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc
-        COMMENT "Linking parser with types, Vibe code, and no_vibe code"
+        COMMENT "Linking parser with types and Vibe code"
     )
 
     add_custom_target(bootstrap_parser_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc)
-    add_custom_target(bootstrap_parser_no_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_no_vibe_temp.bc)
     add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
-    add_dependencies(bootstrap_parser bootstrap_parser_vibe_temp bootstrap_parser_no_vibe_temp)
+    add_dependencies(bootstrap_parser bootstrap_parser_vibe_temp)
 else()
     # BOOTSTRAP mode: Use .ll files only
     add_custom_command(
