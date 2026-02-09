@@ -36,13 +36,16 @@ vibe/
 │   ├── lexer.ll       # Lexer implementation
 │   ├── parser.ll      # Parser implementation
 │   ├── ffi.ll         # FFI and LLVM C API wrappers
-│   ├── codegen.ll     # Code generator
+│   ├── codegen.ll     # Code generator (full, used in BOOTSTRAP mode)
+│   ├── codegen_no_vibe.ll # Code generator (unmigrated functions, KERNEL/SELF_HOST)
+│   ├── dsl.ll         # LLVM C API wrappers (bootstrap version)
 │   └── main.ll        # Compiler driver and main entry point
 ├── kernel/            # Kernel compiler (Vibe source, .vibe files)
 │   ├── lexer.vibe     # Lexer in Vibe DSL
 │   ├── parser.vibe    # Parser in Vibe DSL
 │   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
-│   └── dsl.vibe       # LLVM C API wrappers in Vibe DSL
+│   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
+│   └── codegen.vibe   # Codegen utilities (Batch 1: 9 functions)
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
 │   ├── design/        # Design documents and formal plans
@@ -93,7 +96,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` -- shared by all modes (no `.vibe` equivalent yet)
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9 utility functions migrated)
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**

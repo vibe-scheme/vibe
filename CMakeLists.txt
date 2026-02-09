@@ -376,7 +376,7 @@ if(USE_VIBE_FILES)
     add_custom_target(bootstrap_ffi DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc)
     add_dependencies(bootstrap_ffi bootstrap_ffi_vibe_temp bootstrap_dsl_vibe_temp)
 else()
-    # BOOTSTRAP mode: Use ffi.ll only
+    # BOOTSTRAP mode: Use ffi.ll + dsl.ll
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
         COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/ffi.ll -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
@@ -385,31 +385,107 @@ else()
     )
 
     add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/dsl.ll -o ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/dsl.ll
+        COMMENT "Assembling DSL bitcode (temp)"
+    )
+
+    add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
-        COMMENT "Linking FFI with types"
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
+        COMMENT "Linking FFI and DSL with types"
     )
 
     add_custom_target(bootstrap_ffi DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc)
 endif()
 
 # Bootstrap Code Generator - LLVM bitcode module
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll
-    COMMENT "Assembling codegen bitcode (temp)"
-)
+if(USE_VIBE_FILES)
+    # KERNEL/SELF_HOST mode: Compile codegen.vibe + codegen_no_vibe.ll
+    if(USE_VIBE_KERNEL)
+        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
+                ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+            COMMENT "Compiling codegen.vibe to bitcode using vibe_kernel"
+        )
+    else()
+        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
+                ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+            COMMENT "Compiling codegen.vibe to IR text using bootstrap_compiler"
+        )
+        add_custom_command(
+            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+            COMMENT "Converting codegen IR text to bitcode using llvm-as"
+        )
+    endif()
 
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-    COMMENT "Linking codegen with types"
-)
+    # Assemble codegen_no_vibe.ll (unmigrated functions)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_no_vibe_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/codegen_no_vibe.ll
+            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_no_vibe_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/codegen_no_vibe.ll
+        COMMENT "Assembling codegen_no_vibe bitcode (temp)"
+    )
+
+    # Link codegen vibe + no_vibe with types
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen_no_vibe_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_codegen_no_vibe_temp.bc
+        COMMENT "Linking codegen with types and Vibe code"
+    )
+
+    add_custom_target(bootstrap_codegen_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc)
+    add_custom_target(bootstrap_codegen_no_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_no_vibe_temp.bc)
+    add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
+    add_dependencies(bootstrap_codegen bootstrap_codegen_vibe_temp bootstrap_codegen_no_vibe_temp)
+else()
+    # BOOTSTRAP mode: Use codegen.ll only
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll
+        COMMENT "Assembling codegen bitcode (temp)"
+    )
+
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
+        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
+        COMMENT "Linking codegen with types"
+    )
 
     add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
+endif()
 
 # Link against LLVM C API libraries
 # Map LLVM components to library names

@@ -920,40 +920,8 @@ not_bytevector:
 ; - llvm_set_initializer, llvm_set_global_constant, llvm_set_linkage to configure it
 ; - codegen_store_constant to store it for later lookup
 
-; Create AST node to store a pointer value (for LLVMValueRef, LLVMTypeRef, etc.)
-; codegen_create_pointer_node: Create an AST node that stores a pointer value
-; Parameters:
-;   ptr: Pointer value (cast to i8*)
-; Returns: ASTNode* with pointer stored in value field
-define %ASTNode* @codegen_create_pointer_node(i8* %ptr) {
-entry:
-    %node = call i8* @malloc(i64 48)
-    %node_ptr = bitcast i8* %node to %ASTNode*
-    
-    ; Set type to AST_ATOM
-    %type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 0
-    store i32 0, i32* %type_ptr  ; AST_ATOM
-    
-    ; Use atom_type 999 to indicate this is a pointer value (not a regular token)
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 1
-    store i32 999, i32* %atom_type_ptr  ; Special marker for pointer
-    
-    ; Store pointer in value field
-    %value_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
-    store i8* %ptr, i8** %value_ptr
-    
-    ; Store pointer size (8 bytes on 64-bit)
-    %len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
-    store i64 8, i64* %len_ptr
-    
-    ; Set car and cdr to null
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 4
-    store %ASTNode* null, %ASTNode** %car_ptr
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %cdr_ptr
-    
-    ret %ASTNode* %node_ptr
-}
+; codegen_create_pointer_node: defined in codegen.vibe
+declare %ASTNode* @codegen_create_pointer_node(i8*)
 
 ; Store constant in constants list
 ; codegen_store_constant: Store a constant name and LLVMValueRef pair
@@ -1107,37 +1075,8 @@ not_found:
     ret %LLVMValueRef null
 }
 
-; Check if a type is an array type
-; codegen_is_array_type: Check if an LLVMTypeRef is an array type
-; Parameters:
-;   type: LLVMTypeRef to check
-; Returns: i32 (1 if array, 0 otherwise)
-; Note: This uses a heuristic - if the type is a pointer and its element type
-;       has an element type (i.e., is itself an array), then it's an array.
-define i32 @codegen_is_array_type(%LLVMTypeRef %type) {
-entry:
-    %type_null = icmp eq %LLVMTypeRef %type, null
-    br i1 %type_null, label %not_array, label %get_element_type
-    
-get_element_type:
-    ; Get the element type of the pointer (globals are pointers)
-    %element_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %type)
-    %element_null = icmp eq %LLVMTypeRef %element_type, null
-    br i1 %element_null, label %not_array, label %check_array_element
-    
-check_array_element:
-    ; If the element type itself has an element type, it's an array
-    ; Arrays have element types (e.g., [11 x i8] has element type i8)
-    %array_element_type = call %LLVMTypeRef @llvm_get_element_type(%LLVMTypeRef %element_type)
-    %is_array = icmp ne %LLVMTypeRef %array_element_type, null
-    br i1 %is_array, label %return_array, label %not_array
-    
-return_array:
-    ret i32 1
-    
-not_array:
-    ret i32 0
-}
+; codegen_is_array_type: defined in codegen.vibe
+declare i32 @codegen_is_array_type(%LLVMTypeRef)
 
 ; codegen_eval_dsl_expr: Evaluate DSL expressions (llvm-call, llvm-get-function, etc.)
 ; This function is defined later in the file (around line 4004)
@@ -4629,31 +4568,8 @@ unknown_primitive:
     ret %LLVMValueRef null
 }
 
-; Helper function to check if identifier matches primitive name
-; codegen_dsl_check_primitive: Check if identifier matches a primitive name
-; Parameters:
-;   id: Identifier string
-;   id_len: Identifier length
-;   target: Target string to match
-;   target_len: Target length
-; Returns: 1 if matches, 0 otherwise
-define i32 @codegen_dsl_check_primitive(i8* %id, i64 %id_len, i8* %target, i64 %target_len) {
-entry:
-    %len_match = icmp eq i64 %id_len, %target_len
-    br i1 %len_match, label %compare, label %no_match
-    
-compare:
-    %len_int = trunc i64 %id_len to i32
-    %cmp_result = call i32 @strncmp(i8* %id, i8* %target, i32 %len_int)
-    %is_match = icmp eq i32 %cmp_result, 0
-    br i1 %is_match, label %match, label %no_match
-    
-match:
-    ret i32 1
-    
-no_match:
-    ret i32 0
-}
+; codegen_dsl_check_primitive: defined in codegen.vibe
+declare i32 @codegen_dsl_check_primitive(i8*, i64, i8*, i64)
 
 ; Resolve parameter name to LLVMValueRef
 ; codegen_dsl_resolve_param: Look up parameter by name
@@ -5282,87 +5198,11 @@ create_cons_cell:
     ret void
 }
 
-; Parse integer from AST node
-; codegen_parse_int_from_ast: Parse integer value from AST node
-; Parameters:
-;   node: AST node (should be a number atom)
-; Returns: Integer value, or 0 on error
-define i32 @codegen_parse_int_from_ast(%ASTNode* %node) {
-entry:
-    %node_null = icmp eq %ASTNode* %node, null
-    br i1 %node_null, label %error, label %check_type
-    
-check_type:
-    %node_type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 0
-    %node_type = load i32, i32* %node_type_ptr
-    %is_atom = icmp eq i32 %node_type, 0  ; AST_ATOM
-    br i1 %is_atom, label %check_number, label %error
-    
-check_number:
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 1
-    %atom_type = load i32, i32* %atom_type_ptr
-    %is_number = icmp eq i32 %atom_type, 2  ; TOKEN_NUMBER
-    br i1 %is_number, label %parse_number, label %error
-    
-parse_number:
-    %value_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 2
-    %value_str = load i8*, i8** %value_ptr
-    %value_len_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 3
-    %value_len = load i64, i64* %value_len_ptr
-    
-    ; Parse string to integer
-    %result = call i32 @codegen_parse_int_string(i8* %value_str, i64 %value_len)
-    ret i32 %result
-    
-error:
-    ret i32 0
-}
+; codegen_parse_int_from_ast: defined in codegen.vibe
+declare i32 @codegen_parse_int_from_ast(%ASTNode*)
 
-; Parse integer from string
-; codegen_parse_int_string: Parse integer from string representation
-; Parameters:
-;   str: String pointer
-;   len: String length
-; Returns: Integer value
-define i32 @codegen_parse_int_string(i8* %str, i64 %len) {
-entry:
-    %result = alloca i32
-    store i32 0, i32* %result
-    %i = alloca i64
-    store i64 0, i64* %i
-    br label %loop
-    
-loop:
-    %i_val = load i64, i64* %i
-    %done = icmp uge i64 %i_val, %len
-    br i1 %done, label %return, label %process_char
-    
-process_char:
-    %char_ptr = getelementptr i8, i8* %str, i64 %i_val
-    %char = load i8, i8* %char_ptr
-    %char_int = zext i8 %char to i32
-    
-    ; Check if digit
-    %is_digit = icmp uge i32 %char_int, 48  ; '0'
-    %is_digit2 = icmp ule i32 %char_int, 57  ; '9'
-    %is_digit_both = and i1 %is_digit, %is_digit2
-    br i1 %is_digit_both, label %accumulate, label %return
-    
-accumulate:
-    %result_val = load i32, i32* %result
-    %result_new = mul i32 %result_val, 10
-    %digit_val = sub i32 %char_int, 48
-    %result_final = add i32 %result_new, %digit_val
-    store i32 %result_final, i32* %result
-    
-    %i_new = add i64 %i_val, 1
-    store i64 %i_new, i64* %i
-    br label %loop
-    
-return:
-    %result_ret = load i32, i32* %result
-    ret i32 %result_ret
-}
+; codegen_parse_int_string: defined in codegen.vibe
+declare i32 @codegen_parse_int_string(i8*, i64)
 
 ; ============================================================================
 ; DSL Primitive Implementations
@@ -6207,49 +6047,8 @@ error:
     ret %LLVMValueRef null
 }
 
-; codegen_extract_quoted_atom: Extract atom name from AST_QUOTE node
-; Parameters:
-;   quote_node: AST_QUOTE node (type 2)
-;   name_out: Output parameter for atom name string
-;   len_out: Output parameter for atom name length
-; Returns: 0 on success, -1 on error
-define i32 @codegen_extract_quoted_atom(%ASTNode* %quote_node, i8** %name_out, i64* %len_out) {
-entry:
-    %quote_null = icmp eq %ASTNode* %quote_node, null
-    br i1 %quote_null, label %error, label %check_quote_type
-    
-check_quote_type:
-    %quote_type_ptr = getelementptr %ASTNode, %ASTNode* %quote_node, i32 0, i32 0
-    %quote_type = load i32, i32* %quote_type_ptr
-    %is_quote = icmp eq i32 %quote_type, 2  ; AST_QUOTE
-    br i1 %is_quote, label %get_quoted_expr, label %error
-    
-get_quoted_expr:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %quote_node, i32 0, i32 4
-    %quoted_expr = load %ASTNode*, %ASTNode** %car_ptr
-    %quoted_expr_null = icmp eq %ASTNode* %quoted_expr, null
-    br i1 %quoted_expr_null, label %error, label %check_atom
-    
-check_atom:
-    %quoted_type_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 0
-    %quoted_type = load i32, i32* %quoted_type_ptr
-    %is_atom = icmp eq i32 %quoted_type, 0  ; AST_ATOM
-    br i1 %is_atom, label %extract_name, label %error
-    
-extract_name:
-    %atom_val_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 2
-    %atom_val = load i8*, i8** %atom_val_ptr
-    %atom_len_ptr = getelementptr %ASTNode, %ASTNode* %quoted_expr, i32 0, i32 3
-    %atom_len = load i64, i64* %atom_len_ptr
-    
-    ; Store in output parameters
-    store i8* %atom_val, i8** %name_out
-    store i64 %atom_len, i64* %len_out
-    ret i32 0
-    
-error:
-    ret i32 -1
-}
+; codegen_extract_quoted_atom: defined in codegen.vibe
+declare i32 @codegen_extract_quoted_atom(%ASTNode*, i8**, i64*)
 
 ; codegen_dsl_load: Handle llvm:load form
 ; Syntax: (llvm:load ptr type)
@@ -8787,129 +8586,14 @@ return_len:
     ret i64 %count_ret_64
 }
 
-; Create pair (cons cell)
-; codegen_create_pair: Create a cons cell with two elements
-; Parameters:
-;   car: First element
-;   cdr: Second element (will be wrapped in list)
-; Returns: ASTNode* list
-define %ASTNode* @codegen_create_pair(%ASTNode* %car, %ASTNode* %cdr) {
-entry:
-    ; Create cons cell
-    %cons = call i8* @malloc(i64 48)
-    %cons_ptr = bitcast i8* %cons to %ASTNode*
-    
-    ; Initialize all fields to safe defaults
-    ; Field 0: type = AST_LIST
-    %type_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 0
-    store i32 1, i32* %type_ptr  ; AST_LIST
-    ; Field 1: atom_type = 0 (not used for lists)
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 1
-    store i32 0, i32* %atom_type_ptr
-    ; Field 2: value = null (not used for lists)
-    %value_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 2
-    store i8* null, i8** %value_ptr
-    ; Field 3: value_len = 0 (not used for lists)
-    %value_len_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 3
-    store i64 0, i64* %value_len_ptr
-    ; Field 4: car
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 4
-    store %ASTNode* %car, %ASTNode** %car_ptr
-    ; Field 5: cdr (will be set below)
-    ; Field 6: line = 0
-    %line_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 6
-    store i32 0, i32* %line_ptr
-    ; Field 7: column = 0
-    %column_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 7
-    store i32 0, i32* %column_ptr
-    
-    ; Create cdr list with single element
-    %cdr_cons = call i8* @malloc(i64 48)
-    %cdr_cons_ptr = bitcast i8* %cdr_cons to %ASTNode*
-    ; Initialize all fields of cdr_cons
-    %cdr_type_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 0
-    store i32 1, i32* %cdr_type_ptr  ; AST_LIST
-    %cdr_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 1
-    store i32 0, i32* %cdr_atom_type_ptr
-    %cdr_value_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 2
-    store i8* null, i8** %cdr_value_ptr
-    %cdr_value_len_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 3
-    store i64 0, i64* %cdr_value_len_ptr
-    %cdr_car_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 4
-    store %ASTNode* %cdr, %ASTNode** %cdr_car_ptr
-    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %cdr_cdr_ptr
-    %cdr_line_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 6
-    store i32 0, i32* %cdr_line_ptr
-    %cdr_column_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cons_ptr, i32 0, i32 7
-    store i32 0, i32* %cdr_column_ptr
-    
-    ; Set cdr of main cons cell
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 5
-    store %ASTNode* %cdr_cons_ptr, %ASTNode** %cdr_ptr
-    
-    ret %ASTNode* %cons_ptr
-}
+; codegen_create_pair: defined in codegen.vibe
+declare %ASTNode* @codegen_create_pair(%ASTNode*, %ASTNode*)
 
-; Create cons cell
-; codegen_create_cons: Create a cons cell
-; Parameters:
-;   car: First element
-;   cdr: Rest of list
-; Returns: ASTNode* list
-define %ASTNode* @codegen_create_cons(%ASTNode* %car, %ASTNode* %cdr) {
-entry:
-    %cons = call i8* @malloc(i64 48)
-    %cons_ptr = bitcast i8* %cons to %ASTNode*
-    
-    %type_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 0
-    store i32 1, i32* %type_ptr  ; AST_LIST
-    
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 4
-    store %ASTNode* %car, %ASTNode** %car_ptr
-    
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %cons_ptr, i32 0, i32 5
-    store %ASTNode* %cdr, %ASTNode** %cdr_ptr
-    
-    ret %ASTNode* %cons_ptr
-}
+; codegen_create_cons: defined in codegen.vibe
+declare %ASTNode* @codegen_create_cons(%ASTNode*, %ASTNode*)
 
-; Create string AST node
-; codegen_create_string_node: Create an AST node for a string
-; Parameters:
-;   str: String value (not null-terminated)
-;   len: String length
-; Returns: ASTNode* for string atom
-define %ASTNode* @codegen_create_string_node(i8* %str, i64 %len) {
-entry:
-    ; Allocate string copy
-    %str_buf = call i8* @malloc(i64 %len)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %str_buf, i8* %str, i64 %len, i1 false)
-    
-    ; Create AST node
-    %node = call i8* @malloc(i64 48)
-    %node_ptr = bitcast i8* %node to %ASTNode*
-    
-    ; Initialize fields
-    %type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 0
-    store i32 0, i32* %type_ptr  ; AST_ATOM
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 1
-    store i32 3, i32* %atom_type_ptr  ; TOKEN_STRING
-    %value_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
-    store i8* %str_buf, i8** %value_ptr
-    %len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
-    store i64 %len, i64* %len_ptr
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 4
-    store %ASTNode* null, %ASTNode** %car_ptr
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %cdr_ptr
-    %line_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 6
-    store i32 0, i32* %line_ptr
-    %column_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 7
-    store i32 0, i32* %column_ptr
-    
-    ret %ASTNode* %node_ptr
-}
+; codegen_create_string_node: defined in codegen.vibe
+declare %ASTNode* @codegen_create_string_node(i8*, i64)
 
 ; Store function type for later retrieval
 ; codegen_store_function_type: Store function type mapping

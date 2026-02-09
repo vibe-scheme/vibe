@@ -89,6 +89,11 @@
 (llvm:declare-function (LLVMBuildInsertValue (builder |i8*|) (agg |i8*|) (val |i8*|) (index |i32|) (name |i8*|)) |i8*|)
 (llvm:declare-function (LLVMBuildExtractValue (builder |i8*|) (agg |i8*|) (index |i32|) (name |i8*|)) |i8*|)
 
+; New arithmetic/conversion instructions for codegen migration
+(llvm:declare-function (LLVMBuildURem (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildUDiv (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildPtrToInt (builder |i8*|) (val |i8*|) (dest_type |i8*|) (name |i8*|)) |i8*|)
+
 ; Global variable management
 (llvm:declare-function (LLVMAddGlobal (module |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
 (llvm:declare-function (LLVMSetInitializer (global |i8*|) (initializer |i8*|)) |void|)
@@ -430,6 +435,19 @@
 
 (llvm:define-function (llvm_build_extract_value (builder |i8*|) (agg |i8*|) (index |i32|) (name |i8*|)) |i8*|
   (let* ((result (llvm:call LLVMBuildExtractValue builder agg index name)))
+    (llvm:ret result)))
+
+; New arithmetic/conversion wrappers for codegen migration
+(llvm:define-function (llvm_build_urem (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((result (llvm:call LLVMBuildURem builder lhs rhs name)))
+    (llvm:ret result)))
+
+(llvm:define-function (llvm_build_udiv (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((result (llvm:call LLVMBuildUDiv builder lhs rhs name)))
+    (llvm:ret result)))
+
+(llvm:define-function (llvm_build_ptrtoint (builder |i8*|) (value |i8*|) (dest_type |i8*|) (name |i8*|)) |i8*|
+  (let* ((result (llvm:call LLVMBuildPtrToInt builder value dest_type name)))
     (llvm:ret result)))
 
 ; Global variable management
