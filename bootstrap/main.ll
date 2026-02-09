@@ -11,17 +11,12 @@ target triple = "arm64-apple-darwin"
 %Parser = type { %Lexer*, %Token* }
 %Token = type { i32, i8*, i64, i32, i32 }
 %ASTNode = type { i32, i32, i8*, i64, %ASTNode*, %ASTNode*, i32, i32 }
-%Runtime = type { %SymbolTable*, %BitcodeBinding*, i64, i8*, i64 }
 %CodeGen = type { i8*, i64, i64, i32, i32 }
-%SymbolTable = type { %VibeSymbol**, i64, i64 }
-%BitcodeBinding = type { i8*, i64, i8*, i64, %BitcodeBinding* }
-%VibeSymbol = type { i64, i8*, i64, %VibeSymbol* }
 
 declare %Lexer* @lex_init(i8*, i64)
 declare %Token* @lex_next(%Lexer*)
 declare %Parser* @parse_init(%Lexer*)
 declare %ASTNode* @parse_expr(%Parser*)
-declare %Runtime* @runtime_init(i64)
 declare %CodeGen* @codegen_init(i8*)
 declare i32 @codegen_define_bitcode(%CodeGen*, %ASTNode*)
 declare i32 @codegen_main(%CodeGen*, %ASTNode*)
@@ -47,10 +42,6 @@ parse_args:
     ; Get input filename (first argument)
     %input_file_ptr = getelementptr i8*, i8** %argv, i64 1
     %input_file = load i8*, i8** %input_file_ptr
-    
-    ; Initialize runtime
-    %heap_size = add i64 1048576, 0  ; 1MB heap
-    %runtime = call %Runtime* @runtime_init(i64 %heap_size)
     
     ; Read input file
     %file_data = call i8* @read_file(i8* %input_file)

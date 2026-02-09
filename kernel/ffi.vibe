@@ -1,0 +1,26 @@
+; Bootstrap FFI System for Vibe - Dynamic library loading
+; Provides platform abstraction for dlopen/dlsym via POSIX APIs
+; Used by codegen for llvm:define-ffi-function support
+
+; Declare POSIX dynamic library functions via FFI
+(llvm:define-ffi-function (dlopen (path |i8*|) (flags |i32|)) |i8*| ("/usr/lib/libSystem.B.dylib" "dlopen") #f)
+(llvm:define-ffi-function (dlsym (handle |i8*|) (symbol |i8*|)) |i8*| ("/usr/lib/libSystem.B.dylib" "dlsym") #f)
+
+; ffi_load_library: Load a dynamic library
+; Wraps dlopen with RTLD_LAZY (flags=1)
+; Parameters:
+;   path: Library path (null-terminated string)
+; Returns: Library handle (i8*), or null on error
+(llvm:define-function (ffi_load_library (path |i8*|)) |i8*|
+  (let* ((handle (llvm:call dlopen path (llvm:const-int |i32| 1))))
+    (llvm:ret handle)))
+
+; ffi_get_symbol: Get a symbol (function pointer) from a library
+; Wraps dlsym directly
+; Parameters:
+;   handle: Library handle (i8*)
+;   symbol: Symbol name (null-terminated string)
+; Returns: Function pointer (i8*), or null on error
+(llvm:define-function (ffi_get_symbol (handle |i8*|) (symbol |i8*|)) |i8*|
+  (let* ((func (llvm:call dlsym handle symbol)))
+    (llvm:ret func)))

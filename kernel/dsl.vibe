@@ -1,0 +1,521 @@
+; Bootstrap LLVM DSL for Vibe - LLVM C API wrappers and target initialization
+; Provides the llvm_* function layer used by the code generator
+; All LLVM C API functions are statically linked via CMake
+
+; ============================================================================
+; C library functions needed by target initialization
+; ============================================================================
+(llvm:define-ffi-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i64|)) |i32| ("/usr/lib/libSystem.B.dylib" "strncmp") #f)
+(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+
+; ============================================================================
+; LLVM C API external declarations (statically linked)
+; All opaque LLVM ref types are i8* in practice
+; ============================================================================
+
+; Context management
+(llvm:declare-function (LLVMContextCreate) |i8*|)
+(llvm:declare-function (LLVMContextDispose (context |i8*|)) |void|)
+
+; Module management
+(llvm:declare-function (LLVMModuleCreateWithNameInContext (name |i8*|) (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMDisposeModule (module |i8*|)) |void|)
+(llvm:declare-function (LLVMSetTarget (module |i8*|) (triple |i8*|)) |void|)
+(llvm:declare-function (LLVMSetDataLayout (module |i8*|) (layout |i8*|)) |void|)
+
+; Type creation
+(llvm:declare-function (LLVMInt8TypeInContext (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMInt32TypeInContext (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMInt64TypeInContext (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMVoidTypeInContext (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMPointerType (element_type |i8*|) (address_space |i32|)) |i8*|)
+(llvm:declare-function (LLVMArrayType (element_type |i8*|) (count |i32|)) |i8*|)
+(llvm:declare-function (LLVMStructTypeInContext (context |i8*|) (field_types |i8*|) (count |i32|) (packed |i32|)) |i8*|)
+(llvm:declare-function (LLVMStructCreateNamed (context |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMStructSetBody (struct_type |i8*|) (field_types |i8*|) (count |i32|) (packed |i32|)) |void|)
+(llvm:declare-function (LLVMFunctionType (return_type |i8*|) (param_types |i8*|) (count |i32|) (is_vararg |i32|)) |i8*|)
+
+; Type introspection
+(llvm:declare-function (LLVMTypeOf (value |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetElementType (type |i8*|)) |i8*|)
+
+; Constant creation
+(llvm:declare-function (LLVMConstStringInContext (context |i8*|) (str |i8*|) (len |i32|) (dont_null_terminate |i32|)) |i8*|)
+(llvm:declare-function (LLVMConstInt (type |i8*|) (value |i64|) (sign_extend |i32|)) |i8*|)
+(llvm:declare-function (LLVMConstNull (type |i8*|)) |i8*|)
+
+; Function management
+(llvm:declare-function (LLVMAddFunction (module |i8*|) (name |i8*|) (func_type |i8*|)) |i8*|)
+(llvm:declare-function (LLVMCountParams (func |i8*|)) |i32|)
+(llvm:declare-function (LLVMGetParam (func |i8*|) (index |i32|)) |i8*|)
+(llvm:declare-function (LLVMSetValueName (value |i8*|) (name |i8*|)) |void|)
+
+; Basic block management
+(llvm:declare-function (LLVMAppendBasicBlock (func |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetFirstBasicBlock (func |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetNextBasicBlock (block |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetBasicBlockName (block |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetBasicBlockTerminator (block |i8*|)) |i8*|)
+
+; Builder management
+(llvm:declare-function (LLVMCreateBuilderInContext (context |i8*|)) |i8*|)
+(llvm:declare-function (LLVMDisposeBuilder (builder |i8*|)) |void|)
+(llvm:declare-function (LLVMPositionBuilderAtEnd (builder |i8*|) (block |i8*|)) |void|)
+(llvm:declare-function (LLVMGetInsertBlock (builder |i8*|)) |i8*|)
+
+; Instruction building
+(llvm:declare-function (LLVMBuildRetVoid (builder |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildRet (builder |i8*|) (value |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildCall2 (builder |i8*|) (func_type |i8*|) (func |i8*|) (args |i8*|) (arg_count |i32|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildGEP2 (builder |i8*|) (type |i8*|) (pointer |i8*|) (indices |i8*|) (count |i32|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildBitCast (builder |i8*|) (value |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildStore (builder |i8*|) (value |i8*|) (pointer |i8*|)) |void|)
+(llvm:declare-function (LLVMBuildLoad2 (builder |i8*|) (type |i8*|) (pointer |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildICmp (builder |i8*|) (pred |i32|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildBr (builder |i8*|) (dest |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildCondBr (builder |i8*|) (cond |i8*|) (then_block |i8*|) (else_block |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildZExt (builder |i8*|) (value |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildAdd (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildSub (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildMul (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildAnd (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildOr (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildAlloca (builder |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildTrunc (builder |i8*|) (value |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildSelect (builder |i8*|) (cond |i8*|) (then_val |i8*|) (else_val |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildPhi (builder |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMAddIncoming (phi |i8*|) (values |i8*|) (blocks |i8*|) (count |i32|)) |void|)
+(llvm:declare-function (LLVMGetUndef (type |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildInsertValue (builder |i8*|) (agg |i8*|) (val |i8*|) (index |i32|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMBuildExtractValue (builder |i8*|) (agg |i8*|) (index |i32|) (name |i8*|)) |i8*|)
+
+; Global variable management
+(llvm:declare-function (LLVMAddGlobal (module |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (LLVMSetInitializer (global |i8*|) (initializer |i8*|)) |void|)
+(llvm:declare-function (LLVMSetGlobalConstant (global |i8*|) (is_constant |i32|)) |void|)
+(llvm:declare-function (LLVMSetLinkage (global |i8*|) (linkage |i32|)) |void|)
+
+; IR parsing
+(llvm:declare-function (LLVMParseIRInContext (context |i8*|) (buffer |i8*|) (module |i8*|) (error_msg |i8*|)) |i32|)
+(llvm:declare-function (LLVMCreateMemoryBufferWithMemoryRangeCopy (data |i8*|) (len |i64|) (name |i8*|)) |i8*|)
+
+; Bitcode writing
+(llvm:declare-function (LLVMWriteBitcodeToFile (module |i8*|) (path |i8*|)) |i32|)
+
+; Module verification and debugging
+(llvm:declare-function (LLVMVerifyModule (module |i8*|) (action |i32|) (error_msg |i8*|)) |i32|)
+(llvm:declare-function (LLVMPrintModuleToFile (module |i8*|) (filename |i8*|) (error_msg |i8*|)) |i32|)
+
+; TargetMachine API
+(llvm:declare-function (LLVMGetDefaultTargetTriple) |i8*|)
+(llvm:declare-function (LLVMGetTargetFromTriple (triple |i8*|) (target |i8*|) (error_msg |i8*|)) |i32|)
+(llvm:declare-function (LLVMCreateTargetMachine (target |i8*|) (triple |i8*|) (cpu |i8*|) (features |i8*|) (level |i32|) (reloc |i32|) (code_model |i32|)) |i8*|)
+(llvm:declare-function (LLVMTargetMachineEmitToFile (tm |i8*|) (module |i8*|) (filename |i8*|) (codegen |i32|) (error_msg |i8*|)) |i32|)
+(llvm:declare-function (LLVMDisposeTargetMachine (tm |i8*|)) |void|)
+
+; AArch64 target initialization (for arm64 builds)
+(llvm:declare-function (LLVMInitializeAArch64TargetInfo) |void|)
+(llvm:declare-function (LLVMInitializeAArch64Target) |void|)
+(llvm:declare-function (LLVMInitializeAArch64TargetMC) |void|)
+(llvm:declare-function (LLVMInitializeAArch64AsmPrinter) |void|)
+(llvm:declare-function (LLVMInitializeAArch64AsmParser) |void|)
+
+; Function lookup
+(llvm:declare-function (LLVMGetNamedFunction (module |i8*|) (name |i8*|)) |i8*|)
+
+; Function iteration
+(llvm:declare-function (LLVMGetFirstFunction (module |i8*|)) |i8*|)
+(llvm:declare-function (LLVMGetNextFunction (func |i8*|)) |i8*|)
+
+; Global variable lookup
+(llvm:declare-function (LLVMGetNamedGlobal (module |i8*|) (name |i8*|)) |i8*|)
+
+; Module linking
+(llvm:declare-function (LLVMLinkModules2 (dest |i8*|) (src |i8*|)) |i32|)
+
+; ============================================================================
+; String constants for target triple comparison
+; ============================================================================
+
+; "arm64\0"
+(llvm:define-constant .str.arm64 |[6 x i8]| #u8(97 114 109 54 52 0))
+; "aarch64\0"
+(llvm:define-constant .str.aarch64 |[8 x i8]| #u8(97 97 114 99 104 54 52 0))
+
+; ============================================================================
+; Target initialization functions
+; ============================================================================
+
+; is_arm64_target: Check if target triple indicates ARM64 architecture
+; Returns 1 if ARM64 (arm64 or aarch64), 0 otherwise
+(llvm:define-function (is_arm64_target (triple |i8*|)) |i32|
+  (let* ((arm64_str (llvm:gep |[6 x i8]| (llvm:get-global .str.arm64) 0 0))
+         (arm64_cmp (llvm:call strncmp triple arm64_str (llvm:const-int |i64| 5)))
+         (is_arm64 (llvm:icmp 'eq arm64_cmp (llvm:const-int |i32| 0))))
+    (llvm:br is_arm64 'return_arm64 'check_aarch64)
+    (llvm:label 'check_aarch64
+      (let* ((aarch64_str (llvm:gep |[8 x i8]| (llvm:get-global .str.aarch64) 0 0))
+             (aarch64_cmp (llvm:call strncmp triple aarch64_str (llvm:const-int |i64| 7)))
+             (is_aarch64 (llvm:icmp 'eq aarch64_cmp (llvm:const-int |i32| 0))))
+        (llvm:br is_aarch64 'return_arm64 'return_not_arm64)))
+    (llvm:label 'return_arm64
+      (llvm:ret (llvm:const-int |i32| 1)))
+    (llvm:label 'return_not_arm64
+      (llvm:ret (llvm:const-int |i32| 0)))))
+
+; llvm_initialize_native_target: Initialize native target for TargetMachine API
+; Detects architecture and initializes appropriate LLVM target components
+(llvm:define-function (llvm_initialize_native_target) |void|
+  (let* ((triple (llvm:call LLVMGetDefaultTargetTriple))
+         (is_arm64 (llvm:call is_arm64_target triple))
+         (is_arm64_bool (llvm:icmp 'ne is_arm64 (llvm:const-int |i32| 0))))
+    (llvm:br is_arm64_bool 'init_arm64 'done)
+    (llvm:label 'init_arm64
+      (llvm:call LLVMInitializeAArch64TargetInfo)
+      (llvm:call LLVMInitializeAArch64Target)
+      (llvm:call LLVMInitializeAArch64TargetMC)
+      (llvm:call LLVMInitializeAArch64AsmPrinter)
+      (llvm:call LLVMInitializeAArch64AsmParser)
+      (llvm:br 'done))
+    (llvm:label 'done
+      (llvm:call free triple)
+      (llvm:ret-void))))
+
+; llvm_ffi_init: Initialize LLVM FFI and native target
+; Returns 0 on success
+(llvm:define-function (llvm_ffi_init) |i32|
+  (llvm:call llvm_initialize_native_target)
+  (llvm:ret (llvm:const-int |i32| 0)))
+
+; ============================================================================
+; LLVM C API wrapper functions
+; These provide a stable interface used by codegen.ll
+; ============================================================================
+
+; Context management
+(llvm:define-function (llvm_create_context) |i8*|
+  (let* ((context (llvm:call LLVMContextCreate)))
+    (llvm:ret context)))
+
+(llvm:define-function (llvm_dispose_context (context |i8*|)) |void|
+  (llvm:call LLVMContextDispose context)
+  (llvm:ret-void))
+
+; Module management
+; Note: parameter order swap - wrapper takes (context, name), LLVM API takes (name, context)
+(llvm:define-function (llvm_create_module (context |i8*|) (module_id |i8*|)) |i8*|
+  (let* ((module (llvm:call LLVMModuleCreateWithNameInContext module_id context)))
+    (llvm:ret module)))
+
+(llvm:define-function (llvm_dispose_module (module |i8*|)) |void|
+  (llvm:call LLVMDisposeModule module)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_set_target (module |i8*|) (triple |i8*|)) |void|
+  (llvm:call LLVMSetTarget module triple)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_set_data_layout (module |i8*|) (data_layout |i8*|)) |void|
+  (llvm:call LLVMSetDataLayout module data_layout)
+  (llvm:ret-void))
+
+; Type creation
+(llvm:define-function (llvm_get_int8_type (context |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMInt8TypeInContext context)))
+    (llvm:ret type)))
+
+(llvm:define-function (llvm_get_int32_type (context |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMInt32TypeInContext context)))
+    (llvm:ret type)))
+
+(llvm:define-function (llvm_get_int64_type (context |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMInt64TypeInContext context)))
+    (llvm:ret type)))
+
+(llvm:define-function (llvm_get_void_type (context |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMVoidTypeInContext context)))
+    (llvm:ret type)))
+
+(llvm:define-function (llvm_get_pointer_type (element_type |i8*|) (address_space |i32|)) |i8*|
+  (let* ((ptr_type (llvm:call LLVMPointerType element_type address_space)))
+    (llvm:ret ptr_type)))
+
+(llvm:define-function (llvm_type_of (value |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMTypeOf value)))
+    (llvm:ret type)))
+
+(llvm:define-function (llvm_get_element_type (ptr_type |i8*|)) |i8*|
+  (let* ((element_type (llvm:call LLVMGetElementType ptr_type)))
+    (llvm:ret element_type)))
+
+(llvm:define-function (llvm_get_array_type (element_type |i8*|) (element_count |i32|)) |i8*|
+  (let* ((array_type (llvm:call LLVMArrayType element_type element_count)))
+    (llvm:ret array_type)))
+
+(llvm:define-function (llvm_get_struct_type (context |i8*|) (field_types |i8*|) (field_count |i32|) (packed |i32|)) |i8*|
+  (let* ((struct_type (llvm:call LLVMStructTypeInContext context field_types field_count packed)))
+    (llvm:ret struct_type)))
+
+(llvm:define-function (llvm_create_named_struct_type (context |i8*|) (name |i8*|)) |i8*|
+  (let* ((struct_type (llvm:call LLVMStructCreateNamed context name)))
+    (llvm:ret struct_type)))
+
+(llvm:define-function (llvm_set_struct_body (struct_type |i8*|) (field_types |i8*|) (field_count |i32|) (packed |i32|)) |void|
+  (llvm:call LLVMStructSetBody struct_type field_types field_count packed)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_create_function_type (return_type |i8*|) (param_types |i8*|) (param_count |i32|) (is_vararg |i32|)) |i8*|
+  (let* ((func_type (llvm:call LLVMFunctionType return_type param_types param_count is_vararg)))
+    (llvm:ret func_type)))
+
+; Constant creation
+(llvm:define-function (llvm_create_constant_string (context |i8*|) (str |i8*|) (len |i32|) (dont_null_terminate |i32|)) |i8*|
+  (let* ((const_str (llvm:call LLVMConstStringInContext context str len dont_null_terminate)))
+    (llvm:ret const_str)))
+
+(llvm:define-function (llvm_create_constant_int (type |i8*|) (value |i64|) (sign_extend |i32|)) |i8*|
+  (let* ((const_int (llvm:call LLVMConstInt type value sign_extend)))
+    (llvm:ret const_int)))
+
+(llvm:define-function (llvm_create_constant_null (type |i8*|)) |i8*|
+  (let* ((null_const (llvm:call LLVMConstNull type)))
+    (llvm:ret null_const)))
+
+; Function management
+(llvm:define-function (llvm_add_function (module |i8*|) (name |i8*|) (function_type |i8*|)) |i8*|
+  (let* ((func (llvm:call LLVMAddFunction module name function_type)))
+    (llvm:ret func)))
+
+(llvm:define-function (llvm_count_params (func |i8*|)) |i32|
+  (let* ((count (llvm:call LLVMCountParams func)))
+    (llvm:ret count)))
+
+(llvm:define-function (llvm_get_param (func |i8*|) (index |i32|)) |i8*|
+  (let* ((param (llvm:call LLVMGetParam func index)))
+    (llvm:ret param)))
+
+(llvm:define-function (llvm_set_value_name (value |i8*|) (name |i8*|)) |void|
+  (llvm:call LLVMSetValueName value name)
+  (llvm:ret-void))
+
+; Basic block management
+(llvm:define-function (llvm_append_basic_block (func |i8*|) (name |i8*|)) |i8*|
+  (let* ((bb (llvm:call LLVMAppendBasicBlock func name)))
+    (llvm:ret bb)))
+
+(llvm:define-function (llvm_create_builder (context |i8*|)) |i8*|
+  (let* ((builder (llvm:call LLVMCreateBuilderInContext context)))
+    (llvm:ret builder)))
+
+(llvm:define-function (llvm_dispose_builder (builder |i8*|)) |void|
+  (llvm:call LLVMDisposeBuilder builder)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_position_builder_at_end (builder |i8*|) (bb |i8*|)) |void|
+  (llvm:call LLVMPositionBuilderAtEnd builder bb)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_get_insert_block (builder |i8*|)) |i8*|
+  (let* ((block (llvm:call LLVMGetInsertBlock builder)))
+    (llvm:ret block)))
+
+(llvm:define-function (llvm_get_first_basic_block (func |i8*|)) |i8*|
+  (let* ((block (llvm:call LLVMGetFirstBasicBlock func)))
+    (llvm:ret block)))
+
+(llvm:define-function (llvm_get_next_basic_block (block |i8*|)) |i8*|
+  (let* ((next (llvm:call LLVMGetNextBasicBlock block)))
+    (llvm:ret next)))
+
+(llvm:define-function (llvm_get_basic_block_name (block |i8*|)) |i8*|
+  (let* ((name (llvm:call LLVMGetBasicBlockName block)))
+    (llvm:ret name)))
+
+(llvm:define-function (llvm_get_basic_block_terminator (block |i8*|)) |i8*|
+  (let* ((term (llvm:call LLVMGetBasicBlockTerminator block)))
+    (llvm:ret term)))
+
+; Instruction building
+(llvm:define-function (llvm_build_ret_void (builder |i8*|)) |i8*|
+  (let* ((inst (llvm:call LLVMBuildRetVoid builder)))
+    (llvm:ret inst)))
+
+(llvm:define-function (llvm_build_ret (builder |i8*|) (value |i8*|)) |i8*|
+  (let* ((inst (llvm:call LLVMBuildRet builder value)))
+    (llvm:ret inst)))
+
+(llvm:define-function (llvm_build_call (builder |i8*|) (func_type |i8*|) (func |i8*|) (args |i8*|) (arg_count |i32|) (name |i8*|)) |i8*|
+  (let* ((call_inst (llvm:call LLVMBuildCall2 builder func_type func args arg_count name)))
+    (llvm:ret call_inst)))
+
+(llvm:define-function (llvm_build_gep (builder |i8*|) (type |i8*|) (pointer |i8*|) (indices |i8*|) (index_count |i32|) (name |i8*|)) |i8*|
+  (let* ((gep (llvm:call LLVMBuildGEP2 builder type pointer indices index_count name)))
+    (llvm:ret gep)))
+
+(llvm:define-function (llvm_build_bitcast (builder |i8*|) (value |i8*|) (target_type |i8*|) (name |i8*|)) |i8*|
+  (let* ((bitcast (llvm:call LLVMBuildBitCast builder value target_type name)))
+    (llvm:ret bitcast)))
+
+(llvm:define-function (llvm_build_store (builder |i8*|) (value |i8*|) (pointer |i8*|)) |void|
+  (llvm:call LLVMBuildStore builder value pointer)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_build_load (builder |i8*|) (type |i8*|) (pointer |i8*|) (name |i8*|)) |i8*|
+  (let* ((load_val (llvm:call LLVMBuildLoad2 builder type pointer name)))
+    (llvm:ret load_val)))
+
+(llvm:define-function (llvm_build_icmp (builder |i8*|) (pred |i32|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((icmp (llvm:call LLVMBuildICmp builder pred lhs rhs name)))
+    (llvm:ret icmp)))
+
+(llvm:define-function (llvm_build_br (builder |i8*|) (dest |i8*|)) |i8*|
+  (let* ((br_inst (llvm:call LLVMBuildBr builder dest)))
+    (llvm:ret br_inst)))
+
+(llvm:define-function (llvm_build_cond_br (builder |i8*|) (cond |i8*|) (then_block |i8*|) (else_block |i8*|)) |i8*|
+  (let* ((cond_br (llvm:call LLVMBuildCondBr builder cond then_block else_block)))
+    (llvm:ret cond_br)))
+
+(llvm:define-function (llvm_build_zext (builder |i8*|) (value |i8*|) (target_type |i8*|) (name |i8*|)) |i8*|
+  (let* ((zext (llvm:call LLVMBuildZExt builder value target_type name)))
+    (llvm:ret zext)))
+
+(llvm:define-function (llvm_build_add (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((add_val (llvm:call LLVMBuildAdd builder lhs rhs name)))
+    (llvm:ret add_val)))
+
+(llvm:define-function (llvm_build_or (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((or_val (llvm:call LLVMBuildOr builder lhs rhs name)))
+    (llvm:ret or_val)))
+
+(llvm:define-function (llvm_build_sub (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((sub_val (llvm:call LLVMBuildSub builder lhs rhs name)))
+    (llvm:ret sub_val)))
+
+(llvm:define-function (llvm_build_mul (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((mul_val (llvm:call LLVMBuildMul builder lhs rhs name)))
+    (llvm:ret mul_val)))
+
+(llvm:define-function (llvm_build_and (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|
+  (let* ((and_val (llvm:call LLVMBuildAnd builder lhs rhs name)))
+    (llvm:ret and_val)))
+
+(llvm:define-function (llvm_build_alloca (builder |i8*|) (ty |i8*|) (name |i8*|)) |i8*|
+  (let* ((alloca_val (llvm:call LLVMBuildAlloca builder ty name)))
+    (llvm:ret alloca_val)))
+
+(llvm:define-function (llvm_build_trunc (builder |i8*|) (value |i8*|) (target_type |i8*|) (name |i8*|)) |i8*|
+  (let* ((trunc (llvm:call LLVMBuildTrunc builder value target_type name)))
+    (llvm:ret trunc)))
+
+(llvm:define-function (llvm_build_select (builder |i8*|) (cond |i8*|) (then_val |i8*|) (else_val |i8*|) (name |i8*|)) |i8*|
+  (let* ((sel (llvm:call LLVMBuildSelect builder cond then_val else_val name)))
+    (llvm:ret sel)))
+
+(llvm:define-function (llvm_build_phi (builder |i8*|) (ty |i8*|) (name |i8*|)) |i8*|
+  (let* ((phi (llvm:call LLVMBuildPhi builder ty name)))
+    (llvm:ret phi)))
+
+(llvm:define-function (llvm_add_incoming (phi |i8*|) (values |i8*|) (blocks |i8*|) (count |i32|)) |void|
+  (llvm:call LLVMAddIncoming phi values blocks count)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_get_undef (type |i8*|)) |i8*|
+  (let* ((undef_val (llvm:call LLVMGetUndef type)))
+    (llvm:ret undef_val)))
+
+(llvm:define-function (llvm_build_insert_value (builder |i8*|) (agg |i8*|) (val |i8*|) (index |i32|) (name |i8*|)) |i8*|
+  (let* ((result (llvm:call LLVMBuildInsertValue builder agg val index name)))
+    (llvm:ret result)))
+
+(llvm:define-function (llvm_build_extract_value (builder |i8*|) (agg |i8*|) (index |i32|) (name |i8*|)) |i8*|
+  (let* ((result (llvm:call LLVMBuildExtractValue builder agg index name)))
+    (llvm:ret result)))
+
+; Global variable management
+(llvm:define-function (llvm_add_global (module |i8*|) (type |i8*|) (name |i8*|)) |i8*|
+  (let* ((global (llvm:call LLVMAddGlobal module type name)))
+    (llvm:ret global)))
+
+(llvm:define-function (llvm_set_initializer (global |i8*|) (initializer |i8*|)) |void|
+  (llvm:call LLVMSetInitializer global initializer)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_set_global_constant (global |i8*|) (is_constant |i32|)) |void|
+  (llvm:call LLVMSetGlobalConstant global is_constant)
+  (llvm:ret-void))
+
+(llvm:define-function (llvm_set_linkage (global |i8*|) (linkage |i32|)) |void|
+  (llvm:call LLVMSetLinkage global linkage)
+  (llvm:ret-void))
+
+; IR parsing
+; llvm_parse_ir_in_context: Parse IR text into a module
+; Creates a memory buffer from the IR text, then parses it
+; Returns 0 on success, non-zero on error
+(llvm:define-function (llvm_parse_ir_in_context (context |i8*|) (ir_text |i8*|) (ir_len |i64|) (module |i8*|)) |i32|
+  (let* ((buffer (llvm:call LLVMCreateMemoryBufferWithMemoryRangeCopy ir_text ir_len (llvm:const-null |i8*|)))
+         (buffer_null (llvm:icmp 'eq buffer (llvm:const-null |i8*|))))
+    (llvm:br buffer_null 'error 'parse)
+    (llvm:label 'parse
+      (let* ((error_msg (llvm:alloca |i8*|)))
+        (llvm:store (llvm:const-null |i8*|) error_msg)
+        (let* ((parse_result (llvm:call LLVMParseIRInContext context buffer module error_msg))
+               (parse_failed (llvm:icmp 'ne parse_result (llvm:const-int |i32| 0))))
+          (llvm:br parse_failed 'parse_error 'success))))
+    (llvm:label 'success
+      (llvm:ret (llvm:const-int |i32| 0)))
+    (llvm:label 'parse_error
+      (llvm:ret (llvm:const-int |i32| 1)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-int |i32| 1)))))
+
+; Bitcode writing
+(llvm:define-function (llvm_write_bitcode_to_file (module |i8*|) (path |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMWriteBitcodeToFile module path)))
+    (llvm:ret result)))
+
+; Target triple and machine
+(llvm:define-function (llvm_get_default_target_triple) |i8*|
+  (let* ((triple (llvm:call LLVMGetDefaultTargetTriple)))
+    (llvm:ret triple)))
+
+(llvm:define-function (llvm_get_target_from_triple (triple |i8*|) (target |i8*|) (error_msg |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMGetTargetFromTriple triple target error_msg)))
+    (llvm:ret result)))
+
+(llvm:define-function (llvm_create_target_machine (target |i8*|) (triple |i8*|) (cpu |i8*|) (features |i8*|) (level |i32|) (reloc |i32|) (code_model |i32|)) |i8*|
+  (let* ((tm (llvm:call LLVMCreateTargetMachine target triple cpu features level reloc code_model)))
+    (llvm:ret tm)))
+
+(llvm:define-function (llvm_target_machine_emit_to_file (tm |i8*|) (module |i8*|) (filename |i8*|) (codegen |i32|) (error_msg |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMTargetMachineEmitToFile tm module filename codegen error_msg)))
+    (llvm:ret result)))
+
+(llvm:define-function (llvm_dispose_target_machine (tm |i8*|)) |void|
+  (llvm:call LLVMDisposeTargetMachine tm)
+  (llvm:ret-void))
+
+; Function and global lookup
+(llvm:define-function (llvm_get_named_function (module |i8*|) (name |i8*|)) |i8*|
+  (let* ((func (llvm:call LLVMGetNamedFunction module name)))
+    (llvm:ret func)))
+
+(llvm:define-function (llvm_get_named_global (module |i8*|) (name |i8*|)) |i8*|
+  (let* ((global (llvm:call LLVMGetNamedGlobal module name)))
+    (llvm:ret global)))
+
+; Module linking
+(llvm:define-function (llvm_link_modules2 (dest |i8*|) (src |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMLinkModules2 dest src)))
+    (llvm:ret result)))
+
+; Module verification
+(llvm:define-function (llvm_verify_module (module |i8*|) (action |i32|) (error_msg |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMVerifyModule module action error_msg)))
+    (llvm:ret result)))
+
+; Module printing
+(llvm:define-function (llvm_print_module_to_file (module |i8*|) (filename |i8*|) (error_msg |i8*|)) |i32|
+  (let* ((result (llvm:call LLVMPrintModuleToFile module filename error_msg)))
+    (llvm:ret result)))

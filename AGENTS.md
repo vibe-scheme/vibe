@@ -31,11 +31,18 @@ This document provides guidance for AI agents contributing to the Vibe language 
 
 ```
 vibe/
-├── bootstrap/          # Bootstrap compiler (pure LLVM bitcode)
-│   ├── lexer/         # Lexer implementation
-│   ├── parser/        # Parser implementation
-│   ├── runtime/       # Runtime support (FFI, primitives)
-│   └── compiler/      # Compiler driver and main entry point
+├── bootstrap/          # Bootstrap compiler (pure LLVM IR, .ll files)
+│   ├── types.ll       # Shared type definitions
+│   ├── lexer.ll       # Lexer implementation
+│   ├── parser.ll      # Parser implementation
+│   ├── ffi.ll         # FFI and LLVM C API wrappers
+│   ├── codegen.ll     # Code generator
+│   └── main.ll        # Compiler driver and main entry point
+├── kernel/            # Kernel compiler (Vibe source, .vibe files)
+│   ├── lexer.vibe     # Lexer in Vibe DSL
+│   ├── parser.vibe    # Parser in Vibe DSL
+│   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
+│   └── dsl.vibe       # LLVM C API wrappers in Vibe DSL
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
 │   ├── design/        # Design documents and formal plans
@@ -62,34 +69,32 @@ The Vibe project uses a three-phase build system that enables gradual migration 
    - This is the initial bootstrap compiler written entirely in LLVM IR
 
 2. **KERNEL** (`./build.sh build_kernel`):
-   - Uses `.vibe` files + `*_no_vibe.ll` files
+   - Uses `.vibe` files from `kernel/` + shared `.ll` files from `bootstrap/`
    - Compiles `.vibe` files using `bootstrap_compiler`
    - Produces `vibe_kernel` executable
    - Represents the transition phase where some code is migrated to Vibe
 
 3. **SELF_HOST** (`./build.sh build`):
-   - Uses `.vibe` files + `*_no_vibe.ll` files
+   - Uses `.vibe` files from `kernel/` + shared `.ll` files from `bootstrap/`
    - Compiles `.vibe` files using `vibe_kernel` itself
    - Produces `vibe_kernel` executable (self-compiled)
    - This is the self-hosting phase where Vibe compiles itself
 
 ### File Type Relationships
 
-- **`.ll` files**: Pure LLVM IR implementations used in BOOTSTRAP mode for lexer and parser; shared across all modes for codegen, ffi, runtime, main
-- **`*_no_vibe.ll` files**: Contains functions that haven't been migrated to `.vibe` yet, used in KERNEL and SELF_HOST modes alongside `.vibe` files. As migration progresses, these files are eliminated (e.g., `parser_no_vibe.ll` was removed when parser migration completed)
-- **`.vibe` files**: Vibe source code that gets compiled to LLVM bitcode, used in KERNEL and SELF_HOST modes
-
-**Important**: When functions are migrated from `.ll` to `.vibe`, they are removed from `.ll` but remain in `*_no_vibe.ll` until fully migrated. The `*_no_vibe.ll` files serve as a bridge during the migration process. Once all functions in a `*_no_vibe.ll` file are migrated, the file is deleted and the CMakeLists.txt is simplified.
+- **`.ll` files** (in `bootstrap/`): Pure LLVM IR implementations. In BOOTSTRAP mode, all `.ll` files are used. In KERNEL/SELF_HOST modes, only shared files (`codegen.ll`, `main.ll`, `types.ll`) are used alongside compiled `.vibe` output.
+- **`.vibe` files** (in `kernel/`): Vibe source code that gets compiled to LLVM bitcode by the bootstrap compiler (KERNEL mode) or the kernel compiler itself (SELF_HOST mode). These replace their `.ll` counterparts for modules that have been migrated.
 
 ### Bootstrap/Kernel Sync Strategy
 
 When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same module, they must be kept in behavioral sync. This section documents the strategy for maintaining this sync.
 
 **Current migration status:**
-- `lexer.ll` / `lexer.vibe` -- fully migrated, both complete
-- `parser.ll` / `parser.vibe` -- fully migrated, both complete
-- `codegen.ll` -- shared by all modes (no `.vibe` equivalent yet)
-- `ffi.ll`, `runtime.ll`, `main.ll`, `types.ll` -- shared by all modes
+- `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
+- `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
+- `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
+- `bootstrap/codegen.ll` -- shared by all modes (no `.vibe` equivalent yet)
+- `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
 1. The `.vibe` file is the **canonical source** for function behavior in the kernel
@@ -262,7 +267,7 @@ For Linux builds, update the target triple to match your distribution (e.g., `x8
 
 ### Platform-Aware Target Initialization
 
-The `llvm_initialize_native_target()` function in `bootstrap/runtime/ffi.ll` automatically detects the target architecture at runtime and initializes the appropriate LLVM target components:
+The `llvm_initialize_native_target()` function in `bootstrap/ffi.ll` (and `kernel/dsl.vibe`) automatically detects the target architecture at runtime and initializes the appropriate LLVM target components:
 
 - **ARM64/AArch64**: Initializes AArch64 target components (`LLVMInitializeAArch64TargetInfo`, etc.)
 - **X86_64**: Initializes X86 target components (`LLVMInitializeX86TargetInfo`, etc.)
@@ -291,7 +296,7 @@ The FFI (Foreign Function Interface) system allows Vibe to call functions from d
 - Platform-specific functionality
 - **LLVM C API integration** - calling LLVM functions for bitcode generation
 
-The FFI system is implemented in `bootstrap/runtime/ffi.ll` and provides:
+The FFI system is implemented in `bootstrap/ffi.ll` (and `kernel/ffi.vibe` + `kernel/dsl.vibe`) and provides:
 - Library loading (`ffi_load_library`) - Load LLVM libraries dynamically
 - Symbol resolution (`ffi_get_symbol`) - Get LLVM C API function pointers
 - Function calling (`ffi_call`) - Call foreign functions including LLVM C API
