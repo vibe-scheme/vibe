@@ -430,42 +430,6 @@ text_only:
     ret i8* %name
 }
 
-; Helper to format string constant name
-; codegen_format_string_name: Format a string constant name
-; Parameters:
-;   num: Number for unique name
-; Returns: Formatted name string (e.g., ".str.0")
-define i8* @codegen_format_string_name(i32 %num) {
-entry:
-    ; Allocate buffer for name (e.g., ".str.0" = 6 bytes + null = 7)
-    %buffer = call i8* @malloc(i64 16)
-    
-    ; Write ".str."
-    %dot_str = getelementptr i8, i8* %buffer, i64 0
-    store i8 46, i8* %dot_str  ; '.'
-    %s = getelementptr i8, i8* %buffer, i64 1
-    store i8 115, i8* %s  ; 's'
-    %t = getelementptr i8, i8* %buffer, i64 2
-    store i8 116, i8* %t  ; 't'
-    %r = getelementptr i8, i8* %buffer, i64 3
-    store i8 114, i8* %r  ; 'r'
-    %dot2 = getelementptr i8, i8* %buffer, i64 4
-    store i8 46, i8* %dot2  ; '.'
-    
-    ; Convert number to string (simplified - just use single digit for now)
-    %num_mod = urem i32 %num, 10
-    %num_char = add i32 %num_mod, 48  ; Convert to ASCII
-    %num_trunc = trunc i32 %num_char to i8
-    %num_ptr = getelementptr i8, i8* %buffer, i64 5
-    store i8 %num_trunc, i8* %num_ptr
-    
-    ; Null terminate
-    %null_ptr = getelementptr i8, i8* %buffer, i64 6
-    store i8 0, i8* %null_ptr
-    
-    ret i8* %buffer
-}
-
 ; Append string constant definition to IR
 ; codegen_append_string_constant: Append string constant definition
 ; Parameters:
@@ -508,23 +472,6 @@ entry:
     ret void
 }
 
-; Format number as string (simplified implementation)
-; codegen_format_number: Convert number to string
-; Parameters:
-;   num: Number to convert
-; Returns: String representation
-define i8* @codegen_format_number(i64 %num) {
-entry:
-    %buffer = call i8* @malloc(i64 32)
-    ; Simplified - just convert to single digit for now
-    %num_mod = urem i64 %num, 10
-    %num_char = add i64 %num_mod, 48
-    %num_trunc = trunc i64 %num_char to i8
-    store i8 %num_trunc, i8* %buffer
-    %null_ptr = getelementptr i8, i8* %buffer, i64 1
-    store i8 0, i8* %null_ptr
-    ret i8* %buffer
-}
 
 ; Append escaped string
 ; codegen_append_escaped_string: Append string with proper escaping for LLVM IR
@@ -1178,118 +1125,6 @@ done:
 ;   name: Type name
 ;   name_len: Name length
 ;   type: LLVMTypeRef for the type
-define void @codegen_store_type(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMTypeRef %type) {
-entry:
-    ; Create name node
-    %name_node = call %ASTNode* @codegen_create_string_node(i8* %name, i64 %name_len)
-    
-    ; Create type node (pointer node)
-    %type_ptr_cast = bitcast %LLVMTypeRef %type to i8*
-    %type_node = call %ASTNode* @codegen_create_pointer_node(i8* %type_ptr_cast)
-    
-    ; Create pair: (name . type)
-    %pair = call %ASTNode* @codegen_create_cons(%ASTNode* %name_node, %ASTNode* %type_node)
-    
-    ; Get current types list
-    %types_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 13
-    %current_types = load %ASTNode*, %ASTNode** %types_ptr
-    
-    ; Prepend new pair to list
-    %new_types = call %ASTNode* @codegen_create_cons(%ASTNode* %pair, %ASTNode* %current_types)
-    
-    ; Store updated list
-    store %ASTNode* %new_types, %ASTNode** %types_ptr
-    
-    ret void
-}
-
-; Get type by name
-; codegen_get_type: Look up a type by name and return LLVMTypeRef
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Type name
-;   name_len: Name length
-; Returns: LLVMTypeRef for the type, or null if not found
-define %LLVMTypeRef @codegen_get_type(%CodeGen* %cg, i8* %name, i64 %name_len) {
-entry:
-    ; Get types list
-    %types_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 13
-    %types = load %ASTNode*, %ASTNode** %types_ptr
-    
-    %types_null = icmp eq %ASTNode* %types, null
-    br i1 %types_null, label %not_found_type, label %search_loop_type
-    
-search_loop_type:
-    %current_type = alloca %ASTNode*
-    store %ASTNode* %types, %ASTNode** %current_type
-    br label %iterate_type
-    
-iterate_type:
-    %current_val_type = load %ASTNode*, %ASTNode** %current_type
-    %current_null_type = icmp eq %ASTNode* %current_val_type, null
-    br i1 %current_null_type, label %not_found_type, label %check_pair_type
-    
-check_pair_type:
-    ; Get pair from car: (name . type)
-    %car_ptr_type = getelementptr %ASTNode, %ASTNode* %current_val_type, i32 0, i32 4
-    %pair_type = load %ASTNode*, %ASTNode** %car_ptr_type
-    %pair_null_type = icmp eq %ASTNode* %pair_type, null
-    br i1 %pair_null_type, label %next_type, label %compare_name_type
-    
-compare_name_type:
-    ; Get name from pair.car
-    %pair_car_ptr_type = getelementptr %ASTNode, %ASTNode* %pair_type, i32 0, i32 4
-    %name_node_type = load %ASTNode*, %ASTNode** %pair_car_ptr_type
-    %name_node_null_type = icmp eq %ASTNode* %name_node_type, null
-    br i1 %name_node_null_type, label %next_type, label %get_name_type
-    
-get_name_type:
-    %stored_name_ptr_type = getelementptr %ASTNode, %ASTNode* %name_node_type, i32 0, i32 2
-    %stored_name_type = load i8*, i8** %stored_name_ptr_type
-    %stored_len_ptr_type = getelementptr %ASTNode, %ASTNode* %name_node_type, i32 0, i32 3
-    %stored_len_type = load i64, i64* %stored_len_ptr_type
-    
-    ; Compare names
-    %len_match_type = icmp eq i64 %stored_len_type, %name_len
-    br i1 %len_match_type, label %compare_chars_type, label %next_type
-    
-compare_chars_type:
-    %len_int_type = trunc i64 %name_len to i32
-    %cmp_result_type = call i32 @strncmp(i8* %stored_name_type, i8* %name, i32 %len_int_type)
-    %is_match_type = icmp eq i32 %cmp_result_type, 0
-    br i1 %is_match_type, label %found_type, label %next_type
-    
-found_type:
-    ; Get type from pair.cdr
-    %pair_cdr_ptr_type = getelementptr %ASTNode, %ASTNode* %pair_type, i32 0, i32 5
-    %type_node = load %ASTNode*, %ASTNode** %pair_cdr_ptr_type
-    %type_node_null = icmp eq %ASTNode* %type_node, null
-    br i1 %type_node_null, label %not_found_type, label %extract_type
-    
-extract_type:
-    ; Verify it's a pointer node (atom_type 999)
-    %type_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 1
-    %type_atom_type = load i32, i32* %type_atom_type_ptr
-    %is_pointer_type = icmp eq i32 %type_atom_type, 999
-    br i1 %is_pointer_type, label %cast_back_type, label %not_found_type
-    
-cast_back_type:
-    ; Extract pointer from value field
-    %type_ptr_field = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_ptr = load i8*, i8** %type_ptr_field
-    %type_ref = bitcast i8* %type_ptr to %LLVMTypeRef
-    ret %LLVMTypeRef %type_ref
-    
-next_type:
-    ; Move to next in list
-    %cdr_ptr_type = getelementptr %ASTNode, %ASTNode* %current_val_type, i32 0, i32 5
-    %cdr_type = load %ASTNode*, %ASTNode** %cdr_ptr_type
-    store %ASTNode* %cdr_type, %ASTNode** %current_type
-    br label %iterate_type
-    
-not_found_type:
-    ret %LLVMTypeRef null
-}
 
 ; Store function in llvm_functions list
 ; codegen_store_llvm_function: Store a function name, LLVMValueRef, and LLVMTypeRef
@@ -2425,6 +2260,9 @@ check_car:
     br i1 %car_null, label %done_no_main, label %has_exprs
     
 has_exprs:
+    ; Debug: log when generating main
+    %debug_gen_msg = getelementptr [52 x i8], [52 x i8]* @.str.debug_codegen_generating_main, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %debug_gen_msg)
     ; First, collect and generate all string constants at module level
     ; This ensures constants are defined before functions
     call void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %exprs)
@@ -2522,6 +2360,9 @@ text_only:
     br label %done
     
 done_no_main:
+    ; Debug: log when skipping main
+    %debug_skip_msg = getelementptr [55 x i8], [55 x i8]* @.str.debug_codegen_skip_main, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %debug_skip_msg)
     ; No executable expressions - this is a library module
     ; Just collect string constants (if any) but don't generate main
     call void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* null)
@@ -3211,6 +3052,8 @@ declare i32 @printf(i8*, ...)
 @.str.space_at = private unnamed_addr constant [3 x i8] c" @\00"
 @.str.newline_close_brace = private unnamed_addr constant [4 x i8] c"\0A}\0A\00"
 @.str.main_name = private unnamed_addr constant [5 x i8] c"main\00"
+@.str.debug_codegen_skip_main = private unnamed_addr constant [61 x i8] c"[CODEGEN] codegen_main: exprs null or empty - skipping main\0A\00"
+@.str.debug_codegen_generating_main = private unnamed_addr constant [61 x i8] c"[CODEGEN] codegen_main: exprs has content - generating main\0A\00"
 @.str.data_layout_prefix = private unnamed_addr constant [22 x i8] c"target datalayout = \22\00"
 @.str.data_layout_suffix = private unnamed_addr constant [3 x i8] c"\22\0A\00"
 @.str.target_triple_prefix = private unnamed_addr constant [18 x i8] c"target triple = \22\00"
@@ -8471,120 +8314,7 @@ return_result:
 }
 
 ; Create integer AST node
-; codegen_create_int_node: Create an AST node for an integer
-; Parameters:
-;   value: Integer value
-; Returns: ASTNode* for number atom
-define %ASTNode* @codegen_create_int_node(i32 %value) {
-entry:
-    ; Allocate node
-    %node = call i8* @malloc(i64 48)
-    %node_ptr = bitcast i8* %node to %ASTNode*
-    
-    ; Set node type to ATOM
-    %type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 0
-    store i32 0, i32* %type_ptr  ; AST_ATOM
-    
-    ; Set atom type to TOKEN_NUMBER
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 1
-    store i32 2, i32* %atom_type_ptr  ; TOKEN_NUMBER
-    
-    ; Convert integer to string (simplified - max 10 digits)
-    %str_buf = call i8* @malloc(i64 12)
-    %str_len = call i64 @codegen_int_to_string(i32 %value, i8* %str_buf)
-    
-    ; Store string in node
-    %value_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 2
-    store i8* %str_buf, i8** %value_ptr
-    
-    %len_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 3
-    store i64 %str_len, i64* %len_ptr
-    
-    ; Set car/cdr to null
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 4
-    store %ASTNode* null, %ASTNode** %car_ptr
-    
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %cdr_ptr
-    
-    ret %ASTNode* %node_ptr
-}
 
-; Convert integer to string
-; codegen_int_to_string: Convert integer to string representation
-; Parameters:
-;   value: Integer value
-;   buf: Buffer to write to (must be at least 12 bytes)
-; Returns: Length of string
-define i64 @codegen_int_to_string(i32 %value, i8* %buf) {
-entry:
-    %is_zero = icmp eq i32 %value, 0
-    br i1 %is_zero, label %write_zero, label %convert
-    
-write_zero:
-    store i8 48, i8* %buf  ; '0'
-    ret i64 1
-    
-convert:
-    ; Build string backwards, then reverse
-    %digits = alloca [10 x i8]
-    %digit_count = alloca i32
-    store i32 0, i32* %digit_count
-    %val = alloca i32
-    store i32 %value, i32* %val
-    br label %digit_loop
-    
-digit_loop:
-    %val_current = load i32, i32* %val
-    %is_done = icmp eq i32 %val_current, 0
-    br i1 %is_done, label %reverse, label %extract_digit
-    
-extract_digit:
-    %remainder = urem i32 %val_current, 10
-    %digit_char_i32 = add i32 %remainder, 48  ; Convert to '0'-'9'
-    %digit_char = trunc i32 %digit_char_i32 to i8
-    
-    %count = load i32, i32* %digit_count
-    %digit_ptr = getelementptr [10 x i8], [10 x i8]* %digits, i32 0, i32 %count
-    store i8 %digit_char, i8* %digit_ptr
-    
-    %count_new = add i32 %count, 1
-    store i32 %count_new, i32* %digit_count
-    
-    %val_new = udiv i32 %val_current, 10
-    store i32 %val_new, i32* %val
-    br label %digit_loop
-    
-reverse:
-    %count_final = load i32, i32* %digit_count
-    %i = alloca i32
-    store i32 0, i32* %i
-    br label %reverse_loop
-    
-reverse_loop:
-    %i_val = load i32, i32* %i
-    %count_check = load i32, i32* %digit_count
-    %done = icmp uge i32 %i_val, %count_check
-    br i1 %done, label %return_len, label %copy_digit
-    
-copy_digit:
-    %src_idx = sub i32 %count_check, 1
-    %src_idx_sub = sub i32 %src_idx, %i_val
-    %src_ptr = getelementptr [10 x i8], [10 x i8]* %digits, i32 0, i32 %src_idx_sub
-    %digit = load i8, i8* %src_ptr
-    
-    %dest_ptr = getelementptr i8, i8* %buf, i32 %i_val
-    store i8 %digit, i8* %dest_ptr
-    
-    %i_new = add i32 %i_val, 1
-    store i32 %i_new, i32* %i
-    br label %reverse_loop
-    
-return_len:
-    %count_ret = load i32, i32* %digit_count
-    %count_ret_64 = zext i32 %count_ret to i64
-    ret i64 %count_ret_64
-}
 
 ; codegen_create_pair: defined in codegen.vibe
 declare %ASTNode* @codegen_create_pair(%ASTNode*, %ASTNode*)
@@ -8595,146 +8325,30 @@ declare %ASTNode* @codegen_create_cons(%ASTNode*, %ASTNode*)
 ; codegen_create_string_node: defined in codegen.vibe
 declare %ASTNode* @codegen_create_string_node(i8*, i64)
 
-; Store function type for later retrieval
-; codegen_store_function_type: Store function type mapping
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Function name (not null-terminated)
-;   name_len: Name length
-;   func_type: LLVMTypeRef for function type
-define void @codegen_store_function_type(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMTypeRef %func_type) {
-entry:
-    ; Validate function type is not null
-    %func_type_null = icmp eq %LLVMTypeRef %func_type, null
-    br i1 %func_type_null, label %skip_store, label %store_type
-    
-skip_store:
-    ; Skip storing if type is null (shouldn't happen, but safety check)
-    ret void
-    
-store_type:
-    ; Create name node (string atom)
-    %name_node = call %ASTNode* @codegen_create_string_node(i8* %name, i64 %name_len)
-    
-    ; Create type node - store LLVMTypeRef pointer in value field
-    ; We'll use a special AST node type to store the type pointer
-    %type_node = call i8* @malloc(i64 48)
-    %type_node_ptr = bitcast i8* %type_node to %ASTNode*
-    ; Initialize all fields to safe defaults
-    %type_node_type_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 0
-    store i32 0, i32* %type_node_type_ptr  ; AST_ATOM
-    %type_node_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 1
-    store i32 99, i32* %type_node_atom_type_ptr  ; Special marker: TOKEN_TYPE_REF = 99
-    %type_node_value_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 2
-    %func_type_as_i8 = bitcast %LLVMTypeRef %func_type to i8*
-    store i8* %func_type_as_i8, i8** %type_node_value_ptr
-    %type_node_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 3
-    store i64 8, i64* %type_node_len_ptr  ; Size of pointer
-    %type_node_car_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 4
-    store %ASTNode* null, %ASTNode** %type_node_car_ptr
-    %type_node_cdr_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 5
-    store %ASTNode* null, %ASTNode** %type_node_cdr_ptr
-    %type_node_line_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 6
-    store i32 0, i32* %type_node_line_ptr
-    %type_node_column_ptr = getelementptr %ASTNode, %ASTNode* %type_node_ptr, i32 0, i32 7
-    store i32 0, i32* %type_node_column_ptr
-    
-    ; Create (name type) pair
-    %name_type_pair = call %ASTNode* @codegen_create_pair(%ASTNode* %name_node, %ASTNode* %type_node_ptr)
-    
-    ; Get current function_types list
-    %function_types_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 11
-    %current_types = load %ASTNode*, %ASTNode** %function_types_ptr
-    
-    ; Prepend to list
-    %new_types_list = call %ASTNode* @codegen_create_cons(%ASTNode* %name_type_pair, %ASTNode* %current_types)
-    store %ASTNode* %new_types_list, %ASTNode** %function_types_ptr
-    
-    br label %done
-    
-done:
-    ret void
-}
+; codegen_format_string_name: defined in codegen.vibe
+declare i8* @codegen_format_string_name(i32)
 
-; Retrieve function type by name
-; codegen_get_function_type: Look up function type by name
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Function name (not null-terminated)
-;   name_len: Name length
-; Returns: LLVMTypeRef for function type, or null if not found
-define %LLVMTypeRef @codegen_get_function_type(%CodeGen* %cg, i8* %name, i64 %name_len) {
-entry:
-    ; Get function_types list
-    %function_types_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 11
-    %function_types = load %ASTNode*, %ASTNode** %function_types_ptr
-    
-    %types_null = icmp eq %ASTNode* %function_types, null
-    br i1 %types_null, label %not_found, label %search_loop
-    
-search_loop:
-    %current_pair = alloca %ASTNode*
-    store %ASTNode* %function_types, %ASTNode** %current_pair
-    br label %iterate
-    
-iterate:
-    %pair_val = load %ASTNode*, %ASTNode** %current_pair
-    %pair_null = icmp eq %ASTNode* %pair_val, null
-    br i1 %pair_null, label %not_found, label %check_name
-    
-check_name:
-    ; pair is (name type)
-    %pair_car_ptr = getelementptr %ASTNode, %ASTNode* %pair_val, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %pair_car_ptr
-    
-    ; Get name from name node
-    %stored_name_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
-    %stored_name = load i8*, i8** %stored_name_ptr
-    %stored_name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
-    %stored_name_len = load i64, i64* %stored_name_len_ptr
-    
-    ; Compare names
-    %len_match = icmp eq i64 %name_len, %stored_name_len
-    br i1 %len_match, label %compare_names, label %next_pair
-    
-compare_names:
-    %name_len_int = trunc i64 %name_len to i32
-    %cmp_result = call i32 @strncmp(i8* %name, i8* %stored_name, i32 %name_len_int)
-    %is_match = icmp eq i32 %cmp_result, 0
-    br i1 %is_match, label %found, label %next_pair
-    
-found:
-    ; Get type from pair: (name . (type . nil))
-    %pair_cdr_ptr = getelementptr %ASTNode, %ASTNode* %pair_val, i32 0, i32 5
-    %pair_cdr = load %ASTNode*, %ASTNode** %pair_cdr_ptr
-    
-    %pair_cdr_null = icmp eq %ASTNode* %pair_cdr, null
-    br i1 %pair_cdr_null, label %not_found, label %get_type_node
-    
-get_type_node:
-    ; Get car of cdr (the type node)
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %pair_cdr, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    
-    %type_node_null = icmp eq %ASTNode* %type_node, null
-    br i1 %type_node_null, label %not_found, label %extract_type
-    
-extract_type:
-    ; Extract LLVMTypeRef from type node's value field
-    %type_value_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_value = load i8*, i8** %type_value_ptr
-    %func_type = bitcast i8* %type_value to %LLVMTypeRef
-    ret %LLVMTypeRef %func_type
-    
-next_pair:
-    %pair_cdr_next = getelementptr %ASTNode, %ASTNode* %pair_val, i32 0, i32 5
-    %next_pair_val = load %ASTNode*, %ASTNode** %pair_cdr_next
-    store %ASTNode* %next_pair_val, %ASTNode** %current_pair
-    br label %iterate
-    
-not_found:
-    ret %LLVMTypeRef null
-}
+; codegen_format_number: defined in codegen.vibe
+declare i8* @codegen_format_number(i64)
+
+; codegen_store_type: defined in codegen.vibe
+declare void @codegen_store_type(%CodeGen*, i8*, i64, %LLVMTypeRef)
+
+; codegen_get_type: defined in codegen.vibe
+declare %LLVMTypeRef @codegen_get_type(%CodeGen*, i8*, i64)
+
+; codegen_store_function_type: defined in codegen.vibe
+declare void @codegen_store_function_type(%CodeGen*, i8*, i64, %LLVMTypeRef)
+
+; codegen_get_function_type: defined in codegen.vibe
+declare %LLVMTypeRef @codegen_get_function_type(%CodeGen*, i8*, i64)
+
+; codegen_int_to_string: defined in codegen.vibe
+declare i64 @codegen_int_to_string(i32, i8*)
+
+; codegen_create_int_node: defined in codegen.vibe
+declare %ASTNode* @codegen_create_int_node(i32)
+
 
 ; Get function type from function value (reverse lookup)
 ; codegen_get_function_type_by_value: Look up function type by function value

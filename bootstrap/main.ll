@@ -197,6 +197,50 @@ handle_legacy:
     br label %parse_loop
 
 add_to_list:
+    ; Debug: log form added to exprs
+    %debug_add_msg = getelementptr [41 x i8], [41 x i8]* @.str.debug_add_to_list, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %debug_add_msg)
+    ; Extract and print form identifier when possible
+    %add_to_list_ast_null = icmp eq %ASTNode* %ast, null
+    br i1 %add_to_list_ast_null, label %add_to_list_cons, label %add_to_list_debug_form
+add_to_list_debug_form:
+    %atl_ast_type_ptr = getelementptr %ASTNode, %ASTNode* %ast, i32 0, i32 0
+    %atl_ast_type_val = load i32, i32* %atl_ast_type_ptr
+    %atl_ast_is_list = icmp eq i32 %atl_ast_type_val, 1
+    br i1 %atl_ast_is_list, label %add_to_list_get_car, label %add_to_list_atom_value
+add_to_list_get_car:
+    %atl_ast_car_ptr = getelementptr %ASTNode, %ASTNode* %ast, i32 0, i32 4
+    %atl_ast_car = load %ASTNode*, %ASTNode** %atl_ast_car_ptr
+    %atl_car_null = icmp eq %ASTNode* %atl_ast_car, null
+    br i1 %atl_car_null, label %add_to_list_cons, label %add_to_list_car_type
+add_to_list_car_type:
+    %atl_car_type_ptr = getelementptr %ASTNode, %ASTNode* %atl_ast_car, i32 0, i32 0
+    %atl_car_type = load i32, i32* %atl_car_type_ptr
+    %atl_car_is_atom = icmp eq i32 %atl_car_type, 0
+    br i1 %atl_car_is_atom, label %add_to_list_print_car, label %add_to_list_cons
+add_to_list_print_car:
+    %atl_car_value_ptr = getelementptr %ASTNode, %ASTNode* %atl_ast_car, i32 0, i32 2
+    %atl_car_value = load i8*, i8** %atl_car_value_ptr
+    %atl_car_len_ptr = getelementptr %ASTNode, %ASTNode* %atl_ast_car, i32 0, i32 3
+    %atl_car_len = load i64, i64* %atl_car_len_ptr
+    %atl_car_len_capped = icmp ugt i64 %atl_car_len, 256
+    %atl_car_len_safe = select i1 %atl_car_len_capped, i64 256, i64 %atl_car_len
+    %atl_car_len_i32 = trunc i64 %atl_car_len_safe to i32
+    %atl_debug_car_fmt = getelementptr [25 x i8], [25 x i8]* @.str.debug_add_to_list_car, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %atl_debug_car_fmt, i32 %atl_car_len_i32, i8* %atl_car_value)
+    br label %add_to_list_cons
+add_to_list_atom_value:
+    %atl_ast_value_ptr = getelementptr %ASTNode, %ASTNode* %ast, i32 0, i32 2
+    %atl_ast_value = load i8*, i8** %atl_ast_value_ptr
+    %atl_ast_len_ptr = getelementptr %ASTNode, %ASTNode* %ast, i32 0, i32 3
+    %atl_ast_len = load i64, i64* %atl_ast_len_ptr
+    %atl_ast_len_capped = icmp ugt i64 %atl_ast_len, 256
+    %atl_ast_len_safe = select i1 %atl_ast_len_capped, i64 256, i64 %atl_ast_len
+    %atl_ast_len_i32 = trunc i64 %atl_ast_len_safe to i32
+    %atl_debug_atom_fmt = getelementptr [25 x i8], [25 x i8]* @.str.debug_add_to_list_car, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %atl_debug_atom_fmt, i32 %atl_ast_len_i32, i8* %atl_ast_value)
+    br label %add_to_list_cons
+add_to_list_cons:
     ; Add AST node to expressions list by creating a cons cell
     ; Allocate new cons cell
     %new_cons = call i8* @malloc(i64 48)
@@ -230,6 +274,18 @@ parse_error:
 generate_code:
     ; Generate main function with all top-level expressions
     %exprs = load %ASTNode*, %ASTNode** %exprs_list
+    ; Debug: log exprs state before codegen_main
+    %exprs_is_null = icmp eq %ASTNode* %exprs, null
+    br i1 %exprs_is_null, label %generate_code_exprs_null, label %generate_code_exprs_nonnull
+generate_code_exprs_null:
+    %debug_null_msg = getelementptr [62 x i8], [62 x i8]* @.str.debug_generate_exprs_null, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %debug_null_msg)
+    br label %generate_code_do_main
+generate_code_exprs_nonnull:
+    %debug_nonnull_msg = getelementptr [63 x i8], [63 x i8]* @.str.debug_generate_exprs_nonnull, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %debug_nonnull_msg)
+    br label %generate_code_do_main
+generate_code_do_main:
     call i32 @codegen_main(%CodeGen* %codegen, %ASTNode* %exprs)
     
     ; Emit debug files for inspection
@@ -623,6 +679,10 @@ error:
 @.str.define_bitcode = private unnamed_addr constant [15 x i8] c"define-bitcode\00"
 @.str.dot_o = private unnamed_addr constant [3 x i8] c".o\00"
 @.str.dot_ll = private unnamed_addr constant [4 x i8] c".ll\00"
+@.str.debug_add_to_list = private unnamed_addr constant [41 x i8] c"[MAIN] add_to_list: form added to exprs\0A\00"
+@.str.debug_add_to_list_car = private unnamed_addr constant [25 x i8] c"[MAIN]   form car: %.*s\0A\00"
+@.str.debug_generate_exprs_null = private unnamed_addr constant [62 x i8] c"[MAIN] generate_code: exprs=null (no main will be generated)\0A\00"
+@.str.debug_generate_exprs_nonnull = private unnamed_addr constant [63 x i8] c"[MAIN] generate_code: exprs=non-null (main will be generated)\0A\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
@@ -645,3 +705,4 @@ declare void @codegen_dispose(%CodeGen*)
 declare i32 @codegen_write_bitcode(%CodeGen*, i8*)
 declare i32 @codegen_write_ir_text(%CodeGen*, i8*)
 declare i32 @codegen_write_object_file(%CodeGen*, i8*)
+declare i32 @printf(i8*, ...)

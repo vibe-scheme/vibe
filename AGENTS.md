@@ -343,6 +343,10 @@ When we begin rewriting `.ll` files in `.vibe`, we should implement `define-bitc
 
 **Current status**: External function declarations (like `printf`) are hardcoded in `codegen_init()`. The infrastructure for FFI exists, but `define-bitcode-ffi-function` is not yet implemented. This will be implemented as part of the 2nd generation bootstrap when rewriting `.ll` files in `.vibe`.
 
+### Future: Remove Implicit Main Insertion
+
+The bootstrap compiler currently has `codegen_main` inject a `main` function when a module has top-level executable expressions (forms that fall through to `exprs_list`). This should be removed in favor of explicit `main` definition: require exactly one compilation unit to define `main` when building an executable. Revisit this after self-hosting is complete.
+
 ## Next Steps After Bootstrap
 
 Once the bootstrap compiler is complete:
