@@ -1,0 +1,31 @@
+{
+  "name": "tree-sitter-vibe",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Vibe language",
+  "main": "grammar.js",
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "build": "npm run generate && ./build.sh",
+    "install": "echo 'Skipping Node native build (use ./build.sh for Emacs grammar)'",
+    "test": "tree-sitter test"
+  },
+  "keywords": [
+    "tree-sitter",
+    "vibe",
+    "scheme",
+    "parser"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.20.0"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.vibe",
+      "file-types": [
+        "vibe"
+      ]
+    }
+  ]
+}

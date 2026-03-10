@@ -29,3 +29,9 @@ Thumbs.db
 test_output/
 test/*.ll
 *.test
+
+# Tree-sitter grammar (node)
+tree-sitter-vibe/node_modules/
+
+# Tree-sitter grammar (Emacs shared library build)
+tree-sitter-vibe/build/

@@ -1,679 +1,679 @@
-                                        ; Codegen utilities migrated to Vibe DSL (Batch 1)
-                                        ; These functions are the first batch of codegen migration.
-                                        ; They handle AST node creation, integer parsing, and type checking.
+;; Codegen utilities migrated to Vibe DSL (Batch 1)
+;; These functions are the first batch of codegen migration.
+;; They handle AST node creation, integer parsing, and type checking.
 
-                                        ; ============================================================================
-                                        ; Type definitions
-                                        ; ============================================================================
-                                        ; Define ASTNode type (matches bootstrap/types.ll)
-                                        ; Note: car and cdr use |i8*| instead of |%ASTNode*| because the codegen
-                                        ; resolves field types before storing the type, so self-referential types
-                                        ; can't be resolved. In LLVM 21 opaque pointer mode, both are just 'ptr'.
+;; ============================================================================
+;; Type definitions
+;; ============================================================================
+;; Define ASTNode type (matches bootstrap/types.ll)
+;; Note: car and cdr use |i8*| instead of |%ASTNode*| because the codegen
+;; resolves field types before storing the type, so self-referential types
+;; can't be resolved. In LLVM 21 opaque pointer mode, both are just 'ptr'.
 (llvm:define-type ASTNode
-                  (type |i32|)
-                  (atom_type |i32|)
-                  (value |i8*|)
-                  (value_len |i64|)
-                  (car |i8*|)
-                  (cdr |i8*|)
-                  (line |i32|)
-                  (column |i32|))
+  (type |i32|)
+  (atom_type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (car |i8*|)
+  (cdr |i8*|)
+  (line |i32|)
+  (column |i32|))
 
-                                        ; Define CodeGen type (matches bootstrap/types.ll layout and field indices)
-                                        ; Pointer-like LLVM refs are represented as |i8*| in opaque pointer mode.
+;; Define CodeGen type (matches bootstrap/types.ll layout and field indices)
+;; Pointer-like LLVM refs are represented as |i8*| in opaque pointer mode.
 (llvm:define-type CodeGen
-                  (buffer |i8*|)
-                  (buffer_len |i64|)
-                  (buffer_cap |i64|)
-                  (string_counter |i32|)
-                  (const_counter |i32|)
-                  (context |i8*|)
-                  (module |i8*|)
-                  (builder |i8*|)
-                  (current_function |i8*|)
-                  (params |%ASTNode*|)
-                  (locals |%ASTNode*|)
-                  (function_types |%ASTNode*|)
-                  (constants |%ASTNode*|)
-                  (types |%ASTNode*|)
-                  (llvm_functions |%ASTNode*|))
+  (buffer |i8*|)
+  (buffer_len |i64|)
+  (buffer_cap |i64|)
+  (string_counter |i32|)
+  (const_counter |i32|)
+  (context |i8*|)
+  (module |i8*|)
+  (builder |i8*|)
+  (current_function |i8*|)
+  (params |%ASTNode*|)
+  (locals |%ASTNode*|)
+  (function_types |%ASTNode*|)
+  (constants |%ASTNode*|)
+  (types |%ASTNode*|)
+  (llvm_functions |%ASTNode*|))
 
-                                        ; ============================================================================
-                                        ; C library function declarations
-                                        ; These are declared as external and resolved at link time from other modules
-                                        ; (lexer.vibe defines malloc/free/memcpy via FFI, dsl.vibe defines strncmp).
-                                        ; ============================================================================
+;; ============================================================================
+;; C library function declarations
+;; These are declared as external and resolved at link time from other modules
+;; (lexer.vibe defines malloc/free/memcpy via FFI, dsl.vibe defines strncmp).
+;; ============================================================================
 (llvm:declare-function (malloc (size |i64|)) |i8*|)
 (llvm:declare-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*|)
 
-                                        ; Forward declare llvm_get_element_type (defined in dsl.vibe, linked at build time)
+;; Forward declare llvm_get_element_type (defined in dsl.vibe, linked at build time)
 (llvm:declare-function (llvm_get_element_type (type |i8*|)) |i8*|)
 
-                                        ; Forward declare codegen_parse_int_string (defined below, used by codegen_parse_int_from_ast)
+;; Forward declare codegen_parse_int_string (defined below, used by codegen_parse_int_from_ast)
 (llvm:declare-function (codegen_parse_int_string (str |i8*|) (len |i64|)) |i32|)
 
-                                        ; Forward declare strncmp -- must match the declaration in codegen_no_vibe.ll (i32 length)
+;; Forward declare strncmp -- must match the declaration in codegen_no_vibe.ll (i32 length)
 (llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
 
-                                        ; Forward declare codegen_int_to_string (defined below, used by codegen_create_int_node)
+;; Forward declare codegen_int_to_string (defined below, used by codegen_create_int_node)
 (llvm:declare-function (codegen_int_to_string (value |i32|) (buf |i8*|)) |i64|)
 
-                                        ; ============================================================================
-                                        ; 1. codegen_dsl_check_primitive
-                                        ; Check if identifier matches a DSL primitive name.
-                                        ; Parameters: id (string), id_len, target (string), target_len
-                                        ; Returns: 1 if matches, 0 otherwise
-                                        ; ============================================================================
+;; ============================================================================
+;; 1. codegen_dsl_check_primitive
+;; Check if identifier matches a DSL primitive name.
+;; Parameters: id (string), id_len, target (string), target_len
+;; Returns: 1 if matches, 0 otherwise
+;; ============================================================================
 (llvm:define-function (codegen_dsl_check_primitive (id |i8*|) (id_len |i64|) (target |i8*|) (target_len |i64|)) |i32|
-                      (let* ((len_match (llvm:icmp 'eq id_len target_len))
-                             (len_int (llvm:trunc id_len |i64| |i32|))
-                             (cmp_result (llvm:call strncmp id target len_int))
-                             (str_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0)))
-                             (both_match (llvm:and len_match str_match))
-                             (result (llvm:select both_match (llvm:const-int |i32| 1) (llvm:const-int |i32| 0))))
-                        (llvm:ret result)))
+  (let* ((len_match (llvm:icmp 'eq id_len target_len))
+         (len_int (llvm:trunc id_len |i64| |i32|))
+         (cmp_result (llvm:call strncmp id target len_int))
+         (str_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0)))
+         (both_match (llvm:and len_match str_match))
+         (result (llvm:select both_match (llvm:const-int |i32| 1) (llvm:const-int |i32| 0))))
+    (llvm:ret result)))
 
-                                        ; ============================================================================
-                                        ; 2. codegen_parse_int_string
-                                        ; Parse integer from string representation by iterating through digit characters.
-                                        ; Parameters: str (pointer), len (length)
-                                        ; Returns: parsed integer value
-                                        ; ============================================================================
+;; ============================================================================
+;; 2. codegen_parse_int_string
+;; Parse integer from string representation by iterating through digit characters.
+;; Parameters: str (pointer), len (length)
+;; Returns: parsed integer value
+;; ============================================================================
 (llvm:define-function (codegen_parse_int_string (str |i8*|) (len |i64|)) |i32|
-                      (let* ((result_ptr (llvm:alloca |i32|))
-                             (i_ptr (llvm:alloca |i64|)))
-                        (llvm:store (llvm:const-int |i32| 0) result_ptr)
-                        (llvm:store (llvm:const-int |i64| 0) i_ptr)
-                        (llvm:br 'loop))
-                      (llvm:label 'loop
-                                  (let* ((i_val (llvm:load i_ptr |i64|))
-                                         (done (llvm:icmp 'uge i_val len)))
-                                    (llvm:br done 'return 'process_char)))
-                      (llvm:label 'process_char
-                                  (let* ((i_val (llvm:load i_ptr |i64|))
-                                         (char_ptr (llvm:gep |i8| str i_val))
-                                         (char (llvm:load char_ptr |i8|))
-                                         (char_int (llvm:zext char |i8| |i32|))
-                                         (is_ge_0 (llvm:icmp 'uge char_int (llvm:const-int |i32| 48)))
-                                         (is_le_9 (llvm:icmp 'ule char_int (llvm:const-int |i32| 57)))
-                                         (is_digit (llvm:and is_ge_0 is_le_9)))
-                                    (llvm:br is_digit 'accumulate 'return)))
-                      (llvm:label 'accumulate
-                                  (let* ((i_val (llvm:load i_ptr |i64|))
-                                         (char_ptr (llvm:gep |i8| str i_val))
-                                         (char (llvm:load char_ptr |i8|))
-                                         (char_int (llvm:zext char |i8| |i32|))
-                                         (result_val (llvm:load result_ptr |i32|))
-                                         (result_new (llvm:mul result_val (llvm:const-int |i32| 10)))
-                                         (digit_val (llvm:sub char_int (llvm:const-int |i32| 48)))
-                                         (result_final (llvm:add result_new digit_val)))
-                                    (llvm:store result_final result_ptr)
-                                    (let* ((i_new (llvm:add i_val (llvm:const-int |i64| 1))))
-                                      (llvm:store i_new i_ptr)
-                                      (llvm:br 'loop))))
-                      (llvm:label 'return
-                                  (let* ((result_ret (llvm:load result_ptr |i32|)))
-                                    (llvm:ret result_ret))))
+  (let* ((result_ptr (llvm:alloca |i32|))
+         (i_ptr (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i32| 0) result_ptr)
+    (llvm:store (llvm:const-int |i64| 0) i_ptr)
+    (llvm:br 'loop))
+  (llvm:label 'loop
+    (let* ((i_val (llvm:load i_ptr |i64|))
+           (done (llvm:icmp 'uge i_val len)))
+      (llvm:br done 'return 'process_char)))
+  (llvm:label 'process_char
+    (let* ((i_val (llvm:load i_ptr |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_ge_0 (llvm:icmp 'uge char_int (llvm:const-int |i32| 48)))
+           (is_le_9 (llvm:icmp 'ule char_int (llvm:const-int |i32| 57)))
+           (is_digit (llvm:and is_ge_0 is_le_9)))
+      (llvm:br is_digit 'accumulate 'return)))
+  (llvm:label 'accumulate
+    (let* ((i_val (llvm:load i_ptr |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (result_val (llvm:load result_ptr |i32|))
+           (result_new (llvm:mul result_val (llvm:const-int |i32| 10)))
+           (digit_val (llvm:sub char_int (llvm:const-int |i32| 48)))
+           (result_final (llvm:add result_new digit_val)))
+      (llvm:store result_final result_ptr)
+      (let* ((i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+        (llvm:store i_new i_ptr)
+        (llvm:br 'loop))))
+  (llvm:label 'return
+    (let* ((result_ret (llvm:load result_ptr |i32|)))
+      (llvm:ret result_ret))))
 
-                                        ; ============================================================================
-                                        ; 3. codegen_parse_int_from_ast
-                                        ; Parse integer value from an AST node (number atom).
-                                        ; Parameters: node (ASTNode pointer)
-                                        ; Returns: integer value, or 0 on error
-                                        ; ============================================================================
+;; ============================================================================
+;; 3. codegen_parse_int_from_ast
+;; Parse integer value from an AST node (number atom).
+;; Parameters: node (ASTNode pointer)
+;; Returns: integer value, or 0 on error
+;; ============================================================================
 (llvm:define-function (codegen_parse_int_from_ast (node |%ASTNode*|)) |i32|
-                      (let* ((node_null (llvm:icmp 'eq node (llvm:const-null |%ASTNode*|))))
-                        (llvm:br node_null 'error 'check_type))
-                      (llvm:label 'check_type
-                                  (let* ((node_type_ptr (llvm:gep |%ASTNode| node 0 0))
-                                         (node_type (llvm:load node_type_ptr |i32|))
-                                         (is_atom (llvm:icmp 'eq node_type (llvm:const-int |i32| 0))))
-                                    (llvm:br is_atom 'check_number 'error)))
-                      (llvm:label 'check_number
-                                  (let* ((atom_type_ptr (llvm:gep |%ASTNode| node 0 1))
-                                         (atom_type (llvm:load atom_type_ptr |i32|))
-                                         (is_number (llvm:icmp 'eq atom_type (llvm:const-int |i32| 2))))
-                                    (llvm:br is_number 'parse_number 'error)))
-                      (llvm:label 'parse_number
-                                  (let* ((value_ptr (llvm:gep |%ASTNode| node 0 2))
-                                         (value_str (llvm:load value_ptr |i8*|))
-                                         (value_len_ptr (llvm:gep |%ASTNode| node 0 3))
-                                         (value_len (llvm:load value_len_ptr |i64|))
-                                         (result (llvm:call codegen_parse_int_string value_str value_len)))
-                                    (llvm:ret result)))
-                      (llvm:label 'error
-                                  (llvm:ret (llvm:const-int |i32| 0))))
+  (let* ((node_null (llvm:icmp 'eq node (llvm:const-null |%ASTNode*|))))
+    (llvm:br node_null 'error 'check_type))
+  (llvm:label 'check_type
+    (let* ((node_type_ptr (llvm:gep |%ASTNode| node 0 0))
+           (node_type (llvm:load node_type_ptr |i32|))
+           (is_atom (llvm:icmp 'eq node_type (llvm:const-int |i32| 0))))
+      (llvm:br is_atom 'check_number 'error)))
+  (llvm:label 'check_number
+    (let* ((atom_type_ptr (llvm:gep |%ASTNode| node 0 1))
+           (atom_type (llvm:load atom_type_ptr |i32|))
+           (is_number (llvm:icmp 'eq atom_type (llvm:const-int |i32| 2))))
+      (llvm:br is_number 'parse_number 'error)))
+  (llvm:label 'parse_number
+    (let* ((value_ptr (llvm:gep |%ASTNode| node 0 2))
+           (value_str (llvm:load value_ptr |i8*|))
+           (value_len_ptr (llvm:gep |%ASTNode| node 0 3))
+           (value_len (llvm:load value_len_ptr |i64|))
+           (result (llvm:call codegen_parse_int_string value_str value_len)))
+      (llvm:ret result)))
+  (llvm:label 'error
+    (llvm:ret (llvm:const-int |i32| 0))))
 
-                                        ; ============================================================================
-                                        ; 4. codegen_extract_quoted_atom
-                                        ; Extract atom name from AST_QUOTE node.
-                                        ; Parameters: quote_node, name_out (i8**), len_out (i64*)
-                                        ; Returns: 0 on success, -1 on error
-                                        ; ============================================================================
+;; ============================================================================
+;; 4. codegen_extract_quoted_atom
+;; Extract atom name from AST_QUOTE node.
+;; Parameters: quote_node, name_out (i8**), len_out (i64*)
+;; Returns: 0 on success, -1 on error
+;; ============================================================================
 (llvm:define-function (codegen_extract_quoted_atom (quote_node |%ASTNode*|) (name_out |i8*|) (len_out |i8*|)) |i32|
-                      (let* ((quote_null (llvm:icmp 'eq quote_node (llvm:const-null |%ASTNode*|))))
-                        (llvm:br quote_null 'error 'check_quote_type))
-                      (llvm:label 'check_quote_type
-                                  (let* ((quote_type_ptr (llvm:gep |%ASTNode| quote_node 0 0))
-                                         (quote_type (llvm:load quote_type_ptr |i32|))
-                                         (is_quote (llvm:icmp 'eq quote_type (llvm:const-int |i32| 2))))
-                                    (llvm:br is_quote 'get_quoted_expr 'error)))
-                      (llvm:label 'get_quoted_expr
-                                  (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
-                                         (quoted_expr (llvm:load car_ptr |%ASTNode*|))
-                                         (quoted_expr_null (llvm:icmp 'eq quoted_expr (llvm:const-null |%ASTNode*|))))
-                                    (llvm:br quoted_expr_null 'error 'check_atom)))
-                      (llvm:label 'check_atom
-                                  (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
-                                         (quoted_expr (llvm:load car_ptr |%ASTNode*|))
-                                         (quoted_type_ptr (llvm:gep |%ASTNode| quoted_expr 0 0))
-                                         (quoted_type (llvm:load quoted_type_ptr |i32|))
-                                         (is_atom (llvm:icmp 'eq quoted_type (llvm:const-int |i32| 0))))
-                                    (llvm:br is_atom 'extract_name 'error)))
-                      (llvm:label 'extract_name
-                                  (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
-                                         (quoted_expr (llvm:load car_ptr |%ASTNode*|))
-                                         (atom_val_ptr (llvm:gep |%ASTNode| quoted_expr 0 2))
-                                         (atom_val (llvm:load atom_val_ptr |i8*|))
-                                         (atom_len_ptr (llvm:gep |%ASTNode| quoted_expr 0 3))
-                                         (atom_len (llvm:load atom_len_ptr |i64|)))
-                                    (llvm:store atom_val name_out)
-                                    (llvm:store atom_len len_out)
-                                    (llvm:ret (llvm:const-int |i32| 0))))
-                      (llvm:label 'error
-                                  (let* ((neg_one (llvm:sub (llvm:const-int |i32| 0) (llvm:const-int |i32| 1))))
-                                    (llvm:ret neg_one))))
+  (let* ((quote_null (llvm:icmp 'eq quote_node (llvm:const-null |%ASTNode*|))))
+    (llvm:br quote_null 'error 'check_quote_type))
+  (llvm:label 'check_quote_type
+    (let* ((quote_type_ptr (llvm:gep |%ASTNode| quote_node 0 0))
+           (quote_type (llvm:load quote_type_ptr |i32|))
+           (is_quote (llvm:icmp 'eq quote_type (llvm:const-int |i32| 2))))
+      (llvm:br is_quote 'get_quoted_expr 'error)))
+  (llvm:label 'get_quoted_expr
+    (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
+           (quoted_expr (llvm:load car_ptr |%ASTNode*|))
+           (quoted_expr_null (llvm:icmp 'eq quoted_expr (llvm:const-null |%ASTNode*|))))
+      (llvm:br quoted_expr_null 'error 'check_atom)))
+  (llvm:label 'check_atom
+    (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
+           (quoted_expr (llvm:load car_ptr |%ASTNode*|))
+           (quoted_type_ptr (llvm:gep |%ASTNode| quoted_expr 0 0))
+           (quoted_type (llvm:load quoted_type_ptr |i32|))
+           (is_atom (llvm:icmp 'eq quoted_type (llvm:const-int |i32| 0))))
+      (llvm:br is_atom 'extract_name 'error)))
+  (llvm:label 'extract_name
+    (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
+           (quoted_expr (llvm:load car_ptr |%ASTNode*|))
+           (atom_val_ptr (llvm:gep |%ASTNode| quoted_expr 0 2))
+           (atom_val (llvm:load atom_val_ptr |i8*|))
+           (atom_len_ptr (llvm:gep |%ASTNode| quoted_expr 0 3))
+           (atom_len (llvm:load atom_len_ptr |i64|)))
+      (llvm:store atom_val name_out)
+      (llvm:store atom_len len_out)
+      (llvm:ret (llvm:const-int |i32| 0))))
+  (llvm:label 'error
+    (let* ((neg_one (llvm:sub (llvm:const-int |i32| 0) (llvm:const-int |i32| 1))))
+      (llvm:ret neg_one))))
 
-                                        ; ============================================================================
-                                        ; 5. codegen_create_pointer_node
-                                        ; Create an AST node that stores a pointer value (for LLVMValueRef, etc.)
-                                        ; Parameters: ptr (i8*)
-                                        ; Returns: ASTNode* with pointer stored in value field, atom_type=999
-                                        ; ============================================================================
+;; ============================================================================
+;; 5. codegen_create_pointer_node
+;; Create an AST node that stores a pointer value (for LLVMValueRef, etc.)
+;; Parameters: ptr (i8*)
+;; Returns: ASTNode* with pointer stored in value field, atom_type=999
+;; ============================================================================
 (llvm:define-function (codegen_create_pointer_node (ptr |i8*|)) |%ASTNode*|
-                      (let* ((node (llvm:call malloc (llvm:const-int |i64| 48)))
-                             (node_ptr (llvm:bitcast node |%ASTNode*|))
-                             (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
-                             (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
-                             (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
-                             (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
-                             (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
-                             (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5)))
-                        (llvm:store (llvm:const-int |i32| 0) type_ptr)
-                        (llvm:store (llvm:const-int |i32| 999) atom_type_ptr)
-                        (llvm:store ptr value_ptr)
-                        (llvm:store (llvm:const-int |i64| 8) len_ptr)
-                        (llvm:store (llvm:const-null |i8*|) car_ptr)
-                        (llvm:store (llvm:const-null |i8*|) cdr_ptr)
-                        (llvm:ret node_ptr)))
+  (let* ((node (llvm:call malloc (llvm:const-int |i64| 48)))
+         (node_ptr (llvm:bitcast node |%ASTNode*|))
+         (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
+         (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
+         (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
+         (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
+         (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
+         (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5)))
+    (llvm:store (llvm:const-int |i32| 0) type_ptr)
+    (llvm:store (llvm:const-int |i32| 999) atom_type_ptr)
+    (llvm:store ptr value_ptr)
+    (llvm:store (llvm:const-int |i64| 8) len_ptr)
+    (llvm:store (llvm:const-null |i8*|) car_ptr)
+    (llvm:store (llvm:const-null |i8*|) cdr_ptr)
+    (llvm:ret node_ptr)))
 
-                                        ; ============================================================================
-                                        ; 6. codegen_create_string_node
-                                        ; Create an AST node for a string (copies the string data).
-                                        ; Parameters: str (i8*), len (i64)
-                                        ; Returns: ASTNode* for string atom (atom_type=TOKEN_STRING=3)
-                                        ; ============================================================================
+;; ============================================================================
+;; 6. codegen_create_string_node
+;; Create an AST node for a string (copies the string data).
+;; Parameters: str (i8*), len (i64)
+;; Returns: ASTNode* for string atom (atom_type=TOKEN_STRING=3)
+;; ============================================================================
 (llvm:define-function (codegen_create_string_node (str |i8*|) (len |i64|)) |%ASTNode*|
-                      (let* ((str_buf (llvm:call malloc len))
-                             (ignored (llvm:call memcpy str_buf str len))
-                             (node (llvm:call malloc (llvm:const-int |i64| 48)))
-                             (node_ptr (llvm:bitcast node |%ASTNode*|))
-                             (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
-                             (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
-                             (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
-                             (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
-                             (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
-                             (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5))
-                             (line_ptr (llvm:gep |%ASTNode| node_ptr 0 6))
-                             (column_ptr (llvm:gep |%ASTNode| node_ptr 0 7)))
-                        (llvm:store (llvm:const-int |i32| 0) type_ptr)
-                        (llvm:store (llvm:const-int |i32| 3) atom_type_ptr)
-                        (llvm:store str_buf value_ptr)
-                        (llvm:store len len_ptr)
-                        (llvm:store (llvm:const-null |i8*|) car_ptr)
-                        (llvm:store (llvm:const-null |i8*|) cdr_ptr)
-                        (llvm:store (llvm:const-int |i32| 0) line_ptr)
-                        (llvm:store (llvm:const-int |i32| 0) column_ptr)
-                        (llvm:ret node_ptr)))
+  (let* ((str_buf (llvm:call malloc len))
+         (ignored (llvm:call memcpy str_buf str len))
+         (node (llvm:call malloc (llvm:const-int |i64| 48)))
+         (node_ptr (llvm:bitcast node |%ASTNode*|))
+         (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
+         (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
+         (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
+         (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
+         (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
+         (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5))
+         (line_ptr (llvm:gep |%ASTNode| node_ptr 0 6))
+         (column_ptr (llvm:gep |%ASTNode| node_ptr 0 7)))
+    (llvm:store (llvm:const-int |i32| 0) type_ptr)
+    (llvm:store (llvm:const-int |i32| 3) atom_type_ptr)
+    (llvm:store str_buf value_ptr)
+    (llvm:store len len_ptr)
+    (llvm:store (llvm:const-null |i8*|) car_ptr)
+    (llvm:store (llvm:const-null |i8*|) cdr_ptr)
+    (llvm:store (llvm:const-int |i32| 0) line_ptr)
+    (llvm:store (llvm:const-int |i32| 0) column_ptr)
+    (llvm:ret node_ptr)))
 
-                                        ; ============================================================================
-                                        ; 7. codegen_create_cons
-                                        ; Create a cons cell (AST_LIST node with car and cdr).
-                                        ; Parameters: car (ASTNode*), cdr (ASTNode*)
-                                        ; Returns: ASTNode* list node
-                                        ; ============================================================================
+;; ============================================================================
+;; 7. codegen_create_cons
+;; Create a cons cell (AST_LIST node with car and cdr).
+;; Parameters: car (ASTNode*), cdr (ASTNode*)
+;; Returns: ASTNode* list node
+;; ============================================================================
 (llvm:define-function (codegen_create_cons (car |%ASTNode*|) (cdr |%ASTNode*|)) |%ASTNode*|
-                      (let* ((cons (llvm:call malloc (llvm:const-int |i64| 48)))
-                             (cons_ptr (llvm:bitcast cons |%ASTNode*|))
-                             (type_ptr (llvm:gep |%ASTNode| cons_ptr 0 0))
-                             (car_ptr (llvm:gep |%ASTNode| cons_ptr 0 4))
-                             (cdr_ptr (llvm:gep |%ASTNode| cons_ptr 0 5)))
-                        (llvm:store (llvm:const-int |i32| 1) type_ptr)
-                        (llvm:store car car_ptr)
-                        (llvm:store cdr cdr_ptr)
-                        (llvm:ret cons_ptr)))
+  (let* ((cons (llvm:call malloc (llvm:const-int |i64| 48)))
+         (cons_ptr (llvm:bitcast cons |%ASTNode*|))
+         (type_ptr (llvm:gep |%ASTNode| cons_ptr 0 0))
+         (car_ptr (llvm:gep |%ASTNode| cons_ptr 0 4))
+         (cdr_ptr (llvm:gep |%ASTNode| cons_ptr 0 5)))
+    (llvm:store (llvm:const-int |i32| 1) type_ptr)
+    (llvm:store car car_ptr)
+    (llvm:store cdr cdr_ptr)
+    (llvm:ret cons_ptr)))
 
-                                        ; ============================================================================
-                                        ; 8. codegen_create_pair
-                                        ; Create a pair (cons cell where cdr is wrapped in a list node).
-                                        ; Allocates two nodes: the cons cell and a cdr wrapper.
-                                        ; Parameters: car_val (ASTNode*), cdr_val (ASTNode*)
-                                        ; Returns: ASTNode* list node
-                                        ; ============================================================================
+;; ============================================================================
+;; 8. codegen_create_pair
+;; Create a pair (cons cell where cdr is wrapped in a list node).
+;; Allocates two nodes: the cons cell and a cdr wrapper.
+;; Parameters: car_val (ASTNode*), cdr_val (ASTNode*)
+;; Returns: ASTNode* list node
+;; ============================================================================
 (llvm:define-function (codegen_create_pair (car_val |%ASTNode*|) (cdr_val |%ASTNode*|)) |%ASTNode*|
-                                        ; Allocate and initialize the cons cell with flat let* bindings
-                      (let* ((cons (llvm:call malloc (llvm:const-int |i64| 48)))
-                             (cons_ptr (llvm:bitcast cons |%ASTNode*|))
-                             (type_ptr (llvm:gep |%ASTNode| cons_ptr 0 0))
-                             (atom_type_ptr (llvm:gep |%ASTNode| cons_ptr 0 1))
-                             (value_ptr (llvm:gep |%ASTNode| cons_ptr 0 2))
-                             (value_len_ptr (llvm:gep |%ASTNode| cons_ptr 0 3))
-                             (car_ptr (llvm:gep |%ASTNode| cons_ptr 0 4))
-                             (line_ptr (llvm:gep |%ASTNode| cons_ptr 0 6))
-                             (column_ptr (llvm:gep |%ASTNode| cons_ptr 0 7)))
-                        (llvm:store (llvm:const-int |i32| 1) type_ptr)
-                        (llvm:store (llvm:const-int |i32| 0) atom_type_ptr)
-                        (llvm:store (llvm:const-null |i8*|) value_ptr)
-                        (llvm:store (llvm:const-int |i64| 0) value_len_ptr)
-                        (llvm:store car_val car_ptr)
-                        (llvm:store (llvm:const-int |i32| 0) line_ptr)
-                        (llvm:store (llvm:const-int |i32| 0) column_ptr)
-                                        ; Allocate and initialize the cdr wrapper
-                        (let* ((cdr_cons (llvm:call malloc (llvm:const-int |i64| 48)))
-                               (cdr_cons_ptr (llvm:bitcast cdr_cons |%ASTNode*|))
-                               (cdr_type_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 0))
-                               (cdr_atom_type_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 1))
-                               (cdr_value_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 2))
-                               (cdr_value_len_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 3))
-                               (cdr_car_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 4))
-                               (cdr_cdr_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 5))
-                               (cdr_line_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 6))
-                               (cdr_column_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 7)))
-                          (llvm:store (llvm:const-int |i32| 1) cdr_type_ptr)
-                          (llvm:store (llvm:const-int |i32| 0) cdr_atom_type_ptr)
-                          (llvm:store (llvm:const-null |i8*|) cdr_value_ptr)
-                          (llvm:store (llvm:const-int |i64| 0) cdr_value_len_ptr)
-                          (llvm:store cdr_val cdr_car_ptr)
-                          (llvm:store (llvm:const-null |i8*|) cdr_cdr_ptr)
-                          (llvm:store (llvm:const-int |i32| 0) cdr_line_ptr)
-                          (llvm:store (llvm:const-int |i32| 0) cdr_column_ptr)
+  ;; Allocate and initialize the cons cell with flat let* bindings
+  (let* ((cons (llvm:call malloc (llvm:const-int |i64| 48)))
+         (cons_ptr (llvm:bitcast cons |%ASTNode*|))
+         (type_ptr (llvm:gep |%ASTNode| cons_ptr 0 0))
+         (atom_type_ptr (llvm:gep |%ASTNode| cons_ptr 0 1))
+         (value_ptr (llvm:gep |%ASTNode| cons_ptr 0 2))
+         (value_len_ptr (llvm:gep |%ASTNode| cons_ptr 0 3))
+         (car_ptr (llvm:gep |%ASTNode| cons_ptr 0 4))
+         (line_ptr (llvm:gep |%ASTNode| cons_ptr 0 6))
+         (column_ptr (llvm:gep |%ASTNode| cons_ptr 0 7)))
+    (llvm:store (llvm:const-int |i32| 1) type_ptr)
+    (llvm:store (llvm:const-int |i32| 0) atom_type_ptr)
+    (llvm:store (llvm:const-null |i8*|) value_ptr)
+    (llvm:store (llvm:const-int |i64| 0) value_len_ptr)
+    (llvm:store car_val car_ptr)
+    (llvm:store (llvm:const-int |i32| 0) line_ptr)
+    (llvm:store (llvm:const-int |i32| 0) column_ptr)
+    ;; Allocate and initialize the cdr wrapper
+    (let* ((cdr_cons (llvm:call malloc (llvm:const-int |i64| 48)))
+           (cdr_cons_ptr (llvm:bitcast cdr_cons |%ASTNode*|))
+           (cdr_type_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 0))
+           (cdr_atom_type_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 1))
+           (cdr_value_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 2))
+           (cdr_value_len_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 3))
+           (cdr_car_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 4))
+           (cdr_cdr_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 5))
+           (cdr_line_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 6))
+           (cdr_column_ptr (llvm:gep |%ASTNode| cdr_cons_ptr 0 7)))
+      (llvm:store (llvm:const-int |i32| 1) cdr_type_ptr)
+      (llvm:store (llvm:const-int |i32| 0) cdr_atom_type_ptr)
+      (llvm:store (llvm:const-null |i8*|) cdr_value_ptr)
+      (llvm:store (llvm:const-int |i64| 0) cdr_value_len_ptr)
+      (llvm:store cdr_val cdr_car_ptr)
+      (llvm:store (llvm:const-null |i8*|) cdr_cdr_ptr)
+      (llvm:store (llvm:const-int |i32| 0) cdr_line_ptr)
+      (llvm:store (llvm:const-int |i32| 0) cdr_column_ptr)
                                         ; Set cdr of cons to cdr_cons
-                          (let* ((cdr_ptr (llvm:gep |%ASTNode| cons_ptr 0 5)))
-                            (llvm:store cdr_cons_ptr cdr_ptr)
-                            (llvm:ret cons_ptr)))))
+      (let* ((cdr_ptr (llvm:gep |%ASTNode| cons_ptr 0 5)))
+        (llvm:store cdr_cons_ptr cdr_ptr)
+        (llvm:ret cons_ptr)))))
 
-                                        ; ============================================================================
-                                        ; 9. codegen_is_array_type
-                                        ; Check if an LLVMTypeRef is an array type using element type heuristic.
-                                        ; Parameters: type (LLVMTypeRef / i8*)
-                                        ; Returns: 1 if array, 0 otherwise
-                                        ; ============================================================================
+;; ============================================================================
+;; 9. codegen_is_array_type
+;; Check if an LLVMTypeRef is an array type using element type heuristic.
+;; Parameters: type (LLVMTypeRef / i8*)
+;; Returns: 1 if array, 0 otherwise
+;; ============================================================================
 (llvm:define-function (codegen_is_array_type (type |i8*|)) |i32|
-                      (let* ((type_null (llvm:icmp 'eq type (llvm:const-null |i8*|))))
-                        (llvm:br type_null 'not_array 'get_element_type))
-                      (llvm:label 'get_element_type
-                                  (let* ((element_type (llvm:call llvm_get_element_type type))
-                                         (element_null (llvm:icmp 'eq element_type (llvm:const-null |i8*|))))
-                                    (llvm:br element_null 'not_array 'check_array_element)))
-                      (llvm:label 'check_array_element
+  (let* ((type_null (llvm:icmp 'eq type (llvm:const-null |i8*|))))
+    (llvm:br type_null 'not_array 'get_element_type))
+  (llvm:label 'get_element_type
+    (let* ((element_type (llvm:call llvm_get_element_type type))
+           (element_null (llvm:icmp 'eq element_type (llvm:const-null |i8*|))))
+      (llvm:br element_null 'not_array 'check_array_element)))
+  (llvm:label 'check_array_element
                                         ; element_type is already defined from the get_element_type label above
-                                  (let* ((array_element_type (llvm:call llvm_get_element_type element_type))
-                                         (is_array (llvm:icmp 'ne array_element_type (llvm:const-null |i8*|))))
-                                    (llvm:br is_array 'return_array 'not_array)))
-                      (llvm:label 'return_array
-                                  (llvm:ret (llvm:const-int |i32| 1)))
-                      (llvm:label 'not_array
-                                  (llvm:ret (llvm:const-int |i32| 0))))
+    (let* ((array_element_type (llvm:call llvm_get_element_type element_type))
+           (is_array (llvm:icmp 'ne array_element_type (llvm:const-null |i8*|))))
+      (llvm:br is_array 'return_array 'not_array)))
+  (llvm:label 'return_array
+    (llvm:ret (llvm:const-int |i32| 1)))
+  (llvm:label 'not_array
+    (llvm:ret (llvm:const-int |i32| 0))))
 
-                                        ; ============================================================================
-                                        ; 10. codegen_format_string_name
-                                        ; Format string constant name (e.g., ".str.0").
-                                        ; Parameters: num (i32)
-                                        ; Returns: i8* buffer with formatted name
-                                        ; ============================================================================
+;; ============================================================================
+;; 10. codegen_format_string_name
+;; Format string constant name (e.g., ".str.0").
+;; Parameters: num (i32)
+;; Returns: i8* buffer with formatted name
+;; ============================================================================
 (llvm:define-function (codegen_format_string_name (num |i32|)) |i8*|
-                      (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 16)))
-                             (dot_str (llvm:gep |i8| buffer (llvm:const-int |i64| 0)))
-                             (s (llvm:gep |i8| buffer (llvm:const-int |i64| 1)))
-                             (t (llvm:gep |i8| buffer (llvm:const-int |i64| 2)))
-                             (r (llvm:gep |i8| buffer (llvm:const-int |i64| 3)))
-                             (dot2 (llvm:gep |i8| buffer (llvm:const-int |i64| 4)))
-                             (num_mod (llvm:urem num (llvm:const-int |i32| 10)))
-                             (num_char (llvm:add num_mod (llvm:const-int |i32| 48)))
-                             (num_trunc (llvm:trunc num_char |i32| |i8|))
-                             (num_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 5)))
-                             (null_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 6))))
-                        (llvm:store (llvm:const-int |i8| 46) dot_str)
-                        (llvm:store (llvm:const-int |i8| 115) s)
-                        (llvm:store (llvm:const-int |i8| 116) t)
-                        (llvm:store (llvm:const-int |i8| 114) r)
-                        (llvm:store (llvm:const-int |i8| 46) dot2)
-                        (llvm:store num_trunc num_ptr)
-                        (llvm:store (llvm:const-int |i8| 0) null_ptr)
-                        (llvm:ret buffer)))
+  (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 16)))
+         (dot_str (llvm:gep |i8| buffer (llvm:const-int |i64| 0)))
+         (s (llvm:gep |i8| buffer (llvm:const-int |i64| 1)))
+         (t (llvm:gep |i8| buffer (llvm:const-int |i64| 2)))
+         (r (llvm:gep |i8| buffer (llvm:const-int |i64| 3)))
+         (dot2 (llvm:gep |i8| buffer (llvm:const-int |i64| 4)))
+         (num_mod (llvm:urem num (llvm:const-int |i32| 10)))
+         (num_char (llvm:add num_mod (llvm:const-int |i32| 48)))
+         (num_trunc (llvm:trunc num_char |i32| |i8|))
+         (num_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 5)))
+         (null_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 6))))
+    (llvm:store (llvm:const-int |i8| 46) dot_str)
+    (llvm:store (llvm:const-int |i8| 115) s)
+    (llvm:store (llvm:const-int |i8| 116) t)
+    (llvm:store (llvm:const-int |i8| 114) r)
+    (llvm:store (llvm:const-int |i8| 46) dot2)
+    (llvm:store num_trunc num_ptr)
+    (llvm:store (llvm:const-int |i8| 0) null_ptr)
+    (llvm:ret buffer)))
 
-                                        ; ============================================================================
-                                        ; 11. codegen_format_number
-                                        ; Convert number to string (simplified - single digit).
-                                        ; Parameters: num (i64)
-                                        ; Returns: i8* buffer with formatted number
-                                        ; ============================================================================
+;; ============================================================================
+;; 11. codegen_format_number
+;; Convert number to string (simplified - single digit).
+;; Parameters: num (i64)
+;; Returns: i8* buffer with formatted number
+;; ============================================================================
 (llvm:define-function (codegen_format_number (num |i64|)) |i8*|
-                      (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 32)))
-                             (num_mod (llvm:urem num (llvm:const-int |i64| 10)))
-                             (num_char (llvm:add num_mod (llvm:const-int |i64| 48)))
-                             (num_trunc (llvm:trunc num_char |i32| |i8|))
-                             (null_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 1))))
-                        (llvm:store num_trunc buffer)
-                        (llvm:store (llvm:const-int |i8| 0) null_ptr)
-                        (llvm:ret buffer)))
+  (let* ((buffer (llvm:call malloc (llvm:const-int |i64| 32)))
+         (num_mod (llvm:urem num (llvm:const-int |i64| 10)))
+         (num_char (llvm:add num_mod (llvm:const-int |i64| 48)))
+         (num_trunc (llvm:trunc num_char |i32| |i8|))
+         (null_ptr (llvm:gep |i8| buffer (llvm:const-int |i64| 1))))
+    (llvm:store num_trunc buffer)
+    (llvm:store (llvm:const-int |i8| 0) null_ptr)
+    (llvm:ret buffer)))
 
-                                        ; ============================================================================
-                                        ; 12. codegen_store_type
-                                        ; Store type mapping in CodeGen structure.
-                                        ; Parameters: cg (CodeGen*), name (i8*), name_len (i64), type (LLVMTypeRef)
-                                        ; Returns: void
-                                        ; ============================================================================
+;; ============================================================================
+;; 12. codegen_store_type
+;; Store type mapping in CodeGen structure.
+;; Parameters: cg (CodeGen*), name (i8*), name_len (i64), type (LLVMTypeRef)
+;; Returns: void
+;; ============================================================================
 (llvm:define-function (codegen_store_type (cg |%CodeGen*|) (name |i8*|) (name_len |i64|) (type |i8*|)) |void|
-                      (let* ((name_node (llvm:call codegen_create_string_node name name_len))
-                             (type_ptr_cast (llvm:bitcast type |i8*|))
-                             (type_node (llvm:call codegen_create_pointer_node type_ptr_cast))
-                             (pair (llvm:call codegen_create_cons name_node type_node))
-                             (types_ptr (llvm:gep |%CodeGen| cg 0 13))
-                             (current_types (llvm:load types_ptr |%ASTNode*|))
-                             (new_types (llvm:call codegen_create_cons pair current_types)))
-                        (llvm:store new_types types_ptr)
-                        (llvm:ret-void)))
+  (let* ((name_node (llvm:call codegen_create_string_node name name_len))
+         (type_ptr_cast (llvm:bitcast type |i8*|))
+         (type_node (llvm:call codegen_create_pointer_node type_ptr_cast))
+         (pair (llvm:call codegen_create_cons name_node type_node))
+         (types_ptr (llvm:gep |%CodeGen| cg 0 13))
+         (current_types (llvm:load types_ptr |%ASTNode*|))
+         (new_types (llvm:call codegen_create_cons pair current_types)))
+    (llvm:store new_types types_ptr)
+    (llvm:ret-void)))
 
-                                        ; ============================================================================
-                                        ; 13. codegen_get_type
-                                        ; Look up a type by name and return LLVMTypeRef.
-                                        ; Parameters: cg (CodeGen*), name (i8*), name_len (i64)
-                                        ; Returns: LLVMTypeRef for the type, or null if not found
-                                        ; ============================================================================
+;; ============================================================================
+;; 13. codegen_get_type
+;; Look up a type by name and return LLVMTypeRef.
+;; Parameters: cg (CodeGen*), name (i8*), name_len (i64)
+;; Returns: LLVMTypeRef for the type, or null if not found
+;; ============================================================================
 (llvm:define-function (codegen_get_type (cg |%CodeGen*|) (name |i8*|) (name_len |i64|)) |i8*|
-                      (let* ((types_ptr (llvm:gep |%CodeGen| cg 0 13))
-                             (types (llvm:load types_ptr |%ASTNode*|))
-                             (current_type (llvm:alloca |%ASTNode*|))
-                             (types_null (llvm:icmp 'eq types (llvm:const-null |%ASTNode*|))))
-                        (llvm:br types_null 'not_found_type 'search_loop_type)
-                        (llvm:label 'search_loop_type
-                                    (llvm:store types current_type)
-                                    (llvm:br 'iterate_type))
-                        (llvm:label 'iterate_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (current_null_type (llvm:icmp 'eq current_val_type (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br current_null_type 'not_found_type 'check_pair_type)))
-                        (llvm:label 'check_pair_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_null_type (llvm:icmp 'eq pair_type (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br pair_null_type 'next_type 'compare_name_type)))
-                        (llvm:label 'compare_name_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
-                                           (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
-                                           (name_node_null_type (llvm:icmp 'eq name_node_type (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br name_node_null_type 'next_type 'get_name_type)))
-                        (llvm:label 'get_name_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
-                                           (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
-                                           (stored_name_ptr_type (llvm:gep |%ASTNode| name_node_type 0 2))
-                                           (stored_name_type (llvm:load stored_name_ptr_type |i8*|))
-                                           (stored_len_ptr_type (llvm:gep |%ASTNode| name_node_type 0 3))
-                                           (stored_len_type (llvm:load stored_len_ptr_type |i64|))
-                                           (len_match_type (llvm:icmp 'eq stored_len_type name_len)))
-                                      (llvm:br len_match_type 'compare_chars_type 'next_type)))
-                        (llvm:label 'compare_chars_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
-                                           (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
-                                           (stored_name_ptr_type (llvm:gep |%ASTNode| name_node_type 0 2))
-                                           (stored_name_type (llvm:load stored_name_ptr_type |i8*|))
-                                           (len_int_type (llvm:trunc name_len |i64| |i32|))
-                                           (cmp_result_type (llvm:call strncmp stored_name_type name len_int_type))
-                                           (is_match_type (llvm:icmp 'eq cmp_result_type (llvm:const-int |i32| 0))))
-                                      (llvm:br is_match_type 'found_type 'next_type)))
-                        (llvm:label 'found_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
-                                           (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
-                                           (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br type_node_null 'not_found_type 'extract_type)))
-                        (llvm:label 'extract_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
-                                           (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
-                                           (type_atom_type_ptr (llvm:gep |%ASTNode| type_node 0 1))
-                                           (type_atom_type (llvm:load type_atom_type_ptr |i32|))
-                                           (is_pointer_type (llvm:icmp 'eq type_atom_type (llvm:const-int |i32| 999))))
-                                      (llvm:br is_pointer_type 'cast_back_type 'not_found_type)))
-                        (llvm:label 'cast_back_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
-                                           (pair_type (llvm:load car_ptr_type |%ASTNode*|))
-                                           (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
-                                           (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
-                                           (type_ptr_field (llvm:gep |%ASTNode| type_node 0 2))
-                                           (type_ptr (llvm:load type_ptr_field |i8*|))
-                                           (type_ref (llvm:bitcast type_ptr |i8*|)))
-                                      (llvm:ret type_ref)))
-                        (llvm:label 'next_type
-                                    (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
-                                           (cdr_ptr_type (llvm:gep |%ASTNode| current_val_type 0 5))
-                                           (cdr_type (llvm:load cdr_ptr_type |%ASTNode*|)))
-                                      (llvm:store cdr_type current_type)
-                                      (llvm:br 'iterate_type)))
-                        (llvm:label 'not_found_type
-                                    (llvm:ret (llvm:const-null |i8*|)))))
+  (let* ((types_ptr (llvm:gep |%CodeGen| cg 0 13))
+         (types (llvm:load types_ptr |%ASTNode*|))
+         (current_type (llvm:alloca |%ASTNode*|))
+         (types_null (llvm:icmp 'eq types (llvm:const-null |%ASTNode*|))))
+    (llvm:br types_null 'not_found_type 'search_loop_type)
+    (llvm:label 'search_loop_type
+      (llvm:store types current_type)
+      (llvm:br 'iterate_type))
+    (llvm:label 'iterate_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (current_null_type (llvm:icmp 'eq current_val_type (llvm:const-null |%ASTNode*|))))
+        (llvm:br current_null_type 'not_found_type 'check_pair_type)))
+    (llvm:label 'check_pair_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_null_type (llvm:icmp 'eq pair_type (llvm:const-null |%ASTNode*|))))
+        (llvm:br pair_null_type 'next_type 'compare_name_type)))
+    (llvm:label 'compare_name_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
+             (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
+             (name_node_null_type (llvm:icmp 'eq name_node_type (llvm:const-null |%ASTNode*|))))
+        (llvm:br name_node_null_type 'next_type 'get_name_type)))
+    (llvm:label 'get_name_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
+             (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
+             (stored_name_ptr_type (llvm:gep |%ASTNode| name_node_type 0 2))
+             (stored_name_type (llvm:load stored_name_ptr_type |i8*|))
+             (stored_len_ptr_type (llvm:gep |%ASTNode| name_node_type 0 3))
+             (stored_len_type (llvm:load stored_len_ptr_type |i64|))
+             (len_match_type (llvm:icmp 'eq stored_len_type name_len)))
+        (llvm:br len_match_type 'compare_chars_type 'next_type)))
+    (llvm:label 'compare_chars_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_car_ptr_type (llvm:gep |%ASTNode| pair_type 0 4))
+             (name_node_type (llvm:load pair_car_ptr_type |%ASTNode*|))
+             (stored_name_ptr_type (llvm:gep |%ASTNode| name_node_type 0 2))
+             (stored_name_type (llvm:load stored_name_ptr_type |i8*|))
+             (len_int_type (llvm:trunc name_len |i64| |i32|))
+             (cmp_result_type (llvm:call strncmp stored_name_type name len_int_type))
+             (is_match_type (llvm:icmp 'eq cmp_result_type (llvm:const-int |i32| 0))))
+        (llvm:br is_match_type 'found_type 'next_type)))
+    (llvm:label 'found_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
+             (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
+             (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
+        (llvm:br type_node_null 'not_found_type 'extract_type)))
+    (llvm:label 'extract_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
+             (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
+             (type_atom_type_ptr (llvm:gep |%ASTNode| type_node 0 1))
+             (type_atom_type (llvm:load type_atom_type_ptr |i32|))
+             (is_pointer_type (llvm:icmp 'eq type_atom_type (llvm:const-int |i32| 999))))
+        (llvm:br is_pointer_type 'cast_back_type 'not_found_type)))
+    (llvm:label 'cast_back_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (car_ptr_type (llvm:gep |%ASTNode| current_val_type 0 4))
+             (pair_type (llvm:load car_ptr_type |%ASTNode*|))
+             (pair_cdr_ptr_type (llvm:gep |%ASTNode| pair_type 0 5))
+             (type_node (llvm:load pair_cdr_ptr_type |%ASTNode*|))
+             (type_ptr_field (llvm:gep |%ASTNode| type_node 0 2))
+             (type_ptr (llvm:load type_ptr_field |i8*|))
+             (type_ref (llvm:bitcast type_ptr |i8*|)))
+        (llvm:ret type_ref)))
+    (llvm:label 'next_type
+      (let* ((current_val_type (llvm:load current_type |%ASTNode*|))
+             (cdr_ptr_type (llvm:gep |%ASTNode| current_val_type 0 5))
+             (cdr_type (llvm:load cdr_ptr_type |%ASTNode*|)))
+        (llvm:store cdr_type current_type)
+        (llvm:br 'iterate_type)))
+    (llvm:label 'not_found_type
+      (llvm:ret (llvm:const-null |i8*|)))))
 
-                                        ; ============================================================================
-                                        ; 14. codegen_store_function_type
-                                        ; Store function type mapping in CodeGen structure.
-                                        ; Parameters: cg (CodeGen*), name (i8*), name_len (i64), func_type (LLVMTypeRef)
-                                        ; Returns: void
-                                        ; ============================================================================
+;; ============================================================================
+;; 14. codegen_store_function_type
+;; Store function type mapping in CodeGen structure.
+;; Parameters: cg (CodeGen*), name (i8*), name_len (i64), func_type (LLVMTypeRef)
+;; Returns: void
+;; ============================================================================
 (llvm:define-function (codegen_store_function_type (cg |%CodeGen*|) (name |i8*|) (name_len |i64|) (func_type |i8*|)) |void|
-                      (let* ((func_type_null (llvm:icmp 'eq func_type (llvm:const-null |i8*|)))
-                             (function_types_ptr (llvm:gep |%CodeGen| cg 0 11)))
-                        (llvm:br func_type_null 'skip_store 'store_type)
-                        (llvm:label 'skip_store
-                                    (llvm:ret-void))
-                        (llvm:label 'store_type
-                                    (let* ((name_node (llvm:call codegen_create_string_node name name_len))
-                                           (type_node (llvm:call malloc (llvm:const-int |i64| 48)))
-                                           (type_node_ptr (llvm:bitcast type_node |%ASTNode*|))
-                                           (type_node_type_ptr (llvm:gep |%ASTNode| type_node_ptr 0 0))
-                                           (type_node_atom_type_ptr (llvm:gep |%ASTNode| type_node_ptr 0 1))
-                                           (type_node_value_ptr (llvm:gep |%ASTNode| type_node_ptr 0 2))
-                                           (type_node_len_ptr (llvm:gep |%ASTNode| type_node_ptr 0 3))
-                                           (type_node_car_ptr (llvm:gep |%ASTNode| type_node_ptr 0 4))
-                                           (type_node_cdr_ptr (llvm:gep |%ASTNode| type_node_ptr 0 5))
-                                           (type_node_line_ptr (llvm:gep |%ASTNode| type_node_ptr 0 6))
-                                           (type_node_column_ptr (llvm:gep |%ASTNode| type_node_ptr 0 7))
-                                           (func_type_as_i8 (llvm:bitcast func_type |i8*|)))
-                                      (llvm:store (llvm:const-int |i32| 0) type_node_type_ptr)
-                                      (llvm:store (llvm:const-int |i32| 99) type_node_atom_type_ptr)
-                                      (llvm:store func_type_as_i8 type_node_value_ptr)
-                                      (llvm:store (llvm:const-int |i64| 8) type_node_len_ptr)
-                                      (llvm:store (llvm:const-null |%ASTNode*|) type_node_car_ptr)
-                                      (llvm:store (llvm:const-null |%ASTNode*|) type_node_cdr_ptr)
-                                      (llvm:store (llvm:const-int |i32| 0) type_node_line_ptr)
-                                      (llvm:store (llvm:const-int |i32| 0) type_node_column_ptr)
-                                      (let* ((name_type_pair (llvm:call codegen_create_pair name_node type_node_ptr))
-                                             (current_types (llvm:load function_types_ptr |%ASTNode*|))
-                                             (new_types_list (llvm:call codegen_create_cons name_type_pair current_types)))
-                                        (llvm:store new_types_list function_types_ptr)
-                                        (llvm:ret-void))))))
+  (let* ((func_type_null (llvm:icmp 'eq func_type (llvm:const-null |i8*|)))
+         (function_types_ptr (llvm:gep |%CodeGen| cg 0 11)))
+    (llvm:br func_type_null 'skip_store 'store_type)
+    (llvm:label 'skip_store
+      (llvm:ret-void))
+    (llvm:label 'store_type
+      (let* ((name_node (llvm:call codegen_create_string_node name name_len))
+             (type_node (llvm:call malloc (llvm:const-int |i64| 48)))
+             (type_node_ptr (llvm:bitcast type_node |%ASTNode*|))
+             (type_node_type_ptr (llvm:gep |%ASTNode| type_node_ptr 0 0))
+             (type_node_atom_type_ptr (llvm:gep |%ASTNode| type_node_ptr 0 1))
+             (type_node_value_ptr (llvm:gep |%ASTNode| type_node_ptr 0 2))
+             (type_node_len_ptr (llvm:gep |%ASTNode| type_node_ptr 0 3))
+             (type_node_car_ptr (llvm:gep |%ASTNode| type_node_ptr 0 4))
+             (type_node_cdr_ptr (llvm:gep |%ASTNode| type_node_ptr 0 5))
+             (type_node_line_ptr (llvm:gep |%ASTNode| type_node_ptr 0 6))
+             (type_node_column_ptr (llvm:gep |%ASTNode| type_node_ptr 0 7))
+             (func_type_as_i8 (llvm:bitcast func_type |i8*|)))
+        (llvm:store (llvm:const-int |i32| 0) type_node_type_ptr)
+        (llvm:store (llvm:const-int |i32| 99) type_node_atom_type_ptr)
+        (llvm:store func_type_as_i8 type_node_value_ptr)
+        (llvm:store (llvm:const-int |i64| 8) type_node_len_ptr)
+        (llvm:store (llvm:const-null |%ASTNode*|) type_node_car_ptr)
+        (llvm:store (llvm:const-null |%ASTNode*|) type_node_cdr_ptr)
+        (llvm:store (llvm:const-int |i32| 0) type_node_line_ptr)
+        (llvm:store (llvm:const-int |i32| 0) type_node_column_ptr)
+        (let* ((name_type_pair (llvm:call codegen_create_pair name_node type_node_ptr))
+               (current_types (llvm:load function_types_ptr |%ASTNode*|))
+               (new_types_list (llvm:call codegen_create_cons name_type_pair current_types)))
+          (llvm:store new_types_list function_types_ptr)
+          (llvm:ret-void))))))
 
-                                        ; ============================================================================
-                                        ; 15. codegen_get_function_type
-                                        ; Look up function type by name and return LLVMTypeRef.
-                                        ; Parameters: cg (CodeGen*), name (i8*), name_len (i64)
-                                        ; Returns: LLVMTypeRef for function type, or null if not found
-                                        ; ============================================================================
+;; ============================================================================
+;; 15. codegen_get_function_type
+;; Look up function type by name and return LLVMTypeRef.
+;; Parameters: cg (CodeGen*), name (i8*), name_len (i64)
+;; Returns: LLVMTypeRef for function type, or null if not found
+;; ============================================================================
 (llvm:define-function (codegen_get_function_type (cg |%CodeGen*|) (name |i8*|) (name_len |i64|)) |i8*|
-                      (let* ((function_types_ptr (llvm:gep |%CodeGen| cg 0 11))
-                             (function_types (llvm:load function_types_ptr |%ASTNode*|))
-                             (current_pair (llvm:alloca |%ASTNode*|))
-                             (types_null (llvm:icmp 'eq function_types (llvm:const-null |%ASTNode*|))))
-                        (llvm:br types_null 'not_found 'search_loop)
-                        (llvm:label 'search_loop
-                                    (llvm:store function_types current_pair)
-                                    (llvm:br 'iterate))
-                        (llvm:label 'iterate
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_null (llvm:icmp 'eq pair_val (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br pair_null 'not_found 'check_name)))
-                        (llvm:label 'check_name
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_car_ptr (llvm:gep |%ASTNode| pair_val 0 4))
-                                           (name_node (llvm:load pair_car_ptr |%ASTNode*|))
-                                           (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
-                                           (stored_name (llvm:load stored_name_ptr |i8*|))
-                                           (stored_name_len_ptr (llvm:gep |%ASTNode| name_node 0 3))
-                                           (stored_name_len (llvm:load stored_name_len_ptr |i64|))
-                                           (len_match (llvm:icmp 'eq name_len stored_name_len)))
-                                      (llvm:br len_match 'compare_names 'next_pair)))
-                        (llvm:label 'compare_names
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_car_ptr (llvm:gep |%ASTNode| pair_val 0 4))
-                                           (name_node (llvm:load pair_car_ptr |%ASTNode*|))
-                                           (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
-                                           (stored_name (llvm:load stored_name_ptr |i8*|))
-                                           (name_len_int (llvm:trunc name_len |i64| |i32|))
-                                           (cmp_result (llvm:call strncmp name stored_name name_len_int))
-                                           (is_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0))))
-                                      (llvm:br is_match 'found 'next_pair)))
-                        (llvm:label 'found
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
-                                           (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
-                                           (pair_cdr_null (llvm:icmp 'eq pair_cdr (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br pair_cdr_null 'not_found 'get_type_node)))
-                        (llvm:label 'get_type_node
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
-                                           (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
-                                           (type_node_ptr (llvm:gep |%ASTNode| pair_cdr 0 4))
-                                           (type_node (llvm:load type_node_ptr |%ASTNode*|))
-                                           (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
-                                      (llvm:br type_node_null 'not_found 'extract_type)))
-                        (llvm:label 'extract_type
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
-                                           (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
-                                           (type_node_ptr (llvm:gep |%ASTNode| pair_cdr 0 4))
-                                           (type_node (llvm:load type_node_ptr |%ASTNode*|))
-                                           (type_value_ptr (llvm:gep |%ASTNode| type_node 0 2))
-                                           (type_value (llvm:load type_value_ptr |i8*|))
-                                           (func_type (llvm:bitcast type_value |i8*|)))
-                                      (llvm:ret func_type)))
-                        (llvm:label 'next_pair
-                                    (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
-                                           (pair_cdr_next (llvm:gep |%ASTNode| pair_val 0 5))
-                                           (next_pair_val (llvm:load pair_cdr_next |%ASTNode*|)))
-                                      (llvm:store next_pair_val current_pair)
-                                      (llvm:br 'iterate)))
-                        (llvm:label 'not_found
-                                    (llvm:ret (llvm:const-null |i8*|))))
+  (let* ((function_types_ptr (llvm:gep |%CodeGen| cg 0 11))
+         (function_types (llvm:load function_types_ptr |%ASTNode*|))
+         (current_pair (llvm:alloca |%ASTNode*|))
+         (types_null (llvm:icmp 'eq function_types (llvm:const-null |%ASTNode*|))))
+    (llvm:br types_null 'not_found 'search_loop)
+    (llvm:label 'search_loop
+      (llvm:store function_types current_pair)
+      (llvm:br 'iterate))
+    (llvm:label 'iterate
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_null (llvm:icmp 'eq pair_val (llvm:const-null |%ASTNode*|))))
+        (llvm:br pair_null 'not_found 'check_name)))
+    (llvm:label 'check_name
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_car_ptr (llvm:gep |%ASTNode| pair_val 0 4))
+             (name_node (llvm:load pair_car_ptr |%ASTNode*|))
+             (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
+             (stored_name (llvm:load stored_name_ptr |i8*|))
+             (stored_name_len_ptr (llvm:gep |%ASTNode| name_node 0 3))
+             (stored_name_len (llvm:load stored_name_len_ptr |i64|))
+             (len_match (llvm:icmp 'eq name_len stored_name_len)))
+        (llvm:br len_match 'compare_names 'next_pair)))
+    (llvm:label 'compare_names
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_car_ptr (llvm:gep |%ASTNode| pair_val 0 4))
+             (name_node (llvm:load pair_car_ptr |%ASTNode*|))
+             (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
+             (stored_name (llvm:load stored_name_ptr |i8*|))
+             (name_len_int (llvm:trunc name_len |i64| |i32|))
+             (cmp_result (llvm:call strncmp name stored_name name_len_int))
+             (is_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0))))
+        (llvm:br is_match 'found 'next_pair)))
+    (llvm:label 'found
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
+             (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
+             (pair_cdr_null (llvm:icmp 'eq pair_cdr (llvm:const-null |%ASTNode*|))))
+        (llvm:br pair_cdr_null 'not_found 'get_type_node)))
+    (llvm:label 'get_type_node
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
+             (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
+             (type_node_ptr (llvm:gep |%ASTNode| pair_cdr 0 4))
+             (type_node (llvm:load type_node_ptr |%ASTNode*|))
+             (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
+        (llvm:br type_node_null 'not_found 'extract_type)))
+    (llvm:label 'extract_type
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_cdr_ptr (llvm:gep |%ASTNode| pair_val 0 5))
+             (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
+             (type_node_ptr (llvm:gep |%ASTNode| pair_cdr 0 4))
+             (type_node (llvm:load type_node_ptr |%ASTNode*|))
+             (type_value_ptr (llvm:gep |%ASTNode| type_node 0 2))
+             (type_value (llvm:load type_value_ptr |i8*|))
+             (func_type (llvm:bitcast type_value |i8*|)))
+        (llvm:ret func_type)))
+    (llvm:label 'next_pair
+      (let* ((pair_val (llvm:load current_pair |%ASTNode*|))
+             (pair_cdr_next (llvm:gep |%ASTNode| pair_val 0 5))
+             (next_pair_val (llvm:load pair_cdr_next |%ASTNode*|)))
+        (llvm:store next_pair_val current_pair)
+        (llvm:br 'iterate)))
+    (llvm:label 'not_found
+      (llvm:ret (llvm:const-null |i8*|))))
 
-                                        ; ============================================================================
-                                        ; 16. codegen_int_to_string
-                                        ; Convert integer to string representation.
-                                        ; Parameters: value (i32), buf (i8*)
-                                        ; Returns: Length of string (i64)
-                                        ; ============================================================================
-(llvm:define-function (codegen_int_to_string (value |i32|) (buf |i8*|)) |i64|
-                      (let* ((digits (llvm:alloca |[10 x i8]|))
-                             (digit_count (llvm:alloca |i32|))
-                             (val (llvm:alloca |i32|))
-                             (i (llvm:alloca |i32|))
-                             (is_zero (llvm:icmp 'eq value (llvm:const-int |i32| 0))))
-                        (llvm:br is_zero 'write_zero 'convert))
-                      (llvm:label 'write_zero
-                                  (llvm:store (llvm:const-int |i8| 48) buf)
-                                  (llvm:ret (llvm:const-int |i64| 1)))
-                      (llvm:label 'convert
-                                  (llvm:store (llvm:const-int |i32| 0) digit_count)
-                                  (llvm:store value val)
-                                  (llvm:br 'digit_loop))
-                      (llvm:label 'digit_loop
-                                  (let* ((val_current (llvm:load val |i32|))
-                                         (is_done (llvm:icmp 'eq val_current (llvm:const-int |i32| 0))))
-                                    (llvm:br is_done 'reverse 'extract_digit)))
-                      (llvm:label 'extract_digit
-                                  (let* ((val_current (llvm:load val |i32|))
-                                         (remainder (llvm:urem val_current (llvm:const-int |i32| 10)))
-                                         (digit_char_i32 (llvm:add remainder (llvm:const-int |i32| 48)))
-                                         (digit_char (llvm:trunc digit_char_i32 |i32| |i8|))
-                                         (count (llvm:load digit_count |i32|))
-                                         (digit_ptr (llvm:gep |[10 x i8]| digits 0 count))
-                                         (count_new (llvm:add count (llvm:const-int |i32| 1)))
-                                         (val_new (llvm:udiv val_current (llvm:const-int |i32| 10))))
-                                    (llvm:store digit_char digit_ptr)
-                                    (llvm:store count_new digit_count)
-                                    (llvm:store val_new val)
-                                    (llvm:br 'digit_loop)))
-                      (llvm:label 'reverse
-                                  (llvm:store (llvm:const-int |i32| 0) i)
-                                  (llvm:br 'reverse_loop))
-                      (llvm:label 'reverse_loop
-                                  (let* ((i_val (llvm:load i |i32|))
-                                         (count_check (llvm:load digit_count |i32|))
-                                         (done (llvm:icmp 'uge i_val count_check)))
-                                    (llvm:br done 'return_len 'copy_digit)))
-                      (llvm:label 'copy_digit
-                                  (let* ((i_val (llvm:load i |i32|))
-                                         (count_check (llvm:load digit_count |i32|))
-                                         (src_idx (llvm:sub count_check (llvm:const-int |i32| 1)))
-                                         (src_idx_sub (llvm:sub src_idx i_val))
-                                         (src_ptr (llvm:gep |[10 x i8]| digits 0 src_idx_sub))
-                                         (digit (llvm:load src_ptr |i8|))
-                                         (i_val_64 (llvm:zext i_val |i32| |i64|))
-                                         (dest_ptr (llvm:gep |i8| buf i_val_64))
-                                         (i_new (llvm:add i_val (llvm:const-int |i32| 1))))
-                                    (llvm:store digit dest_ptr)
-                                    (llvm:store i_new i)
-                                    (llvm:br 'reverse_loop)))
-                      (llvm:label 'return_len
-                                  (let* ((count_ret (llvm:load digit_count |i32|))
-                                         (count_ret_64 (llvm:zext count_ret |i32| |i64|)))
-                                    (llvm:ret count_ret_64))))
+  ;; ============================================================================
+  ;; 16. codegen_int_to_string
+  ;; Convert integer to string representation.
+  ;; Parameters: value (i32), buf (i8*)
+  ;; Returns: Length of string (i64)
+  ;; ============================================================================
+  (llvm:define-function (codegen_int_to_string (value |i32|) (buf |i8*|)) |i64|
+    (let* ((digits (llvm:alloca |[10 x i8]|))
+           (digit_count (llvm:alloca |i32|))
+           (val (llvm:alloca |i32|))
+           (i (llvm:alloca |i32|))
+           (is_zero (llvm:icmp 'eq value (llvm:const-int |i32| 0))))
+      (llvm:br is_zero 'write_zero 'convert))
+    (llvm:label 'write_zero
+      (llvm:store (llvm:const-int |i8| 48) buf)
+      (llvm:ret (llvm:const-int |i64| 1)))
+    (llvm:label 'convert
+      (llvm:store (llvm:const-int |i32| 0) digit_count)
+      (llvm:store value val)
+      (llvm:br 'digit_loop))
+    (llvm:label 'digit_loop
+      (let* ((val_current (llvm:load val |i32|))
+             (is_done (llvm:icmp 'eq val_current (llvm:const-int |i32| 0))))
+        (llvm:br is_done 'reverse 'extract_digit)))
+    (llvm:label 'extract_digit
+      (let* ((val_current (llvm:load val |i32|))
+             (remainder (llvm:urem val_current (llvm:const-int |i32| 10)))
+             (digit_char_i32 (llvm:add remainder (llvm:const-int |i32| 48)))
+             (digit_char (llvm:trunc digit_char_i32 |i32| |i8|))
+             (count (llvm:load digit_count |i32|))
+             (digit_ptr (llvm:gep |[10 x i8]| digits 0 count))
+             (count_new (llvm:add count (llvm:const-int |i32| 1)))
+             (val_new (llvm:udiv val_current (llvm:const-int |i32| 10))))
+        (llvm:store digit_char digit_ptr)
+        (llvm:store count_new digit_count)
+        (llvm:store val_new val)
+        (llvm:br 'digit_loop)))
+    (llvm:label 'reverse
+      (llvm:store (llvm:const-int |i32| 0) i)
+      (llvm:br 'reverse_loop))
+    (llvm:label 'reverse_loop
+      (let* ((i_val (llvm:load i |i32|))
+             (count_check (llvm:load digit_count |i32|))
+             (done (llvm:icmp 'uge i_val count_check)))
+        (llvm:br done 'return_len 'copy_digit)))
+    (llvm:label 'copy_digit
+      (let* ((i_val (llvm:load i |i32|))
+             (count_check (llvm:load digit_count |i32|))
+             (src_idx (llvm:sub count_check (llvm:const-int |i32| 1)))
+             (src_idx_sub (llvm:sub src_idx i_val))
+             (src_ptr (llvm:gep |[10 x i8]| digits 0 src_idx_sub))
+             (digit (llvm:load src_ptr |i8|))
+             (i_val_64 (llvm:zext i_val |i32| |i64|))
+             (dest_ptr (llvm:gep |i8| buf i_val_64))
+             (i_new (llvm:add i_val (llvm:const-int |i32| 1))))
+        (llvm:store digit dest_ptr)
+        (llvm:store i_new i)
+        (llvm:br 'reverse_loop)))
+    (llvm:label 'return_len
+      (let* ((count_ret (llvm:load digit_count |i32|))
+             (count_ret_64 (llvm:zext count_ret |i32| |i64|)))
+        (llvm:ret count_ret_64))))
 
-                                        ; ============================================================================
-                                        ; 17. codegen_create_int_node
-                                        ; Create an AST node for an integer value.
-                                        ; Parameters: value (i32)
-                                        ; Returns: ASTNode* for number atom (atom_type=TOKEN_NUMBER=2)
-                                        ; ============================================================================
-(llvm:define-function (codegen_create_int_node (value |i32|)) |%ASTNode*|
-                      (let* ((node (llvm:call malloc (llvm:const-int |i64| 48)))
-                             (node_ptr (llvm:bitcast node |%ASTNode*|))
-                             (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
-                             (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
-                             (str_buf (llvm:call malloc (llvm:const-int |i64| 12)))
-                             (str_len (llvm:call codegen_int_to_string value str_buf))
-                             (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
-                             (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
-                             (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
-                             (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5)))
-                        (llvm:store (llvm:const-int |i32| 0) type_ptr)
-                        (llvm:store (llvm:const-int |i32| 2) atom_type_ptr)
-                        (llvm:store str_buf value_ptr)
-                        (llvm:store str_len len_ptr)
-                        (llvm:store (llvm:const-null |%ASTNode*|) car_ptr)
-                        (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
-                        (llvm:ret node_ptr)))
+  ;; ============================================================================
+  ;; 17. codegen_create_int_node
+  ;; Create an AST node for an integer value.
+  ;; Parameters: value (i32)
+  ;; Returns: ASTNode* for number atom (atom_type=TOKEN_NUMBER=2)
+  ;; ============================================================================
+  (llvm:define-function (codegen_create_int_node (value |i32|)) |%ASTNode*|
+    (let* ((node (llvm:call malloc (llvm:const-int |i64| 48)))
+           (node_ptr (llvm:bitcast node |%ASTNode*|))
+           (type_ptr (llvm:gep |%ASTNode| node_ptr 0 0))
+           (atom_type_ptr (llvm:gep |%ASTNode| node_ptr 0 1))
+           (str_buf (llvm:call malloc (llvm:const-int |i64| 12)))
+           (str_len (llvm:call codegen_int_to_string value str_buf))
+           (value_ptr (llvm:gep |%ASTNode| node_ptr 0 2))
+           (len_ptr (llvm:gep |%ASTNode| node_ptr 0 3))
+           (car_ptr (llvm:gep |%ASTNode| node_ptr 0 4))
+           (cdr_ptr (llvm:gep |%ASTNode| node_ptr 0 5)))
+      (llvm:store (llvm:const-int |i32| 0) type_ptr)
+      (llvm:store (llvm:const-int |i32| 2) atom_type_ptr)
+      (llvm:store str_buf value_ptr)
+      (llvm:store str_len len_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) car_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
+      (llvm:ret node_ptr)))

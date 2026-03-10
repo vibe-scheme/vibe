@@ -1,0 +1,74 @@
+#+TITLE: Vibe Language Module for Doom Emacs
+#+AUTHOR: Vibe Project
+
+* Overview
+
+This Doom module provides Vibe language support: ~vibe-mode~ (scheme-derived with custom indentation) and ~vibe-ts-mode~ (tree-sitter integration when the grammar is built).
+
+* Prerequisites
+
+- Emacs 29+ (for built-in treesit)
+- Doom Emacs
+- Node.js (for ~tree-sitter generate~)
+- C compiler (cc, gcc, or clang)
+
+* Installation (Local Development)
+
+** 1. Clone the Vibe repository
+
+#+begin_src shell
+git clone <vibe-repo-url> ~/Source/vibe
+cd ~/Source/vibe
+#+end_src
+
+** 2. Build the tree-sitter grammar
+
+#+begin_src shell
+cd tree-sitter-vibe
+npm install
+./build.sh
+cd ..
+#+end_src
+
+This produces ~tree-sitter-vibe/build/libtree-sitter-vibe.so~ (Linux) or ~libtree-sitter-vibe.dylib~ (macOS). The grammar must be built before tree-sitter features will work.
+
+** 3. Add the module to Doom
+
+Doom requires the module to live under ~$DOOMDIR/modules/~. Create a symlink:
+
+#+begin_src shell
+ln -s /path/to/vibe/doom-modules/lang/vibe ~/.config/doom/modules/lang/vibe
+#+end_src
+
+Replace ~/path/to/vibe~ with the actual path to your Vibe repo (e.g. ~~/Source/vibe~).
+
+Then add ~vibe~ to the ~:lang~ section in ~$DOOMDIR/init.el~:
+
+#+begin_src elisp
+(lang
+  ...
+  vibe
+  ...)
+#+end_src
+
+** 4. Update packages.el (if using a different Vibe path)
+
+If your Vibe repo is not at ~~/Source/vibe~, edit ~doom-modules/lang/vibe/packages.el~ and update the ~:local-repo~ paths in the ~package!~ declarations.
+
+** 5. Sync and restart
+
+#+begin_src shell
+doom sync
+#+end_src
+
+Restart Emacs. Opening a ~.vibe~ file should use ~vibe-ts-mode~ when the grammar is available.
+
+* Fallback
+
+If the grammar is not built or fails to load, ~vibe-ts-mode~ still activates but uses ~vibe-mode~ behavior (scheme-mode with custom indent specs for ~llvm:define-function~, etc.). No tree-sitter features will be available.
+
+* Troubleshooting
+
+- **Grammar not loading**: Ensure ~tree-sitter-vibe/build/~ exists and contains ~libtree-sitter-vibe.so~ or ~libtree-sitter-vibe.dylib~. Run ~./build.sh~ in ~tree-sitter-vibe/~.
+- **Wrong mode**: Check that ~treesit-extra-load-path~ includes the build directory. Use ~M-x treesit-language-available-p~ with ~vibe~ to verify.
+- **Indentation issues**: ~vibe-mode~ uses ~scheme-indent-function~ with indent spec 1 for define-like forms. If tree-sitter is active, ~treesit-simple-indent-rules~ apply.

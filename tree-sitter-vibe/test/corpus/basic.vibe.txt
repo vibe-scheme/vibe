@@ -1,0 +1,2 @@
+(llvm:define-function (foo (x |i32|)) |void|
+  (llvm:ret (llvm:const-int |i32| 0)))
