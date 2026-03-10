@@ -329,181 +329,45 @@ done:
 ; codegen_append: defined in codegen.vibe
 declare void @codegen_append(%CodeGen*, i8*, i64)
 
-; Generate string constant
-; codegen_string_literal: Generate a string constant in IR
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   str: String value
-;   len: String length
-; Returns: Constant name (as string pointer)
-; NOTE: This function generates the constant definition using both LLVM API and text IR.
-; LLVM API is used to create the actual constant, text IR is kept for backward compatibility.
+; codegen_string_literal: Deferred migration - bootstrap DSL has bug with let* body (store + br)
 define i8* @codegen_string_literal(%CodeGen* %cg, i8* %str, i64 %len) {
 entry:
-    ; Get unique constant name
     %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
     %counter = load i32, i32* %counter_ptr
     %new_counter = add i32 %counter, 1
     store i32 %new_counter, i32* %counter_ptr
-    
-    ; Generate constant name (simplified - in real implementation, format number)
-    ; For now, use a simple naming scheme
     %name = call i8* @codegen_format_string_name(i32 %counter)
-    
-    ; Get LLVM context and module
     %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
     %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
     %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
     %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    
-    ; Create string constant using LLVM API
     %context_null = icmp eq %LLVMContextRef %context, null
     %module_null = icmp eq %LLVMModuleRef %module, null
     %can_use_llvm = or i1 %context_null, %module_null
     %can_use_llvm_not = xor i1 %can_use_llvm, -1
     br i1 %can_use_llvm_not, label %create_llvm_constant, label %text_only
-    
 create_llvm_constant:
-    ; Get i8 type
     %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    
-    ; Create array type [len+1 x i8] (including null terminator)
     %len_plus_one = add i64 %len, 1
     %len_plus_one_int = trunc i64 %len_plus_one to i32
     %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
-    
-    ; Create string constant (with null terminator)
     %str_len_int = trunc i64 %len to i32
     %const_str = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %str_len_int, i32 0)
-    
-    ; Add as global variable with the constant name
     %global = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %array_type, i8* %name)
-    
-    ; Set initializer
     call void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %const_str)
-    
-    ; Set as constant
     call void @llvm_set_global_constant(%LLVMValueRef %global, i32 1)
-    
-    ; Set linkage to private (equivalent to "private" in text IR)
-    ; LLVMLinkage enum: LLVMPrivateLinkage = 0
     call void @llvm_set_linkage(%LLVMValueRef %global, i32 0)
-    
     br label %text_only
-    
 text_only:
-    ; Generate IR: @.str_N = private constant [L x i8] c"...\00"
-    ; Keep text IR generation for backward compatibility
     call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
-    
     ret i8* %name
 }
 
-; Append string constant definition to IR
-; codegen_append_string_constant: Append string constant definition
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Constant name
-;   str: String value
-;   len: String length
-define void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len) {
-entry:
-    ; Generate: @.str_N = private constant [L x i8] c"...\00"
-    ; Note: name is like ".str.0", we need "@.str.0" for the constant declaration
-    ; Start with "@"
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
-    
-    ; Append name (name is ".str.0", so this gives "@.str.0")
-    %name_len = call i64 @strlen(i8* %name)
-    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
-    
-    ; Append " = private constant ["
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.constant_decl, i32 0, i32 0), i64 21)
-    
-    ; Append length as string (including null terminator)
-    %len_plus_one = add i64 %len, 1
-    %len_str = call i8* @codegen_format_number(i64 %len_plus_one)
-    %len_str_len = call i64 @strlen(i8* %len_str)
-    call void @codegen_append(%CodeGen* %cg, i8* %len_str, i64 %len_str_len)
-    
-    ; Append " x i8] c\""
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([10 x i8], [10 x i8]* @.str.x_i8_c_quote, i32 0, i32 0), i64 9)
-    
-    ; Append string with escaping
-    call void @codegen_append_escaped_string(%CodeGen* %cg, i8* %str, i64 %len)
-    
-    ; Append null terminator "\00"
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
-    
-    ; Append "\"\0A"
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.quote_newline, i32 0, i32 0), i64 2)
-    
-    ret void
-}
+; codegen_append_string_constant: defined in codegen.vibe
+declare void @codegen_append_string_constant(%CodeGen*, i8*, i8*, i64)
 
-
-; Append escaped string
-; codegen_append_escaped_string: Append string with proper escaping for LLVM IR
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   str: String value
-;   len: String length
-define void @codegen_append_escaped_string(%CodeGen* %cg, i8* %str, i64 %len) {
-entry:
-    %i = alloca i64
-    store i64 0, i64* %i
-    br label %loop
-
-loop:
-    %i_val = load i64, i64* %i
-    %done = icmp uge i64 %i_val, %len
-    br i1 %done, label %exit, label %process_char
-
-process_char:
-    %char_ptr = getelementptr i8, i8* %str, i64 %i_val
-    %char = load i8, i8* %char_ptr
-    %char_int = zext i8 %char to i32
-    
-    ; Check if null byte - escape as \00
-    %is_null = icmp eq i32 %char_int, 0
-    br i1 %is_null, label %escape_null, label %check_quote
-    
-escape_null:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
-    br label %increment
-    
-check_quote:
-    ; Check if quote - escape as \"
-    %is_quote = icmp eq i32 %char_int, 34
-    br i1 %is_quote, label %escape_quote, label %check_backslash
-    
-escape_quote:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2)
-    br label %increment
-    
-check_backslash:
-    ; Check if backslash - escape as \\
-    %is_backslash = icmp eq i32 %char_int, 92
-    br i1 %is_backslash, label %escape_backslash, label %normal_char
-    
-escape_backslash:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2)
-    br label %increment
-    
-normal_char:
-    ; Write byte directly
-    call void @codegen_append(%CodeGen* %cg, i8* %char_ptr, i64 1)
-    br label %increment
-    
-increment:
-    %i_val_inc = load i64, i64* %i
-    %i_new = add i64 %i_val_inc, 1
-    store i64 %i_new, i64* %i
-    br label %loop
-
-exit:
-    ret void
-}
+; codegen_append_escaped_string: defined in codegen.vibe
+declare void @codegen_append_escaped_string(%CodeGen*, i8*, i64)
 
 ; Handle define-bitcode-type AST node
 ; codegen_define_llvm_type: Generate LLVM type definition using direct LLVM API
@@ -839,157 +703,12 @@ not_bytevector:
 ; codegen_create_pointer_node: defined in codegen.vibe
 declare %ASTNode* @codegen_create_pointer_node(i8*)
 
-; Store constant in constants list
-; codegen_store_constant: Store a constant name and LLVMValueRef pair
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Constant name
-;   name_len: Name length
-;   value: LLVMValueRef for the constant
-define void @codegen_store_constant(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %value) {
-entry:
-    ; Debug: Storing constant
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_storing_constant, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* %name)
-    %value_ptr_cast = bitcast %LLVMValueRef %value to i8*
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr_cast)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Create name node
-    %name_node = call %ASTNode* @codegen_create_string_node(i8* %name, i64 %name_len)
-    
-    ; Create value node (pointer node)
-    %value_node = call %ASTNode* @codegen_create_pointer_node(i8* %value_ptr_cast)
-    
-    ; Create pair: (name . value)
-    %pair = call %ASTNode* @codegen_create_cons(%ASTNode* %name_node, %ASTNode* %value_node)
-    
-    ; Get current constants list
-    %constants_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 12
-    %current_constants = load %ASTNode*, %ASTNode** %constants_ptr
-    
-    ; Prepend new pair to list
-    %new_constants = call %ASTNode* @codegen_create_cons(%ASTNode* %pair, %ASTNode* %current_constants)
-    
-    ; Store updated list
-    store %ASTNode* %new_constants, %ASTNode** %constants_ptr
-    
-    ; Debug: Constant stored successfully
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([27 x i8], [27 x i8]* @.str.debug_constant_stored, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr_cast)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ret void
-}
+; codegen_store_constant: defined in codegen.vibe
+declare void @codegen_store_constant(%CodeGen*, i8*, i64, %LLVMValueRef)
 
 ; Get constant by name
-; codegen_get_constant: Look up a constant by name and return LLVMValueRef
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Constant name
-;   name_len: Name length
-; Returns: LLVMValueRef for the constant, or null if not found
-define %LLVMValueRef @codegen_get_constant(%CodeGen* %cg, i8* %name, i64 %name_len) {
-entry:
-    ; Debug: Looking up constant
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([27 x i8], [27 x i8]* @.str.debug_looking_up_constant, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* %name)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Get constants list
-    %constants_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 12
-    %constants = load %ASTNode*, %ASTNode** %constants_ptr
-    
-    %constants_null = icmp eq %ASTNode* %constants, null
-    br i1 %constants_null, label %not_found, label %search_loop
-    
-search_loop:
-    %current = alloca %ASTNode*
-    store %ASTNode* %constants, %ASTNode** %current
-    br label %iterate
-    
-iterate:
-    %current_val = load %ASTNode*, %ASTNode** %current
-    %current_null = icmp eq %ASTNode* %current_val, null
-    br i1 %current_null, label %not_found, label %check_pair
-    
-check_pair:
-    ; Get pair from car: (name . value)
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %current_val, i32 0, i32 4
-    %pair = load %ASTNode*, %ASTNode** %car_ptr
-    %pair_null = icmp eq %ASTNode* %pair, null
-    br i1 %pair_null, label %next, label %compare_name
-    
-compare_name:
-    ; Get name from pair.car
-    %pair_car_ptr = getelementptr %ASTNode, %ASTNode* %pair, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %pair_car_ptr
-    %name_node_null = icmp eq %ASTNode* %name_node, null
-    br i1 %name_node_null, label %next, label %get_name
-    
-get_name:
-    %stored_name_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
-    %stored_name = load i8*, i8** %stored_name_ptr
-    %stored_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
-    %stored_len = load i64, i64* %stored_len_ptr
-    
-    ; Compare names
-    %len_match = icmp eq i64 %stored_len, %name_len
-    br i1 %len_match, label %compare_chars, label %next
-    
-compare_chars:
-    %len_int = trunc i64 %name_len to i32
-    %cmp_result = call i32 @strncmp(i8* %stored_name, i8* %name, i32 %len_int)
-    %is_match = icmp eq i32 %cmp_result, 0
-    br i1 %is_match, label %found, label %next
-    
-found:
-    ; Get value from pair.cdr
-    %pair_cdr_ptr = getelementptr %ASTNode, %ASTNode* %pair, i32 0, i32 5
-    %value_node = load %ASTNode*, %ASTNode** %pair_cdr_ptr
-    %value_node_null = icmp eq %ASTNode* %value_node, null
-    br i1 %value_node_null, label %not_found, label %extract_value
-    
-extract_value:
-    ; Verify it's a pointer node (atom_type 999)
-    %value_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 1
-    %value_atom_type = load i32, i32* %value_atom_type_ptr
-    %is_pointer = icmp eq i32 %value_atom_type, 999
-    br i1 %is_pointer, label %cast_back, label %not_found
-    
-cast_back:
-    ; Extract pointer from value field
-    %value_ptr_field = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 2
-    %value_ptr = load i8*, i8** %value_ptr_field
-    %value_ref = bitcast i8* %value_ptr to %LLVMValueRef
-    
-    ; Debug: Constant found
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.debug_constant_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([13 x i8], [13 x i8]* @.str.debug_pointer_value, i32 0, i32 0), i8* %value_ptr)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ret %LLVMValueRef %value_ref
-    
-next:
-    ; Move to next in list
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %current_val, i32 0, i32 5
-    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
-    store %ASTNode* %cdr, %ASTNode** %current
-    br label %iterate
-    
-not_found:
-    ; Debug: Constant not found
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([11 x i8], [11 x i8]* @.str.debug_prefix_codegen, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([26 x i8], [26 x i8]* @.str.debug_constant_not_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* %name)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ret %LLVMValueRef null
-}
+; codegen_get_constant: defined in codegen.vibe
+declare %LLVMValueRef @codegen_get_constant(%CodeGen*, i8*, i64)
 
 ; codegen_is_array_type: defined in codegen.vibe
 declare i32 @codegen_is_array_type(%LLVMTypeRef)
@@ -1095,45 +814,8 @@ done:
 ;   name_len: Name length
 ;   type: LLVMTypeRef for the type
 
-; Store function in llvm_functions list
-; codegen_store_llvm_function: Store a function name, LLVMValueRef, and LLVMTypeRef
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Function name
-;   name_len: Name length
-;   func_value: LLVMValueRef for the function
-;   func_type: LLVMTypeRef for the function type
-define void @codegen_store_llvm_function(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %func_value, %LLVMTypeRef %func_type) {
-entry:
-    ; Create name node
-    %name_node = call %ASTNode* @codegen_create_string_node(i8* %name, i64 %name_len)
-    
-    ; Create function value node (pointer node)
-    %func_value_ptr = bitcast %LLVMValueRef %func_value to i8*
-    %func_value_node = call %ASTNode* @codegen_create_pointer_node(i8* %func_value_ptr)
-    
-    ; Create function type node (pointer node)
-    %func_type_ptr = bitcast %LLVMTypeRef %func_type to i8*
-    %func_type_node = call %ASTNode* @codegen_create_pointer_node(i8* %func_type_ptr)
-    
-    ; Create pair: (func_value . func_type)
-    %value_type_pair = call %ASTNode* @codegen_create_cons(%ASTNode* %func_value_node, %ASTNode* %func_type_node)
-    
-    ; Create pair: (name . (func_value . func_type))
-    %name_func_pair = call %ASTNode* @codegen_create_cons(%ASTNode* %name_node, %ASTNode* %value_type_pair)
-    
-    ; Get current llvm_functions list
-    %llvm_functions_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 14
-    %current_functions = load %ASTNode*, %ASTNode** %llvm_functions_ptr
-    
-    ; Prepend new pair to list
-    %new_functions = call %ASTNode* @codegen_create_cons(%ASTNode* %name_func_pair, %ASTNode* %current_functions)
-    
-    ; Store updated list
-    store %ASTNode* %new_functions, %ASTNode** %llvm_functions_ptr
-    
-    ret void
-}
+; codegen_store_llvm_function: defined in codegen.vibe
+declare void @codegen_store_llvm_function(%CodeGen*, i8*, i64, %LLVMValueRef, %LLVMTypeRef)
 
 ; Get function by name
 ; codegen_get_llvm_function: Look up a function by name and return LLVMValueRef and LLVMTypeRef
@@ -1929,99 +1611,42 @@ done:
 }
 
 
-; Helper: Generate string constant definition only (without reference)
-; codegen_define_string_constant_only: Generate string constant definition
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   str: String value
-;   len: String length
-; Returns: Constant name (as string pointer)
+; codegen_define_string_constant_only: Deferred migration - bootstrap DSL has bug with let* body (store + br)
 define i8* @codegen_define_string_constant_only(%CodeGen* %cg, i8* %str, i64 %len) {
 entry:
-    ; Get unique constant name
     %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
     %counter = load i32, i32* %counter_ptr
     %new_counter = add i32 %counter, 1
     store i32 %new_counter, i32* %counter_ptr
-    
-    ; Generate constant name
     %name = call i8* @codegen_format_string_name(i32 %counter)
-    
-    ; Get LLVM context and module
     %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
     %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
     %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
     %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    
-    ; Create string constant using LLVM API if available
     %context_null = icmp eq %LLVMContextRef %context, null
     %module_null = icmp eq %LLVMModuleRef %module, null
     %can_use_llvm = or i1 %context_null, %module_null
     %can_use_llvm_not = xor i1 %can_use_llvm, -1
     br i1 %can_use_llvm_not, label %create_llvm_constant, label %text_only
-    
 create_llvm_constant:
-    ; Get i8 type
     %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    
-    ; Create array type [len+1 x i8] (including null terminator)
     %len_plus_one = add i64 %len, 1
     %len_plus_one_int = trunc i64 %len_plus_one to i32
     %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
-    
-    ; Create string constant (with null terminator)
     %str_len_int = trunc i64 %len to i32
     %const_str = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %str_len_int, i32 0)
-    
-    ; Add as global variable with the constant name
     %global = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %array_type, i8* %name)
-    
-    ; Set initializer
     call void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %const_str)
-    
-    ; Set as constant
     call void @llvm_set_global_constant(%LLVMValueRef %global, i32 1)
-    
-    ; Set linkage to private (equivalent to "private" in text IR)
-    ; LLVMLinkage enum: LLVMPrivateLinkage = 0
     call void @llvm_set_linkage(%LLVMValueRef %global, i32 0)
-    
     br label %text_only
-    
 text_only:
-    ; Generate IR: @.str_N = private constant [L x i8] c"...\00"
     call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
-    
     ret i8* %name
 }
 
-; Helper: Get string constant name without generating definition
-; codegen_get_string_constant_name: Get constant name for a string (assumes constant already exists)
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   str: String value
-;   len: String length
-; Returns: Constant name (as string pointer)
-; NOTE: This assumes the constant was already generated. Since constants are generated
-; before function calls, and we're calling this during function call generation, the
-; constant was generated with counter value (current_counter - 1). We use that to get the name.
-; For bootstrap, this is sufficient. A more robust implementation would track
-; string-to-constant-name mappings.
-define i8* @codegen_get_string_constant_name(%CodeGen* %cg, i8* %str, i64 %len) {
-entry:
-    ; Get current counter
-    %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
-    %counter = load i32, i32* %counter_ptr
-    
-    ; The constant was generated with counter value (counter - 1) since we're
-    ; calling this after constants have been generated. Use that value.
-    %prev_counter = sub i32 %counter, 1
-    
-    ; Generate name using the counter value that was used when the constant was generated
-    %name = call i8* @codegen_format_string_name(i32 %prev_counter)
-    
-    ret i8* %name
-}
+; codegen_get_string_constant_name: defined in codegen.vibe
+declare i8* @codegen_get_string_constant_name(%CodeGen*, i8*, i64)
 
 ; Append call arguments
 ; codegen_append_call_args: Append arguments to function call
@@ -2324,110 +1949,11 @@ done:
     ret void
 }
 
-; Get generated IR
-; codegen_get_ir: Get the generated IR string
-; Parameters:
-;   cg: Pointer to CodeGen structure
-; Returns: IR string (null-terminated)
-; NOTE: This function returns text IR. Future version will write bitcode directly.
-define i8* @codegen_get_ir(%CodeGen* %cg) {
-entry:
-    %buffer_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 0
-    %buffer = load i8*, i8** %buffer_ptr
-    %pos_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 2
-    %pos = load i64, i64* %pos_ptr
-    
-    ; Null-terminate
-    %null_ptr = getelementptr i8, i8* %buffer, i64 %pos
-    store i8 0, i8* %null_ptr
-    
-    ret i8* %buffer
-}
+; codegen_get_ir: defined in codegen.vibe
+declare i8* @codegen_get_ir(%CodeGen*)
 
-; Extract function name from IR text
-; codegen_extract_function_name: Extract function name from function IR text
-; Parameters:
-;   func_ir: Function IR text (format: "define return-type @name(")
-;   func_ir_len: Length of IR text
-; Returns: Pointer to function name string (allocated with malloc), or null on error
-; NOTE: The returned string must be freed by caller
-define i8* @codegen_extract_function_name(i8* %func_ir, i64 %func_ir_len) {
-entry:
-    %ir_null = icmp eq i8* %func_ir, null
-    %ir_len_zero = icmp eq i64 %func_ir_len, 0
-    %ir_invalid = or i1 %ir_null, %ir_len_zero
-    br i1 %ir_invalid, label %error, label %find_at_sign
-    
-find_at_sign:
-    ; Find "@" symbol after "define " and return type
-    ; Search for "@" starting from position 0
-    %pos = alloca i64
-    store i64 0, i64* %pos
-    br label %search_loop
-    
-search_loop:
-    %pos_val = load i64, i64* %pos
-    %done = icmp uge i64 %pos_val, %func_ir_len
-    br i1 %done, label %error, label %check_char
-    
-check_char:
-    %char_ptr = getelementptr i8, i8* %func_ir, i64 %pos_val
-    %char = load i8, i8* %char_ptr
-    %char_int = zext i8 %char to i32
-    %is_at = icmp eq i32 %char_int, 64  ; '@' = 64
-    br i1 %is_at, label %found_at, label %increment
-    
-increment:
-    %pos_next = add i64 %pos_val, 1
-    store i64 %pos_next, i64* %pos
-    br label %search_loop
-    
-found_at:
-    ; Found "@" - now extract name until "("
-    %name_start_pos = add i64 %pos_val, 1  ; Skip "@"
-    %name_end_pos = alloca i64
-    store i64 %name_start_pos, i64* %name_end_pos
-    br label %find_paren
-    
-find_paren:
-    %end_pos_val = load i64, i64* %name_end_pos
-    %end_done = icmp uge i64 %end_pos_val, %func_ir_len
-    br i1 %end_done, label %error, label %check_paren
-    
-check_paren:
-    %paren_ptr = getelementptr i8, i8* %func_ir, i64 %end_pos_val
-    %paren_char = load i8, i8* %paren_ptr
-    %paren_int = zext i8 %paren_char to i32
-    %is_paren = icmp eq i32 %paren_int, 40  ; '(' = 40
-    br i1 %is_paren, label %extract_name, label %increment_end
-    
-increment_end:
-    %end_pos_next = add i64 %end_pos_val, 1
-    store i64 %end_pos_next, i64* %name_end_pos
-    br label %find_paren
-    
-extract_name:
-    ; Extract name from name_start_pos to name_end_pos
-    %name_len = sub i64 %end_pos_val, %name_start_pos
-    %name_len_zero = icmp eq i64 %name_len, 0
-    br i1 %name_len_zero, label %error, label %alloc_name
-    
-alloc_name:
-    %name_buf_size = add i64 %name_len, 1  ; +1 for null terminator
-    %name_buf = call i8* @malloc(i64 %name_buf_size)
-    %name_buf_null = icmp eq i8* %name_buf, null
-    br i1 %name_buf_null, label %error, label %copy_name
-    
-copy_name:
-    %name_src = getelementptr i8, i8* %func_ir, i64 %name_start_pos
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name_src, i64 %name_len, i1 false)
-    %null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
-    store i8 0, i8* %null_ptr
-    ret i8* %name_buf
-    
-error:
-    ret i8* null
-}
+; codegen_extract_function_name: defined in codegen.vibe
+declare i8* @codegen_extract_function_name(i8*, i64)
 
 ; Note: Function cloning APIs are not available in LLVM 21 C API.
 ; We use module linking instead, which automatically resolves symbols between modules.
@@ -3000,6 +2526,7 @@ declare i32 @printf(i8*, ...)
 @.str.type_i8_ptr = private unnamed_addr constant [4 x i8] c"i8*\00"
 @.str.type_i32 = private unnamed_addr constant [4 x i8] c"i32\00"
 @.str.type_i64 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.type_i64_ptr = private unnamed_addr constant [5 x i8] c"i64*\00"
 @.str.dsl_gep = private unnamed_addr constant [9 x i8] c"llvm:gep\00"
 @.str.dsl_call = private unnamed_addr constant [10 x i8] c"llvm:call\00"
 @.str.dsl_ret_void = private unnamed_addr constant [14 x i8] c"llvm:ret-void\00"
@@ -3070,150 +2597,11 @@ entry:
     ret void
 }
 
-; Append bytevector with proper escaping for LLVM IR
-; codegen_append_bytevector: Append bytevector data with escaping
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   data: Bytevector data
-;   len: Length of bytevector
-define void @codegen_append_bytevector(%CodeGen* %cg, i8* %data, i64 %len) {
-entry:
-    %i = alloca i64
-    store i64 0, i64* %i
-    br label %loop
+; codegen_append_bytevector: defined in codegen.vibe
+declare void @codegen_append_bytevector(%CodeGen*, i8*, i64)
 
-loop:
-    %i_val = load i64, i64* %i
-    %done = icmp uge i64 %i_val, %len
-    br i1 %done, label %exit, label %process_byte
-
-process_byte:
-    %byte_ptr = getelementptr i8, i8* %data, i64 %i_val
-    %byte = load i8, i8* %byte_ptr
-    %byte_int = zext i8 %byte to i32
-    
-    ; Check if null byte - escape as \00
-    %is_null = icmp eq i32 %byte_int, 0
-    br i1 %is_null, label %escape_null, label %check_quote
-    
-escape_null:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3)
-    br label %increment
-    
-check_quote:
-    ; Check if quote - escape as \"
-    %is_quote = icmp eq i32 %byte_int, 34
-    br i1 %is_quote, label %escape_quote, label %check_backslash
-    
-escape_quote:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2)
-    br label %increment
-    
-check_backslash:
-    ; Check if backslash - escape as \\
-    %is_backslash = icmp eq i32 %byte_int, 92
-    br i1 %is_backslash, label %escape_backslash, label %normal_byte
-    
-escape_backslash:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2)
-    br label %increment
-    
-normal_byte:
-    ; Write byte directly
-    %byte_ptr_copy = getelementptr i8, i8* %data, i64 %i_val
-    call void @codegen_append(%CodeGen* %cg, i8* %byte_ptr_copy, i64 1)
-    br label %increment
-    
-increment:
-    %i_val_inc = load i64, i64* %i
-    %i_new = add i64 %i_val_inc, 1
-    store i64 %i_new, i64* %i
-    br label %loop
-
-exit:
-    ret void
-}
-
-; Write bytevector data with escaping to a buffer
-; codegen_write_bytevector_to_buffer: Write bytevector data with escaping to buffer
-; Parameters:
-;   buf: Buffer pointer
-;   pos: Pointer to current position in buffer (will be updated)
-;   data: Bytevector data
-;   len: Length of bytevector
-define void @codegen_write_bytevector_to_buffer(i8* %buf, i64* %pos, i8* %data, i64 %len) {
-entry:
-    %i = alloca i64
-    store i64 0, i64* %i
-    br label %loop
-
-loop:
-    %i_val = load i64, i64* %i
-    %done = icmp uge i64 %i_val, %len
-    br i1 %done, label %exit, label %process_byte
-
-process_byte:
-    %byte_ptr = getelementptr i8, i8* %data, i64 %i_val
-    %byte = load i8, i8* %byte_ptr
-    %byte_int = zext i8 %byte to i32
-    
-    ; Check if null byte - escape as \00
-    %is_null = icmp eq i32 %byte_int, 0
-    br i1 %is_null, label %escape_null, label %check_quote
-    
-escape_null:
-    %pos_val_n = load i64, i64* %pos
-    %dest_n = getelementptr i8, i8* %buf, i64 %pos_val_n
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_n, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.backslash_00, i32 0, i32 0), i64 3, i1 false)
-    %pos_val_n2 = add i64 %pos_val_n, 3
-    store i64 %pos_val_n2, i64* %pos
-    br label %increment
-    
-check_quote:
-    ; Check if quote - escape as \"
-    %is_quote = icmp eq i32 %byte_int, 34
-    br i1 %is_quote, label %escape_quote, label %check_backslash
-    
-escape_quote:
-    %pos_val_q = load i64, i64* %pos
-    %dest_q = getelementptr i8, i8* %buf, i64 %pos_val_q
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_q, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_quote, i32 0, i32 0), i64 2, i1 false)
-    %pos_val_q2 = add i64 %pos_val_q, 2
-    store i64 %pos_val_q2, i64* %pos
-    br label %increment
-    
-check_backslash:
-    ; Check if backslash - escape as \\
-    %is_backslash = icmp eq i32 %byte_int, 92
-    br i1 %is_backslash, label %escape_backslash, label %normal_byte
-    
-escape_backslash:
-    %pos_val_b = load i64, i64* %pos
-    %dest_b = getelementptr i8, i8* %buf, i64 %pos_val_b
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest_b, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.backslash_backslash, i32 0, i32 0), i64 2, i1 false)
-    %pos_val_b2 = add i64 %pos_val_b, 2
-    store i64 %pos_val_b2, i64* %pos
-    br label %increment
-    
-normal_byte:
-    ; Write byte directly
-    %pos_val = load i64, i64* %pos
-    %dest = getelementptr i8, i8* %buf, i64 %pos_val
-    %byte_ptr_copy = getelementptr i8, i8* %data, i64 %i_val
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest, i8* %byte_ptr_copy, i64 1, i1 false)
-    %pos_val2 = add i64 %pos_val, 1
-    store i64 %pos_val2, i64* %pos
-    br label %increment
-    
-increment:
-    %i_val_inc = load i64, i64* %i
-    %i_new = add i64 %i_val_inc, 1
-    store i64 %i_new, i64* %i
-    br label %loop
-
-exit:
-    ret void
-}
+; codegen_write_bytevector_to_buffer: defined in codegen.vibe
+declare void @codegen_write_bytevector_to_buffer(i8*, i64*, i8*, i64)
 
 ; ============================================================================
 ; DSL Evaluation Infrastructure
@@ -3401,7 +2789,22 @@ return_i32:
     ret %LLVMTypeRef %i32_type
     
 check_i64:
-    ; Check for "i64" (already normalized by lexer - bars stripped)
+    ; Check for "i64" (len 3) or "i64*" (len 4) (already normalized by lexer - bars stripped)
+    %is_i64_ptr_len = icmp eq i64 %type_len, 4
+    br i1 %is_i64_ptr_len, label %check_i64_ptr_str, label %check_i64_len
+    
+check_i64_ptr_str:
+    %i64_ptr_str = getelementptr [5 x i8], [5 x i8]* @.str.type_i64_ptr, i32 0, i32 0
+    %i64_ptr_cmp = call i32 @strncmp(i8* %type_str, i8* %i64_ptr_str, i32 4)
+    %is_i64_ptr = icmp eq i32 %i64_ptr_cmp, 0
+    br i1 %is_i64_ptr, label %return_i64_ptr, label %check_array
+    
+return_i64_ptr:
+    %i64_type_base = call %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef %context)
+    %i64_ptr_type = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %i64_type_base, i32 0)
+    ret %LLVMTypeRef %i64_ptr_type
+    
+check_i64_len:
     %is_i64_len = icmp eq i64 %type_len, 3
     br i1 %is_i64_len, label %check_i64_str, label %check_array
     

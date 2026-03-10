@@ -3330,6 +3330,7 @@ declare i32 @printf(i8*, ...)
 @.str.type_i8_ptr = private unnamed_addr constant [4 x i8] c"i8*\00"
 @.str.type_i32 = private unnamed_addr constant [4 x i8] c"i32\00"
 @.str.type_i64 = private unnamed_addr constant [4 x i8] c"i64\00"
+@.str.type_i64_ptr = private unnamed_addr constant [5 x i8] c"i64*\00"
 @.str.dsl_gep = private unnamed_addr constant [9 x i8] c"llvm:gep\00"
 @.str.dsl_call = private unnamed_addr constant [10 x i8] c"llvm:call\00"
 @.str.dsl_ret_void = private unnamed_addr constant [14 x i8] c"llvm:ret-void\00"
@@ -3740,7 +3741,22 @@ return_i32:
     ret %LLVMTypeRef %i32_type
     
 check_i64:
-    ; Check for "i64" (already normalized by lexer - bars stripped)
+    ; Check for "i64" (len 3) or "i64*" (len 4) (already normalized by lexer - bars stripped)
+    %is_i64_ptr_len = icmp eq i64 %type_len, 4
+    br i1 %is_i64_ptr_len, label %check_i64_ptr_str, label %check_i64_len
+    
+check_i64_ptr_str:
+    %i64_ptr_str = getelementptr [5 x i8], [5 x i8]* @.str.type_i64_ptr, i32 0, i32 0
+    %i64_ptr_cmp = call i32 @strncmp(i8* %type_str, i8* %i64_ptr_str, i32 4)
+    %is_i64_ptr = icmp eq i32 %i64_ptr_cmp, 0
+    br i1 %is_i64_ptr, label %return_i64_ptr, label %check_array
+    
+return_i64_ptr:
+    %i64_type_base = call %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef %context)
+    %i64_ptr_type = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %i64_type_base, i32 0)
+    ret %LLVMTypeRef %i64_ptr_type
+    
+check_i64_len:
     %is_i64_len = icmp eq i64 %type_len, 3
     br i1 %is_i64_len, label %check_i64_str, label %check_array
     

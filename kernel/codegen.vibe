@@ -46,9 +46,19 @@
 (llvm:declare-function (malloc (size |i64|)) |i8*|)
 (llvm:declare-function (realloc (ptr |i8*|) (size |i64|)) |i8*|)
 (llvm:declare-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*|)
+(llvm:declare-function (strlen (s |i8*|)) |i64|)
 
 ;; Forward declare llvm_get_element_type (defined in dsl.vibe, linked at build time)
 (llvm:declare-function (llvm_get_element_type (type |i8*|)) |i8*|)
+
+;; Forward declare LLVM API wrappers for string constant creation (defined in dsl.vibe)
+(llvm:declare-function (llvm_get_int8_type (context |i8*|)) |i8*|)
+(llvm:declare-function (llvm_get_array_type (element_type |i8*|) (element_count |i32|)) |i8*|)
+(llvm:declare-function (llvm_create_constant_string (context |i8*|) (str |i8*|) (len |i32|) (dont_null_terminate |i32|)) |i8*|)
+(llvm:declare-function (llvm_add_global (module |i8*|) (type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (llvm_set_initializer (global |i8*|) (initializer |i8*|)) |void|)
+(llvm:declare-function (llvm_set_global_constant (global |i8*|) (is_constant |i32|)) |void|)
+(llvm:declare-function (llvm_set_linkage (global |i8*|) (linkage |i32|)) |void|)
 
 ;; Forward declare codegen_parse_int_string (defined below, used by codegen_parse_int_from_ast)
 (llvm:declare-function (codegen_parse_int_string (str |i8*|) (len |i64|)) |i32|)
@@ -59,7 +69,10 @@
 ;; Forward declare codegen_int_to_string (defined below, used by codegen_create_int_node)
 (llvm:declare-function (codegen_int_to_string (value |i32|) (buf |i8*|)) |i64|)
 
-;; Forward declare codegen_define_string_constant_only (defined in codegen_no_vibe.ll)
+;; Forward declare codegen_append_string_constant (defined below)
+(llvm:declare-function (codegen_append_string_constant (cg |%CodeGen*|) (name |i8*|) (str |i8*|) (len |i64|)) |void|)
+
+;; Forward declare codegen_define_string_constant_only (defined below)
 (llvm:declare-function (codegen_define_string_constant_only (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|)
 
 ;; Forward declare mutually recursive collect functions (defined below)
@@ -874,3 +887,446 @@
     (llvm:store (llvm:const-null |%ASTNode*|) car_ptr)
     (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
     (llvm:ret node_ptr)))
+
+;; ============================================================================
+;; Batch 3: codegen_get_ir
+;; Get the generated IR string (null-terminated).
+;; ============================================================================
+(llvm:define-function (codegen_get_ir (cg |%CodeGen*|)) |i8*|
+  (let* ((buffer_ptr (llvm:gep |%CodeGen| cg 0 0))
+         (buffer (llvm:load buffer_ptr |i8*|))
+         (pos_ptr (llvm:gep |%CodeGen| cg 0 2))
+         (pos (llvm:load pos_ptr |i64|))
+         (null_ptr (llvm:gep |i8| buffer pos)))
+    (llvm:store (llvm:const-int |i8| 0) null_ptr)
+    (llvm:ret buffer)))
+
+;; ============================================================================
+;; Batch 3: codegen_get_string_constant_name
+;; Get constant name for a string (assumes constant already exists).
+;; ============================================================================
+(llvm:define-function (codegen_get_string_constant_name (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|
+  (let* ((counter_ptr (llvm:gep |%CodeGen| cg 0 3))
+         (counter (llvm:load counter_ptr |i32|))
+         (prev_counter (llvm:sub counter (llvm:const-int |i32| 1)))
+         (name (llvm:call codegen_format_string_name prev_counter)))
+    (llvm:ret name)))
+
+;; ============================================================================
+;; Batch 3: codegen_store_constant
+;; Store constant mapping in CodeGen structure.
+;; ============================================================================
+(llvm:define-function (codegen_store_constant (cg |%CodeGen*|) (name |i8*|) (name_len |i64|) (value |i8*|)) |void|
+  (let* ((value_ptr_cast (llvm:bitcast value |i8*|))
+         (name_node (llvm:call codegen_create_string_node name name_len))
+         (value_node (llvm:call codegen_create_pointer_node value_ptr_cast))
+         (pair (llvm:call codegen_create_cons name_node value_node))
+         (constants_ptr (llvm:gep |%CodeGen| cg 0 12))
+         (current_constants (llvm:load constants_ptr |%ASTNode*|))
+         (new_constants (llvm:call codegen_create_cons pair current_constants)))
+    (llvm:store new_constants constants_ptr)
+    (llvm:ret-void)))
+
+;; ============================================================================
+;; Batch 3: codegen_store_llvm_function
+;; Store function mapping in CodeGen structure.
+;; ============================================================================
+(llvm:define-function (codegen_store_llvm_function (cg |%CodeGen*|) (name |i8*|) (name_len |i64|) (func_value |i8*|) (func_type |i8*|)) |void|
+  (let* ((func_value_ptr (llvm:bitcast func_value |i8*|))
+         (func_type_ptr (llvm:bitcast func_type |i8*|))
+         (name_node (llvm:call codegen_create_string_node name name_len))
+         (func_value_node (llvm:call codegen_create_pointer_node func_value_ptr))
+         (func_type_node (llvm:call codegen_create_pointer_node func_type_ptr))
+         (value_type_pair (llvm:call codegen_create_cons func_value_node func_type_node))
+         (name_func_pair (llvm:call codegen_create_cons name_node value_type_pair))
+         (llvm_functions_ptr (llvm:gep |%CodeGen| cg 0 14))
+         (current_functions (llvm:load llvm_functions_ptr |%ASTNode*|))
+         (new_functions (llvm:call codegen_create_cons name_func_pair current_functions)))
+    (llvm:store new_functions llvm_functions_ptr)
+    (llvm:ret-void)))
+
+;; ============================================================================
+;; Batch 3: codegen_append_escaped_string
+;; Append string with proper escaping for LLVM IR.
+;; ============================================================================
+(llvm:define-function (codegen_append_escaped_string (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |void|
+  (let* ((i (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i64| 0) i)
+    (llvm:br 'loop))
+  (llvm:label 'loop
+    (let* ((i_val (llvm:load i |i64|))
+           (done (llvm:icmp 'uge i_val len)))
+      (llvm:br done 'exit 'process_char)))
+  (llvm:label 'process_char
+    (let* ((i_val (llvm:load i |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_null (llvm:icmp 'eq char_int (llvm:const-int |i32| 0))))
+      (llvm:br is_null 'escape_null 'check_quote)))
+  (llvm:label 'escape_null
+    (llvm:call codegen_append cg (llvm:gep |[4 x i8]| (llvm:get-global .str.backslash_00) 0 0) (llvm:const-int |i64| 3))
+    (llvm:br 'increment))
+  (llvm:label 'check_quote
+    (let* ((i_val (llvm:load i |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 34))))
+      (llvm:br is_quote 'escape_quote 'check_backslash)))
+  (llvm:label 'escape_quote
+    (llvm:call codegen_append cg (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_quote) 0 0) (llvm:const-int |i64| 2))
+    (llvm:br 'increment))
+  (llvm:label 'check_backslash
+    (let* ((i_val (llvm:load i |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_backslash (llvm:icmp 'eq char_int (llvm:const-int |i32| 92))))
+      (llvm:br is_backslash 'escape_backslash 'normal_char)))
+  (llvm:label 'escape_backslash
+    (llvm:call codegen_append cg (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_backslash) 0 0) (llvm:const-int |i64| 2))
+    (llvm:br 'increment))
+  (llvm:label 'normal_char
+    (let* ((i_val (llvm:load i |i64|))
+           (char_ptr (llvm:gep |i8| str i_val)))
+      (llvm:call codegen_append cg char_ptr (llvm:const-int |i64| 1))
+      (llvm:br 'increment)))
+  (llvm:label 'increment
+    (let* ((i_val (llvm:load i |i64|))
+           (i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+      (llvm:store i_new i)
+      (llvm:br 'loop)))
+  (llvm:label 'exit
+    (llvm:ret-void)))
+
+;; ============================================================================
+;; Batch 3: codegen_append_bytevector
+;; Append bytevector data with escaping for LLVM IR.
+;; ============================================================================
+(llvm:define-function (codegen_append_bytevector (cg |%CodeGen*|) (data |i8*|) (len |i64|)) |void|
+  (let* ((i (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i64| 0) i)
+    (llvm:br 'loop))
+  (llvm:label 'loop
+    (let* ((i_val (llvm:load i |i64|))
+           (done (llvm:icmp 'uge i_val len)))
+      (llvm:br done 'exit 'process_byte)))
+  (llvm:label 'process_byte
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_null (llvm:icmp 'eq byte_int (llvm:const-int |i32| 0))))
+      (llvm:br is_null 'escape_null 'check_quote)))
+  (llvm:label 'escape_null
+    (llvm:call codegen_append cg (llvm:gep |[4 x i8]| (llvm:get-global .str.backslash_00) 0 0) (llvm:const-int |i64| 3))
+    (llvm:br 'increment))
+  (llvm:label 'check_quote
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_quote (llvm:icmp 'eq byte_int (llvm:const-int |i32| 34))))
+      (llvm:br is_quote 'escape_quote 'check_backslash)))
+  (llvm:label 'escape_quote
+    (llvm:call codegen_append cg (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_quote) 0 0) (llvm:const-int |i64| 2))
+    (llvm:br 'increment))
+  (llvm:label 'check_backslash
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_backslash (llvm:icmp 'eq byte_int (llvm:const-int |i32| 92))))
+      (llvm:br is_backslash 'escape_backslash 'normal_byte)))
+  (llvm:label 'escape_backslash
+    (llvm:call codegen_append cg (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_backslash) 0 0) (llvm:const-int |i64| 2))
+    (llvm:br 'increment))
+  (llvm:label 'normal_byte
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val)))
+      (llvm:call codegen_append cg byte_ptr (llvm:const-int |i64| 1))
+      (llvm:br 'increment)))
+  (llvm:label 'increment
+    (let* ((i_val (llvm:load i |i64|))
+           (i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+      (llvm:store i_new i)
+      (llvm:br 'loop)))
+  (llvm:label 'exit
+    (llvm:ret-void)))
+
+;; ============================================================================
+;; Batch 3: codegen_get_constant
+;; Look up a constant by name and return LLVMValueRef.
+;; ============================================================================
+(llvm:define-function (codegen_get_constant (cg |%CodeGen*|) (name |i8*|) (name_len |i64|)) |i8*|
+  (let* ((constants_ptr (llvm:gep |%CodeGen| cg 0 12))
+         (constants (llvm:load constants_ptr |%ASTNode*|))
+         (constants_null (llvm:icmp 'eq constants (llvm:const-null |%ASTNode*|)))
+         (current (llvm:alloca |%ASTNode*|)))
+    (llvm:br constants_null 'not_found 'search_loop))
+  (llvm:label 'search_loop
+    (llvm:store constants current)
+    (llvm:br 'iterate))
+  (llvm:label 'iterate
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (current_null (llvm:icmp 'eq current_val (llvm:const-null |%ASTNode*|))))
+      (llvm:br current_null 'not_found 'check_pair)))
+  (llvm:label 'check_pair
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_null (llvm:icmp 'eq pair (llvm:const-null |%ASTNode*|))))
+      (llvm:br pair_null 'next 'compare_name)))
+  (llvm:label 'compare_name
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_car_ptr (llvm:gep |%ASTNode| pair 0 4))
+           (name_node (llvm:load pair_car_ptr |%ASTNode*|))
+           (name_node_null (llvm:icmp 'eq name_node (llvm:const-null |%ASTNode*|))))
+      (llvm:br name_node_null 'next 'get_name)))
+  (llvm:label 'get_name
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_car_ptr (llvm:gep |%ASTNode| pair 0 4))
+           (name_node (llvm:load pair_car_ptr |%ASTNode*|))
+           (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
+           (stored_name (llvm:load stored_name_ptr |i8*|))
+           (stored_len_ptr (llvm:gep |%ASTNode| name_node 0 3))
+           (stored_len (llvm:load stored_len_ptr |i64|))
+           (len_match (llvm:icmp 'eq stored_len name_len)))
+      (llvm:br len_match 'compare_chars 'next)))
+  (llvm:label 'compare_chars
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_car_ptr (llvm:gep |%ASTNode| pair 0 4))
+           (name_node (llvm:load pair_car_ptr |%ASTNode*|))
+           (stored_name_ptr (llvm:gep |%ASTNode| name_node 0 2))
+           (stored_name (llvm:load stored_name_ptr |i8*|))
+           (len_int (llvm:trunc name_len |i64| |i32|))
+           (cmp_result (llvm:call strncmp stored_name name len_int))
+           (is_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0))))
+      (llvm:br is_match 'found 'next)))
+  (llvm:label 'found
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_cdr_ptr (llvm:gep |%ASTNode| pair 0 5))
+           (value_node (llvm:load pair_cdr_ptr |%ASTNode*|))
+           (value_node_null (llvm:icmp 'eq value_node (llvm:const-null |%ASTNode*|))))
+      (llvm:br value_node_null 'not_found 'extract_value)))
+  (llvm:label 'extract_value
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_cdr_ptr (llvm:gep |%ASTNode| pair 0 5))
+           (value_node (llvm:load pair_cdr_ptr |%ASTNode*|))
+           (value_atom_type_ptr (llvm:gep |%ASTNode| value_node 0 1))
+           (value_atom_type (llvm:load value_atom_type_ptr |i32|))
+           (is_pointer (llvm:icmp 'eq value_atom_type (llvm:const-int |i32| 999))))
+      (llvm:br is_pointer 'cast_back 'not_found)))
+  (llvm:label 'cast_back
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
+           (pair (llvm:load car_ptr |%ASTNode*|))
+           (pair_cdr_ptr (llvm:gep |%ASTNode| pair 0 5))
+           (value_node (llvm:load pair_cdr_ptr |%ASTNode*|))
+           (value_ptr_field (llvm:gep |%ASTNode| value_node 0 2))
+           (value_ptr (llvm:load value_ptr_field |i8*|)))
+      (llvm:ret value_ptr)))
+  (llvm:label 'next
+    (let* ((current_val (llvm:load current |%ASTNode*|))
+           (cdr_ptr (llvm:gep |%ASTNode| current_val 0 5))
+           (cdr (llvm:load cdr_ptr |%ASTNode*|)))
+      (llvm:store cdr current)
+      (llvm:br 'iterate)))
+  (llvm:label 'not_found
+    (llvm:ret (llvm:const-null |i8*|))))
+
+;; ============================================================================
+;; Batch 3: codegen_write_bytevector_to_buffer
+;; Write bytevector data with escaping to buffer.
+;; ============================================================================
+(llvm:define-function (codegen_write_bytevector_to_buffer (buf |i8*|) (pos |i64*|) (data |i8*|) (len |i64|)) |void|
+  (let* ((i (llvm:alloca |i64|)))
+    (llvm:store (llvm:const-int |i64| 0) i)
+    (llvm:br 'loop))
+  (llvm:label 'loop
+    (let* ((i_val (llvm:load i |i64|))
+           (done (llvm:icmp 'uge i_val len)))
+      (llvm:br done 'exit 'process_byte)))
+  (llvm:label 'process_byte
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_null (llvm:icmp 'eq byte_int (llvm:const-int |i32| 0))))
+      (llvm:br is_null 'escape_null 'check_quote)))
+  (llvm:label 'escape_null
+    (let* ((pos_val (llvm:load pos |i64|))
+           (dest (llvm:gep |i8| buf pos_val))
+           (backslash00 (llvm:gep |[4 x i8]| (llvm:get-global .str.backslash_00) 0 0))
+           (pos_val2 (llvm:add pos_val (llvm:const-int |i64| 3))))
+      (llvm:call memcpy dest backslash00 (llvm:const-int |i64| 3))
+      (llvm:store pos_val2 pos)
+      (llvm:br 'increment)))
+  (llvm:label 'check_quote
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_quote (llvm:icmp 'eq byte_int (llvm:const-int |i32| 34))))
+      (llvm:br is_quote 'escape_quote 'check_backslash)))
+  (llvm:label 'escape_quote
+    (let* ((pos_val (llvm:load pos |i64|))
+           (dest (llvm:gep |i8| buf pos_val))
+           (backslash_quote (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_quote) 0 0))
+           (pos_val2 (llvm:add pos_val (llvm:const-int |i64| 2))))
+      (llvm:call memcpy dest backslash_quote (llvm:const-int |i64| 2))
+      (llvm:store pos_val2 pos)
+      (llvm:br 'increment)))
+  (llvm:label 'check_backslash
+    (let* ((i_val (llvm:load i |i64|))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (byte (llvm:load byte_ptr |i8|))
+           (byte_int (llvm:zext byte |i8| |i32|))
+           (is_backslash (llvm:icmp 'eq byte_int (llvm:const-int |i32| 92))))
+      (llvm:br is_backslash 'escape_backslash 'normal_byte)))
+  (llvm:label 'escape_backslash
+    (let* ((pos_val (llvm:load pos |i64|))
+           (dest (llvm:gep |i8| buf pos_val))
+           (backslash_backslash (llvm:gep |[3 x i8]| (llvm:get-global .str.backslash_backslash) 0 0))
+           (pos_val2 (llvm:add pos_val (llvm:const-int |i64| 2))))
+      (llvm:call memcpy dest backslash_backslash (llvm:const-int |i64| 2))
+      (llvm:store pos_val2 pos)
+      (llvm:br 'increment)))
+  (llvm:label 'normal_byte
+    (let* ((i_val (llvm:load i |i64|))
+           (pos_val (llvm:load pos |i64|))
+           (dest (llvm:gep |i8| buf pos_val))
+           (byte_ptr (llvm:gep |i8| data i_val))
+           (pos_val2 (llvm:add pos_val (llvm:const-int |i64| 1))))
+      (llvm:call memcpy dest byte_ptr (llvm:const-int |i64| 1))
+      (llvm:store pos_val2 pos)
+      (llvm:br 'increment)))
+  (llvm:label 'increment
+    (let* ((i_val (llvm:load i |i64|))
+           (i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+      (llvm:store i_new i)
+      (llvm:br 'loop)))
+  (llvm:label 'exit
+    (llvm:ret-void)))
+
+;; ============================================================================
+;; Batch 3: codegen_extract_function_name
+;; Extract function name from function IR text.
+;; ============================================================================
+(llvm:define-function (codegen_extract_function_name (func_ir |i8*|) (func_ir_len |i64|)) |i8*|
+  (let* ((ir_null (llvm:icmp 'eq func_ir (llvm:const-null |i8*|)))
+         (ir_len_zero (llvm:icmp 'eq func_ir_len (llvm:const-int |i64| 0)))
+         (ir_invalid (llvm:or ir_null ir_len_zero))
+         (pos (llvm:alloca |i64|))
+         (name_end_pos (llvm:alloca |i64|))
+         (name_buf_ptr (llvm:alloca |i8*|)))
+    (llvm:br ir_invalid 'error 'find_at_sign))
+  (llvm:label 'find_at_sign
+    (llvm:store (llvm:const-int |i64| 0) pos)
+    (llvm:br 'search_loop))
+  (llvm:label 'search_loop
+    (let* ((pos_val (llvm:load pos |i64|))
+           (done (llvm:icmp 'uge pos_val func_ir_len)))
+      (llvm:br done 'error 'check_char)))
+  (llvm:label 'check_char
+    (let* ((pos_val (llvm:load pos |i64|))
+           (char_ptr (llvm:gep |i8| func_ir pos_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (is_at (llvm:icmp 'eq char_int (llvm:const-int |i32| 64))))
+      (llvm:br is_at 'found_at 'increment)))
+  (llvm:label 'increment
+    (let* ((pos_val (llvm:load pos |i64|))
+           (pos_next (llvm:add pos_val (llvm:const-int |i64| 1))))
+      (llvm:store pos_next pos)
+      (llvm:br 'search_loop)))
+  (llvm:label 'found_at
+    (let* ((pos_val (llvm:load pos |i64|))
+           (name_start_pos (llvm:add pos_val (llvm:const-int |i64| 1))))
+      (llvm:store name_start_pos name_end_pos)
+      (llvm:br 'find_paren)))
+  (llvm:label 'find_paren
+    (let* ((end_pos_val (llvm:load name_end_pos |i64|))
+           (end_done (llvm:icmp 'uge end_pos_val func_ir_len)))
+      (llvm:br end_done 'error 'check_paren)))
+  (llvm:label 'check_paren
+    (let* ((end_pos_val (llvm:load name_end_pos |i64|))
+           (paren_ptr (llvm:gep |i8| func_ir end_pos_val))
+           (paren_char (llvm:load paren_ptr |i8|))
+           (paren_int (llvm:zext paren_char |i8| |i32|))
+           (is_paren (llvm:icmp 'eq paren_int (llvm:const-int |i32| 40))))
+      (llvm:br is_paren 'extract_name 'increment_end)))
+  (llvm:label 'increment_end
+    (let* ((end_pos_val (llvm:load name_end_pos |i64|))
+           (end_pos_next (llvm:add end_pos_val (llvm:const-int |i64| 1))))
+      (llvm:store end_pos_next name_end_pos)
+      (llvm:br 'find_paren)))
+  (llvm:label 'extract_name
+    (let* ((pos_val (llvm:load pos |i64|))
+           (name_start_pos (llvm:add pos_val (llvm:const-int |i64| 1)))
+           (end_pos_val (llvm:load name_end_pos |i64|))
+           (name_len (llvm:sub end_pos_val name_start_pos))
+           (name_len_zero (llvm:icmp 'eq name_len (llvm:const-int |i64| 0))))
+      (llvm:br name_len_zero 'error 'alloc_name)))
+  (llvm:label 'alloc_name
+    (let* ((pos_val (llvm:load pos |i64|))
+           (name_start_pos (llvm:add pos_val (llvm:const-int |i64| 1)))
+           (end_pos_val (llvm:load name_end_pos |i64|))
+           (name_len (llvm:sub end_pos_val name_start_pos))
+           (name_buf_size (llvm:add name_len (llvm:const-int |i64| 1)))
+           (name_buf (llvm:call malloc name_buf_size))
+           (name_buf_null (llvm:icmp 'eq name_buf (llvm:const-null |i8*|))))
+      (llvm:store name_buf name_buf_ptr)
+      (llvm:br name_buf_null 'error 'copy_name)))
+  (llvm:label 'copy_name
+    (let* ((pos_val (llvm:load pos |i64|))
+           (name_start_pos (llvm:add pos_val (llvm:const-int |i64| 1)))
+           (end_pos_val (llvm:load name_end_pos |i64|))
+           (name_len (llvm:sub end_pos_val name_start_pos))
+           (name_buf (llvm:load name_buf_ptr |i8*|))
+           (name_src (llvm:gep |i8| func_ir name_start_pos))
+           (null_ptr (llvm:gep |i8| name_buf name_len)))
+      (llvm:call memcpy name_buf name_src name_len)
+      (llvm:store (llvm:const-int |i8| 0) null_ptr)
+      (llvm:ret name_buf)))
+  (llvm:label 'error
+    (llvm:ret (llvm:const-null |i8*|))))
+
+;; ============================================================================
+;; Batch 3: codegen_append_string_constant
+;; Append string constant definition to IR.
+;; ============================================================================
+(llvm:define-function (codegen_append_string_constant (cg |%CodeGen*|) (name |i8*|) (str |i8*|) (len |i64|)) |void|
+  (let* ((at_sign (llvm:gep |[2 x i8]| (llvm:get-global .str.at_sign) 0 0))
+         (name_len (llvm:call strlen name))
+         (constant_decl (llvm:gep |[22 x i8]| (llvm:get-global .str.constant_decl) 0 0))
+         (len_plus_one (llvm:add len (llvm:const-int |i64| 1)))
+         (len_str (llvm:call codegen_format_number len_plus_one))
+         (len_str_len (llvm:call strlen len_str))
+         (x_i8_c_quote (llvm:gep |[10 x i8]| (llvm:get-global .str.x_i8_c_quote) 0 0))
+         (backslash_00 (llvm:gep |[4 x i8]| (llvm:get-global .str.backslash_00) 0 0))
+         (quote_newline (llvm:gep |[3 x i8]| (llvm:get-global .str.quote_newline) 0 0)))
+    (llvm:call codegen_append cg at_sign (llvm:const-int |i64| 1))
+    (llvm:call codegen_append cg name name_len)
+    (llvm:call codegen_append cg constant_decl (llvm:const-int |i64| 21))
+    (llvm:call codegen_append cg len_str len_str_len)
+    (llvm:call codegen_append cg x_i8_c_quote (llvm:const-int |i64| 9))
+    (llvm:call codegen_append_escaped_string cg str len)
+    (llvm:call codegen_append cg backslash_00 (llvm:const-int |i64| 3))
+    (llvm:call codegen_append cg quote_newline (llvm:const-int |i64| 2))
+    (llvm:ret-void)))
+
+;; codegen_define_string_constant_only and codegen_string_literal: Deferred migration.
+;; Bootstrap DSL has bug with let* body containing (store + br) - br not emitted.
+;; Definitions remain in codegen_no_vibe.ll until bootstrap is fixed.

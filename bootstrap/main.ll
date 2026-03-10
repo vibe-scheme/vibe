@@ -404,7 +404,7 @@ entry:
 get_size:
     ; Get file size using stat or fstat
     ; For simplicity, use a fixed buffer size
-    %buffer_size = add i64 65536, 0  ; 64KB buffer
+    %buffer_size = add i64 131072, 0  ; 128KB buffer (codegen.vibe exceeds 64KB)
     %buffer = call i8* @malloc(i64 %buffer_size)
     
     ; Read file
