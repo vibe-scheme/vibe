@@ -338,7 +338,27 @@ entry:
     %type_ptr = getelementptr %Token, %Token* %token, i32 0, i32 0
     %token_type = load i32, i32* %type_ptr
     
+    ; Check for EOF (unexpected - means unclosed parentheses)
+    %is_eof = icmp eq i32 %token_type, 0  ; TOKEN_EOF
+    br i1 %is_eof, label %unexpected_eof, label %check_rparen
+    
+    ; Check for RPAREN (unexpected - means too many closing parentheses)
+check_rparen:
+    %is_rparen = icmp eq i32 %token_type, 6  ; TOKEN_RPAREN
+    br i1 %is_rparen, label %unexpected_rparen, label %check_quote
+    
+unexpected_eof:
+    %eof_msg = getelementptr [54 x i8], [54 x i8]* @.str.error_unexpected_eof, i32 0, i32 0
+    %eof_result = call %ASTNode* @parse_error(%Parser* %parser, i8* %eof_msg)
+    ret %ASTNode* %eof_result
+    
+unexpected_rparen:
+    %rparen_msg = getelementptr [47 x i8], [47 x i8]* @.str.error_unexpected_rparen, i32 0, i32 0
+    %rparen_result = call %ASTNode* @parse_error(%Parser* %parser, i8* %rparen_msg)
+    ret %ASTNode* %rparen_result
+    
     ; Check for quote
+check_quote:
     %is_quote = icmp eq i32 %token_type, 7  ; TOKEN_QUOTE
     br i1 %is_quote, label %quote, label %check_quasiquote
 
@@ -375,17 +395,20 @@ atom:
     ret %ASTNode* %atom_node
 }
 
-; Report parsing error
-; parse_error: Report a parsing error
+; Report parsing error and abort compilation
+; parse_error: Report a parsing error, print to stderr, then exit
 ; Parameters:
 ;   parser: Pointer to Parser structure
 ;   message: Error message string
-; Returns: Null pointer (error indicator)
+; Returns: Never returns (calls exit(1))
 define %ASTNode* @parse_error(%Parser* %parser, i8* %message) {
 entry:
-    ; In a real implementation, this would print the error message
-    ; For now, just return null
-    ret %ASTNode* null
+    ; Print error message to stderr (fd 2)
+    %len = call i64 @strlen(i8* %message)
+    %len_int = trunc i64 %len to i32
+    call i32 @write(i32 2, i8* %message, i32 %len_int)
+    call void @exit(i32 1)
+    unreachable
 }
 
 ; Debug logging helpers
@@ -791,6 +814,8 @@ done:
 @.str.debug_not_atom_error = private unnamed_addr constant [23 x i8] c"ERROR: not atom, type=\00"
 @.str.let_star = private unnamed_addr constant [5 x i8] c"let*\00"
 @.str.empty = private unnamed_addr constant [1 x i8] c"\00"
+@.str.error_unexpected_eof = private unnamed_addr constant [54 x i8] c"error: unexpected end of file (unclosed parentheses)\0A\00"
+@.str.error_unexpected_rparen = private unnamed_addr constant [47 x i8] c"error: unexpected ) (too many closing parens)\0A\00"
 
 ; Declare external functions
 declare i8* @malloc(i64)
@@ -798,3 +823,6 @@ declare void @free(i8*)
 declare i32 @printf(i8*, ...)
 declare i32 @strncmp(i8*, i8*, i64)
 declare void @llvm.memcpy.p0i8.p0i8.i64(i8*, i8*, i64, i1)
+declare i64 @strlen(i8*)
+declare i64 @write(i32, i8*, i32)
+declare void @exit(i32)

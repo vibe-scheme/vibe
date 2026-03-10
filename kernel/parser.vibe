@@ -5,6 +5,13 @@
 (llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
 (llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
 (llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
+(llvm:declare-function (strlen (s |i8*|)) |i64|)
+(llvm:declare-function (write (fd |i32|) (buf |i8*|) (count |i32|)) |i64|)
+(llvm:declare-function (exit (status |i32|)) |void|)
+
+; Error message constants for unbalanced parentheses
+(llvm:define-constant .str.error_unexpected_eof |[54 x i8]| #u8(101 114 114 111 114 58 32 117 110 101 120 112 101 99 116 101 100 32 101 110 100 32 111 102 32 102 105 108 101 32 40 117 110 99 108 111 115 101 100 32 112 97 114 101 110 116 104 101 115 101 115 41 10 0))
+(llvm:define-constant .str.error_unexpected_rparen |[47 x i8]| #u8(101 114 114 111 114 58 32 117 110 101 120 112 101 99 116 101 100 32 41 32 40 116 111 111 32 109 97 110 121 32 99 108 111 115 105 110 103 32 112 97 114 101 110 115 41 10 0))
 
 ; Define Token type
 (llvm:define-type Token
@@ -98,11 +105,14 @@
          (result (llvm:zext matches |i1| |i32|)))
     (llvm:ret result)))
 
-; parse_error: Report a parsing error
-; Currently a stub that returns null. Will be expanded when the full
-; compiler adds proper error reporting.
+; parse_error: Report a parsing error and abort compilation
+; Prints the message to stderr (fd 2), then calls exit(1). Never returns.
 (llvm:define-function (parse_error (parser |%Parser*|) (message |i8*|)) |%ASTNode*|
-  (llvm:ret (llvm:const-null |%ASTNode*|)))
+  (let* ((len (llvm:call strlen message))
+         (len_int (llvm:trunc len |i64| |i32|))
+         (ignored (llvm:call write (llvm:const-int |i32| 2) message len_int)))
+    (llvm:call exit (llvm:const-int |i32| 1))
+    (llvm:ret (llvm:const-null |%ASTNode*|))))
 
 ; parse_atom: Parse an atomic value
 ; Gets the current token, creates an AST atom node from it via
@@ -191,6 +201,8 @@
 
 ; parse_expr: Parse a single expression (atom or list)
 ; Dispatches based on the current token type:
+;   - TOKEN_EOF (0): error - unexpected EOF (unclosed parentheses)
+;   - TOKEN_RPAREN (6): error - unexpected ) (too many closing parens)
 ;   - TOKEN_QUOTE (7): consume quote, recursively parse quoted expression,
 ;     wrap in AST_QUOTE node
 ;   - TOKEN_LPAREN (5): delegate to parse_list
@@ -199,8 +211,26 @@
   (let* ((token (llvm:call parse_current parser))
          (type_ptr (llvm:gep |%Token| token 0 0))
          (token_type (llvm:load type_ptr |i32|))
-         (is_quote (llvm:icmp 'eq token_type (llvm:const-int |i32| 7))))
-    (llvm:br is_quote 'quote 'check_quasiquote))
+         (is_eof (llvm:icmp 'eq token_type (llvm:const-int |i32| 0))))
+    (llvm:br is_eof 'unexpected_eof 'check_rparen))
+  (llvm:label 'check_rparen
+    (let* ((token_r (llvm:call parse_current parser))
+           (type_ptr_r (llvm:gep |%Token| token_r 0 0))
+           (token_type_r (llvm:load type_ptr_r |i32|))
+           (is_rparen (llvm:icmp 'eq token_type_r (llvm:const-int |i32| 6))))
+      (llvm:br is_rparen 'unexpected_rparen 'check_quote)))
+  (llvm:label 'unexpected_eof
+    (llvm:call parse_error parser (llvm:gep |[52 x i8]| (llvm:get-global .str.error_unexpected_eof) 0 0))
+    (llvm:ret (llvm:const-null |%ASTNode*|)))
+  (llvm:label 'unexpected_rparen
+    (llvm:call parse_error parser (llvm:gep |[48 x i8]| (llvm:get-global .str.error_unexpected_rparen) 0 0))
+    (llvm:ret (llvm:const-null |%ASTNode*|)))
+  (llvm:label 'check_quote
+    (let* ((token_q (llvm:call parse_current parser))
+           (type_ptr_q (llvm:gep |%Token| token_q 0 0))
+           (token_type_q (llvm:load type_ptr_q |i32|))
+           (is_quote (llvm:icmp 'eq token_type_q (llvm:const-int |i32| 7))))
+      (llvm:br is_quote 'quote 'check_quasiquote)))
   (llvm:label 'quote
     (llvm:call parse_advance parser)
     (let* ((quoted (llvm:call parse_expr parser))

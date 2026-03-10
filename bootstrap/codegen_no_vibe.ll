@@ -326,39 +326,8 @@ done:
 ;   cg: Pointer to CodeGen structure
 ;   str: String to append
 ;   len: Length of string
-define void @codegen_append(%CodeGen* %cg, i8* %str, i64 %len) {
-entry:
-    %pos_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 2
-    %pos = load i64, i64* %pos_ptr
-    
-    %size_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 1
-    %size = load i64, i64* %size_ptr
-    
-    ; Check if we need to grow buffer
-    %new_pos = add i64 %pos, %len
-    %needs_grow = icmp ugt i64 %new_pos, %size
-    br i1 %needs_grow, label %grow, label %append
-
-grow:
-    ; Double the buffer size
-    %new_size = mul i64 %size, 2
-    %buffer_ptr_grow = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 0
-    %old_buffer = load i8*, i8** %buffer_ptr_grow
-    %new_buffer = call i8* @realloc(i8* %old_buffer, i64 %new_size)
-    store i8* %new_buffer, i8** %buffer_ptr_grow
-    store i64 %new_size, i64* %size_ptr
-    br label %append
-
-append:
-    %buffer_ptr_append = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 0
-    %buffer = load i8*, i8** %buffer_ptr_append
-    %dest = getelementptr i8, i8* %buffer, i64 %pos
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %dest, i8* %str, i64 %len, i1 false)
-    
-    %new_pos_append = add i64 %pos, %len
-    store i64 %new_pos_append, i64* %pos_ptr
-    ret void
-}
+; codegen_append: defined in codegen.vibe
+declare void @codegen_append(%CodeGen*, i8*, i64)
 
 ; Generate string constant
 ; codegen_string_literal: Generate a string constant in IR
@@ -2143,92 +2112,11 @@ done:
     ret void
 }
 
-; Collect string constants from expressions
-; codegen_collect_string_constants: Collect and generate string constants from expressions
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   exprs: AST node list of expressions
-define void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %exprs) {
-entry:
-    %is_null = icmp eq %ASTNode* %exprs, null
-    br i1 %is_null, label %done, label %process_expr
+; codegen_collect_string_constants: defined in codegen.vibe
+declare void @codegen_collect_string_constants(%CodeGen*, %ASTNode*)
 
-process_expr:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %exprs, i32 0, i32 4
-    %expr = load %ASTNode*, %ASTNode** %car_ptr
-    
-    ; Check if this is a function call (list starting with identifier)
-    %expr_type_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 0
-    %expr_type = load i32, i32* %expr_type_ptr
-    %is_list = icmp eq i32 %expr_type, 1  ; AST_LIST
-    
-    br i1 %is_list, label %check_call, label %next_expr
-
-check_call:
-    ; Extract arguments and collect string constants from them
-    %expr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr, i32 0, i32 5
-    %args = load %ASTNode*, %ASTNode** %expr_cdr_ptr
-    call void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %args)
-    br label %next_expr
-
-next_expr:
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %exprs, i32 0, i32 5
-    %next = load %ASTNode*, %ASTNode** %cdr_ptr
-    call void @codegen_collect_string_constants(%CodeGen* %cg, %ASTNode* %next)
-    br label %done
-
-done:
-    ret void
-}
-
-; Collect string constants from function call arguments
-; codegen_collect_string_constants_from_args: Collect string constants from arguments
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   args: AST node list of arguments
-define void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %is_null = icmp eq %ASTNode* %args, null
-    br i1 %is_null, label %done, label %check_arg
-
-check_arg:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %arg_node = load %ASTNode*, %ASTNode** %car_ptr
-    
-    ; Check if argument is a string literal
-    %arg_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 0
-    %arg_type = load i32, i32* %arg_type_ptr
-    %is_atom = icmp eq i32 %arg_type, 0  ; AST_ATOM
-    
-    br i1 %is_atom, label %check_string, label %next_arg
-
-check_string:
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 1
-    %atom_type = load i32, i32* %atom_type_ptr
-    %is_string = icmp eq i32 %atom_type, 3  ; TOKEN_STRING
-    
-    br i1 %is_string, label %gen_constant, label %next_arg
-
-gen_constant:
-    ; Generate string constant at module level
-    %str_val_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 2
-    %str_val = load i8*, i8** %str_val_ptr
-    %str_len_ptr = getelementptr %ASTNode, %ASTNode* %arg_node, i32 0, i32 3
-    %str_len = load i64, i64* %str_len_ptr
-    
-    ; Generate constant definition (this will be at module level, before main)
-    call i8* @codegen_define_string_constant_only(%CodeGen* %cg, i8* %str_val, i64 %str_len)
-    br label %next_arg
-
-next_arg:
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 5
-    %next = load %ASTNode*, %ASTNode** %cdr_ptr
-    call void @codegen_collect_string_constants_from_args(%CodeGen* %cg, %ASTNode* %next)
-    br label %done
-
-done:
-    ret void
-}
+; codegen_collect_string_constants_from_args: defined in codegen.vibe
+declare void @codegen_collect_string_constants_from_args(%CodeGen*, %ASTNode*)
 
 ; Generate main function
 ; codegen_main: Generate main function with top-level expressions
@@ -3148,16 +3036,7 @@ declare i32 @printf(i8*, ...)
 @.str.dsl_ptrtoint = private unnamed_addr constant [14 x i8] c"llvm:ptrtoint\00"
 @.str.err_label_no_terminator = private unnamed_addr constant [37 x i8] c"error: label '%s' has no terminator\0A\00"
 @.str.err_entry_no_terminator = private unnamed_addr constant [55 x i8] c"error: entry block of function '%s' has no terminator\0A\00"
-@.str.pred_eq = private unnamed_addr constant [3 x i8] c"eq\00"
-@.str.pred_ne = private unnamed_addr constant [3 x i8] c"ne\00"
-@.str.pred_uge = private unnamed_addr constant [4 x i8] c"uge\00"
-@.str.pred_ult = private unnamed_addr constant [4 x i8] c"ult\00"
-@.str.pred_ugt = private unnamed_addr constant [4 x i8] c"ugt\00"
-@.str.pred_ule = private unnamed_addr constant [4 x i8] c"ule\00"
-@.str.pred_sge = private unnamed_addr constant [4 x i8] c"sge\00"
-@.str.pred_slt = private unnamed_addr constant [4 x i8] c"slt\00"
-@.str.pred_sgt = private unnamed_addr constant [4 x i8] c"sgt\00"
-@.str.pred_sle = private unnamed_addr constant [4 x i8] c"sle\00"
+; Predicate string constants moved to codegen.vibe (codegen_map_predicate_string)
 
 ; ============================================================================
 ; Debug Logging Helpers
@@ -6491,97 +6370,8 @@ error:
     ret %LLVMValueRef null
 }
 
-; codegen_map_predicate_string: Map predicate string to LLVMIntPredicate enum
-; Parameters:
-;   pred_str: Predicate string (e.g., "eq", "ne", "uge")
-;   pred_len: String length
-; Returns: LLVMIntPredicate enum value (i32), or -1 on error
-define i32 @codegen_map_predicate_string(i8* %pred_str, i64 %pred_len) {
-entry:
-    ; Compare with known predicates
-    ; "eq" -> 32 (LLVMIntEQ)
-    %is_eq = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.pred_eq, i32 0, i32 0), i64 2)
-    %is_eq_bool = icmp ne i32 %is_eq, 0
-    br i1 %is_eq_bool, label %return_eq, label %check_ne
-    
-return_eq:
-    ret i32 32  ; LLVMIntEQ
-    
-check_ne:
-    %is_ne = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.pred_ne, i32 0, i32 0), i64 2)
-    %is_ne_bool = icmp ne i32 %is_ne, 0
-    br i1 %is_ne_bool, label %return_ne, label %check_uge
-    
-return_ne:
-    ret i32 33  ; LLVMIntNE
-    
-check_uge:
-    %is_uge = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_uge, i32 0, i32 0), i64 3)
-    %is_uge_bool = icmp ne i32 %is_uge, 0
-    br i1 %is_uge_bool, label %return_uge, label %check_ult
-    
-return_uge:
-    ret i32 35  ; LLVMIntUGE
-    
-check_ult:
-    %is_ult = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ult, i32 0, i32 0), i64 3)
-    %is_ult_bool = icmp ne i32 %is_ult, 0
-    br i1 %is_ult_bool, label %return_ult, label %check_ugt
-    
-return_ult:
-    ret i32 36  ; LLVMIntULT
-    
-check_ugt:
-    %is_ugt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ugt, i32 0, i32 0), i64 3)
-    %is_ugt_bool = icmp ne i32 %is_ugt, 0
-    br i1 %is_ugt_bool, label %return_ugt, label %check_ule
-    
-return_ugt:
-    ret i32 34  ; LLVMIntUGT
-    
-check_ule:
-    %is_ule = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_ule, i32 0, i32 0), i64 3)
-    %is_ule_bool = icmp ne i32 %is_ule, 0
-    br i1 %is_ule_bool, label %return_ule, label %check_sge
-    
-return_ule:
-    ret i32 37  ; LLVMIntULE
-    
-check_sge:
-    %is_sge = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sge, i32 0, i32 0), i64 3)
-    %is_sge_bool = icmp ne i32 %is_sge, 0
-    br i1 %is_sge_bool, label %return_sge, label %check_slt
-    
-return_sge:
-    ret i32 39  ; LLVMIntSGE
-    
-check_slt:
-    %is_slt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_slt, i32 0, i32 0), i64 3)
-    %is_slt_bool = icmp ne i32 %is_slt, 0
-    br i1 %is_slt_bool, label %return_slt, label %check_sgt
-    
-return_slt:
-    ret i32 40  ; LLVMIntSLT
-    
-check_sgt:
-    %is_sgt = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sgt, i32 0, i32 0), i64 3)
-    %is_sgt_bool = icmp ne i32 %is_sgt, 0
-    br i1 %is_sgt_bool, label %return_sgt, label %check_sle
-    
-return_sgt:
-    ret i32 38  ; LLVMIntSGT
-    
-check_sle:
-    %is_sle = call i32 @codegen_dsl_check_primitive(i8* %pred_str, i64 %pred_len, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.pred_sle, i32 0, i32 0), i64 3)
-    %is_sle_bool = icmp ne i32 %is_sle, 0
-    br i1 %is_sle_bool, label %return_sle, label %error
-    
-return_sle:
-    ret i32 41  ; LLVMIntSLE
-    
-error:
-    ret i32 -1
-}
+; codegen_map_predicate_string: defined in codegen.vibe
+declare i32 @codegen_map_predicate_string(i8*, i64)
 
 ; codegen_dsl_icmp: Handle llvm:icmp form
 ; Syntax: (llvm:icmp 'pred lhs rhs)

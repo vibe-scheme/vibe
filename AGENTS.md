@@ -26,6 +26,7 @@ This document provides guidance for AI agents contributing to the Vibe language 
 - **Documentation**: Every function should have a comment explaining its purpose
 - **Error Handling**: Handle errors gracefully with informative error messages
 - **Modularity**: Keep components separate and well-defined (lexer, parser, runtime, etc.)
+- **Parentheses**: Take care to keep parentheses balanced in Vibe source (`.vibe` files). Unclosed `)` causes infinite parse loops; extra `)` can trigger spurious main generation. The compiler now reports "unexpected end of file (unclosed parentheses)" or "unexpected ) (too many closing parens)" when it detects imbalance.
 
 ## Directory Structure
 
@@ -45,7 +46,7 @@ vibe/
 │   ├── parser.vibe    # Parser in Vibe DSL
 │   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
 │   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
-│   └── codegen.vibe   # Codegen utilities (Batch 1: 9 functions)
+│   └── codegen.vibe   # Codegen utilities (21 functions: Batch 1 + Batch 2)
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
 │   ├── design/        # Design documents and formal plans
@@ -61,6 +62,7 @@ vibe/
 - Run `./build.sh bootstrap` to rebuild the bootstrap compiler
 - Or run `./build.sh` which will automatically rebuild if needed
 - Never test with an outdated binary - LLVM IR changes require recompilation
+- **After upgrading LLVM**: Run `./build.sh clean` first so CMake reconfigures and finds the new LLVM paths
 
 The Vibe project uses a three-phase build system that enables gradual migration from pure LLVM IR to self-hosted Vibe code:
 
@@ -96,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9 utility functions migrated)
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9 functions, Batch 2: 4 functions; 21 total migrated, ~66 remaining)
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
@@ -123,7 +125,7 @@ Each chat document should include:
   - **Model tracking**: Always record which AI model was used for the session (e.g., `**Model**: Cursor Composer 1`, `**Model**: Claude claude-4.6-opus-high-thinking`). This helps track which model contributed to which parts of the codebase.
 - **Complete session overview**: Document ALL work done in the session, not just the final topic investigated. Review git diff to ensure comprehensive coverage of:
   - Bug fixes
-  - Feature implementations
+  - Feature implementations (including migrated functions and methods)
   - Code cleanup
   - Security fixes
   - Architectural discoveries
