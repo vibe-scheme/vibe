@@ -55,6 +55,7 @@ declare void @LLVMSetTarget(%LLVMModuleRef, i8*)
 declare void @LLVMSetDataLayout(%LLVMModuleRef, i8*)
 
 ; Type creation
+declare %LLVMTypeRef @LLVMInt1TypeInContext(%LLVMContextRef)
 declare %LLVMTypeRef @LLVMInt8TypeInContext(%LLVMContextRef)
 declare %LLVMTypeRef @LLVMInt32TypeInContext(%LLVMContextRef)
 declare %LLVMTypeRef @LLVMInt64TypeInContext(%LLVMContextRef)
@@ -332,6 +333,12 @@ entry:
 }
 
 ; Type creation
+define %LLVMTypeRef @llvm_get_int1_type(%LLVMContextRef %context) {
+entry:
+    %type = call %LLVMTypeRef @LLVMInt1TypeInContext(%LLVMContextRef %context)
+    ret %LLVMTypeRef %type
+}
+
 define %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context) {
 entry:
     %type = call %LLVMTypeRef @LLVMInt8TypeInContext(%LLVMContextRef %context)

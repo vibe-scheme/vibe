@@ -1,0 +1,10 @@
+;; Minimal repro for let* + store + cond_br bug
+;; Used for debugging - run: bootstrap_compiler test/let_store_br_minimal.vibe -o /tmp/out.bc 2>&1 | grep DSL-BR
+(llvm:define-function (test_cond_br_in_let ()) |void|
+  (llvm:label 'entry
+    (let* ((x (llvm:alloca |i1|))
+           (cond (llvm:const-int |i1| 1)))
+      (llvm:store cond x)
+      (llvm:br cond 'then 'else)))
+  (llvm:label 'then (llvm:ret-void))
+  (llvm:label 'else (llvm:ret-void)))

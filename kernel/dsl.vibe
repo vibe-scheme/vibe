@@ -24,6 +24,7 @@
 (llvm:declare-function (LLVMSetDataLayout (module |i8*|) (layout |i8*|)) |void|)
 
 ; Type creation
+(llvm:declare-function (LLVMInt1TypeInContext (context |i8*|)) |i8*|)
 (llvm:declare-function (LLVMInt8TypeInContext (context |i8*|)) |i8*|)
 (llvm:declare-function (LLVMInt32TypeInContext (context |i8*|)) |i8*|)
 (llvm:declare-function (LLVMInt64TypeInContext (context |i8*|)) |i8*|)
@@ -225,6 +226,10 @@
   (llvm:ret-void))
 
 ; Type creation
+(llvm:define-function (llvm_get_int1_type (context |i8*|)) |i8*|
+  (let* ((type (llvm:call LLVMInt1TypeInContext context)))
+    (llvm:ret type)))
+
 (llvm:define-function (llvm_get_int8_type (context |i8*|)) |i8*|
   (let* ((type (llvm:call LLVMInt8TypeInContext context)))
     (llvm:ret type)))

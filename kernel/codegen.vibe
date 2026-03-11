@@ -75,6 +75,9 @@
 ;; Forward declare codegen_define_string_constant_only (defined below)
 (llvm:declare-function (codegen_define_string_constant_only (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|)
 
+;; Forward declare codegen_string_literal (defined below)
+(llvm:declare-function (codegen_string_literal (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|)
+
 ;; Forward declare mutually recursive collect functions (defined below)
 (llvm:declare-function (codegen_collect_string_constants (cg |%CodeGen*|) (exprs |%ASTNode*|)) |void|)
 (llvm:declare-function (codegen_collect_string_constants_from_args (cg |%CodeGen*|) (args |%ASTNode*|)) |void|)
@@ -1327,6 +1330,83 @@
     (llvm:call codegen_append cg quote_newline (llvm:const-int |i64| 2))
     (llvm:ret-void)))
 
-;; codegen_define_string_constant_only and codegen_string_literal: Deferred migration.
-;; Bootstrap DSL has bug with let* body containing (store + br) - br not emitted.
-;; Definitions remain in codegen_no_vibe.ll until bootstrap is fixed.
+;; ============================================================================
+;; Minimal repro for let* + store + br DSL bug (see doc/design/let-star-store-br-bug-resolution-plan.md)
+;; When this compiles successfully, the bug is fixed.
+;; ============================================================================
+(llvm:define-function (test_store_br_bug ()) |void|
+  (llvm:label 'entry
+    (let* ((ptr (llvm:alloca |i32|)))
+      (llvm:store (llvm:const-int |i32| 42) ptr)
+      (llvm:br 'exit)))
+  (llvm:label 'exit
+    (llvm:ret-void)))
+
+;; Conditional br in let* (repros bug - see let-star-store-br-bug-resolution-plan.md)
+(llvm:define-function (test_cond_br_in_let ()) |void|
+  (llvm:label 'entry
+    (let* ((x (llvm:alloca |i1|))
+           (cond (llvm:const-int |i1| 1)))
+      (llvm:store cond x)
+      (llvm:br cond 'then 'else)))
+  (llvm:label 'then (llvm:ret-void))
+  (llvm:label 'else (llvm:ret-void)))
+
+;; ============================================================================
+;; codegen_define_string_constant_only
+;; Generate string constant definition only (without reference).
+;; Used during codegen_collect_string_constants phase.
+;; Parameters: cg (CodeGen*), str (i8*), len (i64)
+;; Returns: i8* constant name (e.g. ".str.0")
+;; ============================================================================
+(llvm:define-function (codegen_define_string_constant_only (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|
+  (let* ((counter_ptr (llvm:gep |%CodeGen| cg 0 3))
+         (counter (llvm:load counter_ptr |i32|))
+         (new_counter (llvm:add counter (llvm:const-int |i32| 1)))
+         (name (llvm:call codegen_format_string_name counter))
+         (context_ptr (llvm:gep |%CodeGen| cg 0 5))
+         (context (llvm:load context_ptr |i8*|))
+         (module_ptr (llvm:gep |%CodeGen| cg 0 6))
+         (module (llvm:load module_ptr |i8*|))
+         (context_null (llvm:icmp 'eq context (llvm:const-null |i8*|)))
+         (module_null (llvm:icmp 'eq module (llvm:const-null |i8*|)))
+         (can_use_llvm (llvm:or context_null module_null)))
+    (llvm:store new_counter counter_ptr)
+    (llvm:br can_use_llvm 'text_only 'create_llvm_constant))
+  (llvm:label 'create_llvm_constant
+    (let* ((counter_ptr (llvm:gep |%CodeGen| cg 0 3))
+           (stored_counter (llvm:load counter_ptr |i32|))
+           (prev_counter (llvm:sub stored_counter (llvm:const-int |i32| 1)))
+           (name (llvm:call codegen_format_string_name prev_counter))
+           (context_ptr (llvm:gep |%CodeGen| cg 0 5))
+           (context (llvm:load context_ptr |i8*|))
+           (module_ptr (llvm:gep |%CodeGen| cg 0 6))
+           (module (llvm:load module_ptr |i8*|))
+           (i8_type (llvm:call llvm_get_int8_type context))
+           (len_plus_one (llvm:add len (llvm:const-int |i64| 1)))
+           (len_plus_one_int (llvm:trunc len_plus_one |i64| |i32|))
+           (array_type (llvm:call llvm_get_array_type i8_type len_plus_one_int))
+           (str_len_int (llvm:trunc len |i64| |i32|))
+           (const_str (llvm:call llvm_create_constant_string context str str_len_int (llvm:const-int |i32| 0)))
+           (global (llvm:call llvm_add_global module array_type name)))
+      (llvm:call llvm_set_initializer global const_str)
+      (llvm:call llvm_set_global_constant global (llvm:const-int |i32| 1))
+      (llvm:call llvm_set_linkage global (llvm:const-int |i32| 0))
+      (llvm:br 'text_only)))
+  (llvm:label 'text_only
+    (let* ((counter_ptr (llvm:gep |%CodeGen| cg 0 3))
+           (stored_counter (llvm:load counter_ptr |i32|))
+           (prev_counter (llvm:sub stored_counter (llvm:const-int |i32| 1)))
+           (name (llvm:call codegen_format_string_name prev_counter)))
+      (llvm:call codegen_append_string_constant cg name str len)
+      (llvm:ret name))))
+
+;; ============================================================================
+;; codegen_string_literal
+;; Generate string constant in IR (creates definition and returns name).
+;; Same implementation as codegen_define_string_constant_only.
+;; Parameters: cg (CodeGen*), str (i8*), len (i64)
+;; Returns: i8* constant name
+;; ============================================================================
+(llvm:define-function (codegen_string_literal (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|
+  (llvm:ret (llvm:call codegen_define_string_constant_only cg str len)))

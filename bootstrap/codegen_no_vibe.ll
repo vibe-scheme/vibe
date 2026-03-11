@@ -58,6 +58,7 @@ declare %LLVMModuleRef @llvm_create_module(%LLVMContextRef, i8*)
 declare void @llvm_dispose_module(%LLVMModuleRef)
 declare void @llvm_set_target(%LLVMModuleRef, i8*)
 declare void @llvm_set_data_layout(%LLVMModuleRef, i8*)
+declare %LLVMTypeRef @llvm_get_int1_type(%LLVMContextRef)
 declare %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef)
 declare %LLVMTypeRef @llvm_get_int32_type(%LLVMContextRef)
 declare %LLVMTypeRef @llvm_get_int64_type(%LLVMContextRef)
@@ -329,39 +330,8 @@ done:
 ; codegen_append: defined in codegen.vibe
 declare void @codegen_append(%CodeGen*, i8*, i64)
 
-; codegen_string_literal: Deferred migration - bootstrap DSL has bug with let* body (store + br)
-define i8* @codegen_string_literal(%CodeGen* %cg, i8* %str, i64 %len) {
-entry:
-    %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
-    %counter = load i32, i32* %counter_ptr
-    %new_counter = add i32 %counter, 1
-    store i32 %new_counter, i32* %counter_ptr
-    %name = call i8* @codegen_format_string_name(i32 %counter)
-    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
-    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %context_null = icmp eq %LLVMContextRef %context, null
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    %can_use_llvm = or i1 %context_null, %module_null
-    %can_use_llvm_not = xor i1 %can_use_llvm, -1
-    br i1 %can_use_llvm_not, label %create_llvm_constant, label %text_only
-create_llvm_constant:
-    %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    %len_plus_one = add i64 %len, 1
-    %len_plus_one_int = trunc i64 %len_plus_one to i32
-    %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
-    %str_len_int = trunc i64 %len to i32
-    %const_str = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %str_len_int, i32 0)
-    %global = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %array_type, i8* %name)
-    call void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %const_str)
-    call void @llvm_set_global_constant(%LLVMValueRef %global, i32 1)
-    call void @llvm_set_linkage(%LLVMValueRef %global, i32 0)
-    br label %text_only
-text_only:
-    call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
-    ret i8* %name
-}
+; codegen_string_literal: defined in codegen.vibe
+declare i8* @codegen_string_literal(%CodeGen*, i8*, i64)
 
 ; codegen_append_string_constant: defined in codegen.vibe
 declare void @codegen_append_string_constant(%CodeGen*, i8*, i8*, i64)
@@ -1611,39 +1581,8 @@ done:
 }
 
 
-; codegen_define_string_constant_only: Deferred migration - bootstrap DSL has bug with let* body (store + br)
-define i8* @codegen_define_string_constant_only(%CodeGen* %cg, i8* %str, i64 %len) {
-entry:
-    %counter_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 3
-    %counter = load i32, i32* %counter_ptr
-    %new_counter = add i32 %counter, 1
-    store i32 %new_counter, i32* %counter_ptr
-    %name = call i8* @codegen_format_string_name(i32 %counter)
-    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
-    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %context_null = icmp eq %LLVMContextRef %context, null
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    %can_use_llvm = or i1 %context_null, %module_null
-    %can_use_llvm_not = xor i1 %can_use_llvm, -1
-    br i1 %can_use_llvm_not, label %create_llvm_constant, label %text_only
-create_llvm_constant:
-    %i8_type = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    %len_plus_one = add i64 %len, 1
-    %len_plus_one_int = trunc i64 %len_plus_one to i32
-    %array_type = call %LLVMTypeRef @llvm_get_array_type(%LLVMTypeRef %i8_type, i32 %len_plus_one_int)
-    %str_len_int = trunc i64 %len to i32
-    %const_str = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %str, i32 %str_len_int, i32 0)
-    %global = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %array_type, i8* %name)
-    call void @llvm_set_initializer(%LLVMValueRef %global, %LLVMValueRef %const_str)
-    call void @llvm_set_global_constant(%LLVMValueRef %global, i32 1)
-    call void @llvm_set_linkage(%LLVMValueRef %global, i32 0)
-    br label %text_only
-text_only:
-    call void @codegen_append_string_constant(%CodeGen* %cg, i8* %name, i8* %str, i64 %len)
-    ret i8* %name
-}
+; codegen_define_string_constant_only: defined in codegen.vibe
+declare i8* @codegen_define_string_constant_only(%CodeGen*, i8*, i64)
 
 ; codegen_get_string_constant_name: defined in codegen.vibe
 declare i8* @codegen_get_string_constant_name(%CodeGen*, i8*, i64)
@@ -2407,6 +2346,9 @@ declare i32 @printf(i8*, ...)
 @.str.debug_evaluating_value = private unnamed_addr constant [14 x i8] c" - evaluating\00"
 @.str.debug_value_eval_failed = private unnamed_addr constant [21 x i8] c" - value eval FAILED\00"
 @.str.debug_let_star_recognized = private unnamed_addr constant [8 x i8] c"let* OK\00"
+@.str.debug_let_star_body_struct = private unnamed_addr constant [67 x i8] c"[LET*-BODY] body=%p car.type=%d cdr=%p cdr.car.type=%d cdr.cdr=%p\0A\00"
+@.str.debug_let_star_body_iter = private unnamed_addr constant [35 x i8] c"[LET*-BODY] iter N=%d car.type=%d\0A\00"
+@.str.debug_let_star_not_binding = private unnamed_addr constant [44 x i8] c"[LET*-BIND] not_binding->eval_body type=%d\0A\00"
 @.str.debug_processing_binding = private unnamed_addr constant [19 x i8] c"Processing binding\00"
 @.str.debug_extracted_name = private unnamed_addr constant [17 x i8] c"Extracted name: \00"
 @.str.debug_binding_local_value = private unnamed_addr constant [22 x i8] c"Binding local value: \00"
@@ -2522,6 +2464,7 @@ declare i32 @printf(i8*, ...)
 @.str.printf_name = private unnamed_addr constant [7 x i8] c"printf\00"
 @.str.empty = private unnamed_addr constant [1 x i8] c"\00"
 @.str.type_void = private unnamed_addr constant [5 x i8] c"void\00"
+@.str.type_i1 = private unnamed_addr constant [3 x i8] c"i1\00"
 @.str.type_i8 = private unnamed_addr constant [3 x i8] c"i8\00"
 @.str.type_i8_ptr = private unnamed_addr constant [4 x i8] c"i8*\00"
 @.str.type_i32 = private unnamed_addr constant [4 x i8] c"i32\00"
@@ -2729,18 +2672,33 @@ return_named_type:
 check_void:
     ; Check for "void" (already normalized by lexer - bars stripped)
     %is_void_len = icmp eq i64 %type_len, 4
-    br i1 %is_void_len, label %check_void_str, label %check_i8
+    br i1 %is_void_len, label %check_void_str, label %check_i1
     
 check_void_str:
     ; Compare with "void" (4 chars)
     %void_str = getelementptr [5 x i8], [5 x i8]* @.str.type_void, i32 0, i32 0
     %void_cmp = call i32 @strncmp(i8* %type_str, i8* %void_str, i32 4)
     %is_void = icmp eq i32 %void_cmp, 0
-    br i1 %is_void, label %return_void, label %check_i8
+    br i1 %is_void, label %return_void, label %check_i1
     
 return_void:
     %void_type = call %LLVMTypeRef @llvm_get_void_type(%LLVMContextRef %context)
     ret %LLVMTypeRef %void_type
+    
+check_i1:
+    ; Check for "i1" (1-bit integer, used for booleans/conditions)
+    %is_i1_len = icmp eq i64 %type_len, 2
+    br i1 %is_i1_len, label %check_i1_str, label %check_i8
+    
+check_i1_str:
+    %i1_str = getelementptr [3 x i8], [3 x i8]* @.str.type_i1, i32 0, i32 0
+    %i1_cmp = call i32 @strncmp(i8* %type_str, i8* %i1_str, i32 2)
+    %is_i1 = icmp eq i32 %i1_cmp, 0
+    br i1 %is_i1, label %return_i1, label %check_i8
+    
+return_i1:
+    %i1_type = call %LLVMTypeRef @llvm_get_int1_type(%LLVMContextRef %context)
+    ret %LLVMTypeRef %i1_type
     
 check_i8:
     ; Check for "i8" (already normalized by lexer - bars stripped)
@@ -6185,9 +6143,31 @@ extract_bindings_list:
     
 extract_body_from_expr:
     ; Extract body from expr.cdr.cdr (body comes after bindings-list)
-    %body_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr_cdr, i32 0, i32 5
-    %body = load %ASTNode*, %ASTNode** %body_cdr_ptr
+    %expr_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %expr_cdr, i32 0, i32 5
+    %body = load %ASTNode*, %ASTNode** %expr_cdr_cdr_ptr
     
+    ; [LET*-BODY] Debug: log body structure (H2, H5)
+    %body_car_ptr = getelementptr %ASTNode, %ASTNode* %body, i32 0, i32 4
+    %body_car = load %ASTNode*, %ASTNode** %body_car_ptr
+    %body_car_type_ptr = getelementptr %ASTNode, %ASTNode* %body_car, i32 0, i32 0
+    %body_car_type = load i32, i32* %body_car_type_ptr
+    %body_rest_ptr = getelementptr %ASTNode, %ASTNode* %body, i32 0, i32 5
+    %body_cdr = load %ASTNode*, %ASTNode** %body_rest_ptr
+    %body_cdr_null = icmp eq %ASTNode* %body_cdr, null
+    br i1 %body_cdr_null, label %log_body_1elem, label %get_body_cdr_car
+get_body_cdr_car:
+    %body_cdr_car_ptr = getelementptr %ASTNode, %ASTNode* %body_cdr, i32 0, i32 4
+    %body_cdr_car = load %ASTNode*, %ASTNode** %body_cdr_car_ptr
+    %body_cdr_car_type_ptr = getelementptr %ASTNode, %ASTNode* %body_cdr_car, i32 0, i32 0
+    %body_cdr_car_type = load i32, i32* %body_cdr_car_type_ptr
+    %body_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %body_cdr, i32 0, i32 5
+    %body_cdr_cdr = load %ASTNode*, %ASTNode** %body_cdr_cdr_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([67 x i8], [67 x i8]* @.str.debug_let_star_body_struct, i32 0, i32 0), %ASTNode* %body, i32 %body_car_type, %ASTNode* %body_cdr, i32 %body_cdr_car_type, %ASTNode* %body_cdr_cdr)
+    br label %body_struct_done
+log_body_1elem:
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([67 x i8], [67 x i8]* @.str.debug_let_star_body_struct, i32 0, i32 0), %ASTNode* %body, i32 %body_car_type, %ASTNode* null, i32 -1, %ASTNode* null)
+    br label %body_struct_done
+body_struct_done:
     ; Debug: Extracted bindings and body
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.debug_let_star_recognized, i32 0, i32 0))
@@ -6276,6 +6256,7 @@ debug_not_list:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_binding_not_list, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([44 x i8], [44 x i8]* @.str.debug_let_star_not_binding, i32 0, i32 0), i32 %binding_type)
     br label %eval_body
     
 check_binding_pair_structure:
@@ -6332,6 +6313,7 @@ debug_name_not_atom:
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([28 x i8], [28 x i8]* @.str.debug_name_not_atom, i32 0, i32 0))
     call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([44 x i8], [44 x i8]* @.str.debug_let_star_not_binding, i32 0, i32 0), i32 %name_type)
     br label %eval_body
     
 process_binding:
@@ -6471,6 +6453,8 @@ eval_body_loop:
     store %ASTNode* %body_loaded, %ASTNode** %current_expr
     %last_result = alloca %LLVMValueRef
     store %LLVMValueRef null, %LLVMValueRef* %last_result
+    %body_iter_count = alloca i32
+    store i32 0, i32* %body_iter_count
     br label %body_iter
     
 body_iter:
@@ -6479,8 +6463,15 @@ body_iter:
     br i1 %expr_val_null, label %return_last, label %eval_expr
     
 eval_expr:
+    ; [LET*-BODY] Debug: log body iteration (H1)
+    %iter_val = load i32, i32* %body_iter_count
+    %iter_inc = add i32 %iter_val, 1
+    store i32 %iter_inc, i32* %body_iter_count
     %body_expr_car_ptr = getelementptr %ASTNode, %ASTNode* %expr_val, i32 0, i32 4
     %body_expr_car = load %ASTNode*, %ASTNode** %body_expr_car_ptr
+    %body_expr_car_type_ptr = getelementptr %ASTNode, %ASTNode* %body_expr_car, i32 0, i32 0
+    %body_expr_car_type = load i32, i32* %body_expr_car_type_ptr
+    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([35 x i8], [35 x i8]* @.str.debug_let_star_body_iter, i32 0, i32 0), i32 %iter_inc, i32 %body_expr_car_type)
     
     ; Evaluate expression
     %expr_result = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %body_expr_car)
