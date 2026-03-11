@@ -47,8 +47,17 @@
 (llvm:declare-function (realloc (ptr |i8*|) (size |i64|)) |i8*|)
 (llvm:declare-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*|)
 (llvm:declare-function (strlen (s |i8*|)) |i64|)
+(llvm:declare-function (free (ptr |i8*|)) |void|)
 
-;; Forward declare llvm_get_element_type (defined in dsl.vibe, linked at build time)
+;; Forward declare LLVM/DSL functions (defined in dsl.vibe, linked at build time)
+(llvm:declare-function (llvm_ffi_init) |i32|)
+(llvm:declare-function (llvm_create_context) |i8*|)
+(llvm:declare-function (llvm_dispose_context (context |i8*|)) |void|)
+(llvm:declare-function (llvm_create_module (context |i8*|) (module_id |i8*|)) |i8*|)
+(llvm:declare-function (llvm_set_target (module |i8*|) (triple |i8*|)) |void|)
+(llvm:declare-function (llvm_set_data_layout (module |i8*|) (data_layout |i8*|)) |void|)
+(llvm:declare-function (llvm_dispose_builder (builder |i8*|)) |void|)
+(llvm:declare-function (llvm_dispose_module (module |i8*|)) |void|)
 (llvm:declare-function (llvm_get_element_type (type |i8*|)) |i8*|)
 
 ;; Forward declare LLVM API wrappers for string constant creation (defined in dsl.vibe)
@@ -1146,7 +1155,7 @@
            (cdr (llvm:load cdr_ptr |%ASTNode*|)))
       (llvm:store cdr current)
       (llvm:br 'iterate)))
-  (llvm:label 'not_found
+    (llvm:label 'not_found
     (llvm:ret (llvm:const-null |i8*|))))
 
 ;; ============================================================================
@@ -1410,3 +1419,138 @@
 ;; ============================================================================
 (llvm:define-function (codegen_string_literal (cg |%CodeGen*|) (str |i8*|) (len |i64|)) |i8*|
   (llvm:ret (llvm:call codegen_define_string_constant_only cg str len)))
+
+;; ============================================================================
+;; codegen_init / codegen_dispose string constants
+;; ============================================================================
+(llvm:define-constant .str.module_name |[5 x i8]| #u8(118 105 98 101 0))
+(llvm:define-constant .str.target_triple_value |[19 x i8]| #u8(97 114 109 54 52 45 97 112 112 108 101 45 100 97 114 119 105 110 0))
+(llvm:define-constant .str.data_layout_value |[34 x i8]| #u8(101 45 109 58 111 45 105 54 52 58 54 52 45 105 49 50 56 58 49 50 56 45 110 51 50 58 54 52 45 83 49 50 56 0))
+(llvm:define-constant .str.target_triple |[39 x i8]| #u8(116 97 114 103 101 116 32 116 114 105 112 108 101 32 61 32 34 97 114 109 54 52 45 97 112 112 108 101 45 100 97 114 119 105 110 34 10 10 0))
+
+;; ============================================================================
+;; codegen_init
+;; Initialize code generator. Returns CodeGen* or null on error.
+;; Parameters: module_name (i8*) - null to use "vibe"
+;; ============================================================================
+(llvm:define-function (codegen_init (module_name |i8*|)) |%CodeGen*|
+  (let* ((cg (llvm:call malloc (llvm:const-int |i64| 112)))
+         (cg_ptr (llvm:bitcast cg |%CodeGen*|))
+         (ffi_result (llvm:call llvm_ffi_init))
+         (llvm_context (llvm:call llvm_create_context))
+         (context_null (llvm:icmp 'eq llvm_context (llvm:const-null |i8*|))))
+    (llvm:br context_null 'dispose_context 'check_module_name))
+  (llvm:label 'check_module_name
+    (let* ((module_name_null (llvm:icmp 'eq module_name (llvm:const-null |i8*|))))
+      (llvm:br module_name_null 'use_default_name 'use_provided_name)))
+  (llvm:label 'use_default_name
+    (let* ((default_name_array (llvm:gep |[5 x i8]| (llvm:get-global .str.module_name) 0 0)))
+      (llvm:br 'create_module)))
+  (llvm:label 'use_provided_name
+    (llvm:br 'create_module))
+  (llvm:label 'create_module
+    (let* ((default_name_array (llvm:gep |[5 x i8]| (llvm:get-global .str.module_name) 0 0))
+           (module_name_to_use (llvm:select (llvm:icmp 'eq module_name (llvm:const-null |i8*|)) default_name_array module_name))
+           (llvm_module (llvm:call llvm_create_module llvm_context module_name_to_use))
+           (module_null (llvm:icmp 'eq llvm_module (llvm:const-null |i8*|))))
+      (llvm:br module_null 'dispose_context 'set_target)))
+  (llvm:label 'set_target
+    (let* ((target_triple_array (llvm:gep |[19 x i8]| (llvm:get-global .str.target_triple_value) 0 0))
+           (data_layout_array (llvm:gep |[34 x i8]| (llvm:get-global .str.data_layout_value) 0 0))
+           (buffer_size (llvm:const-int |i64| 65536))
+           (buffer (llvm:call malloc buffer_size))
+           (buffer_ptr (llvm:gep |%CodeGen| cg_ptr 0 0))
+           (size_ptr (llvm:gep |%CodeGen| cg_ptr 0 1))
+           (pos_ptr (llvm:gep |%CodeGen| cg_ptr 0 2))
+           (str_counter_ptr (llvm:gep |%CodeGen| cg_ptr 0 3))
+           (label_counter_ptr (llvm:gep |%CodeGen| cg_ptr 0 4))
+           (context_ptr (llvm:gep |%CodeGen| cg_ptr 0 5))
+           (module_ptr (llvm:gep |%CodeGen| cg_ptr 0 6))
+           (builder_ptr (llvm:gep |%CodeGen| cg_ptr 0 7))
+           (current_function_ptr (llvm:gep |%CodeGen| cg_ptr 0 8))
+           (param_names_ptr (llvm:gep |%CodeGen| cg_ptr 0 9))
+           (local_values_ptr (llvm:gep |%CodeGen| cg_ptr 0 10))
+           (function_types_ptr (llvm:gep |%CodeGen| cg_ptr 0 11))
+           (constants_ptr (llvm:gep |%CodeGen| cg_ptr 0 12))
+           (types_ptr (llvm:gep |%CodeGen| cg_ptr 0 13))
+           (llvm_functions_ptr (llvm:gep |%CodeGen| cg_ptr 0 14)))
+      (llvm:call llvm_set_target llvm_module target_triple_array)
+      (llvm:call llvm_set_data_layout llvm_module data_layout_array)
+      (llvm:store buffer buffer_ptr)
+      (llvm:store buffer_size size_ptr)
+      (llvm:store (llvm:const-int |i64| 0) pos_ptr)
+      (llvm:store (llvm:const-int |i32| 0) str_counter_ptr)
+      (llvm:store (llvm:const-int |i32| 0) label_counter_ptr)
+      (llvm:store llvm_context context_ptr)
+      (llvm:store llvm_module module_ptr)
+      (llvm:store (llvm:const-null |i8*|) builder_ptr)
+      (llvm:store (llvm:const-null |i8*|) current_function_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) param_names_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) local_values_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) function_types_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) constants_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) types_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) llvm_functions_ptr)
+      (llvm:call codegen_append cg_ptr (llvm:gep |[39 x i8]| (llvm:get-global .str.target_triple) 0 0) (llvm:const-int |i64| 37))
+      (llvm:ret cg_ptr)))
+  (llvm:label 'dispose_context
+    (llvm:call llvm_dispose_context llvm_context)
+    (llvm:br 'error))
+  (llvm:label 'error
+    (llvm:call free cg)
+    (llvm:ret (llvm:const-null |%CodeGen*|))))
+
+;; ============================================================================
+;; codegen_dispose
+;; Dispose code generator and clean up LLVM resources.
+;; Parameters: cg (CodeGen*)
+;; ============================================================================
+(llvm:define-function (codegen_dispose (cg |%CodeGen*|)) |void|
+  (let* ((cg_null (llvm:icmp 'eq cg (llvm:const-null |%CodeGen*|))))
+    (llvm:br cg_null 'done 'dispose_resources))
+  (llvm:label 'dispose_resources
+    (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (llvm:icmp 'eq builder (llvm:const-null |i8*|))))
+      (llvm:br builder_null 'dispose_module_check 'dispose_builder)))
+  (llvm:label 'dispose_builder
+    (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+           (builder (llvm:load builder_ptr |i8*|)))
+      (llvm:call llvm_dispose_builder builder)
+      (llvm:br 'dispose_module_check)))
+  (llvm:label 'dispose_module_check
+    (let* ((module_ptr (llvm:gep |%CodeGen| cg 0 6))
+           (module (llvm:load module_ptr |i8*|))
+           (module_null (llvm:icmp 'eq module (llvm:const-null |i8*|))))
+      (llvm:br module_null 'dispose_context 'dispose_module)))
+  (llvm:label 'dispose_module
+    (let* ((module_ptr (llvm:gep |%CodeGen| cg 0 6))
+           (module (llvm:load module_ptr |i8*|)))
+      (llvm:call llvm_dispose_module module)
+      (llvm:br 'dispose_context)))
+  (llvm:label 'dispose_context
+    (let* ((context_ptr (llvm:gep |%CodeGen| cg 0 5))
+           (context (llvm:load context_ptr |i8*|))
+           (context_null (llvm:icmp 'eq context (llvm:const-null |i8*|))))
+      (llvm:br context_null 'free_buffer 'dispose_ctx)))
+  (llvm:label 'dispose_ctx
+    (let* ((context_ptr (llvm:gep |%CodeGen| cg 0 5))
+           (context (llvm:load context_ptr |i8*|)))
+      (llvm:call llvm_dispose_context context)
+      (llvm:br 'free_buffer)))
+  (llvm:label 'free_buffer
+    (let* ((buffer_ptr (llvm:gep |%CodeGen| cg 0 0))
+           (buffer (llvm:load buffer_ptr |i8*|))
+           (buffer_null (llvm:icmp 'eq buffer (llvm:const-null |i8*|))))
+      (llvm:br buffer_null 'free_cg 'free_buf)))
+  (llvm:label 'free_buf
+    (let* ((buffer_ptr (llvm:gep |%CodeGen| cg 0 0))
+           (buffer (llvm:load buffer_ptr |i8*|)))
+      (llvm:call free buffer)
+      (llvm:br 'free_cg)))
+  (llvm:label 'free_cg
+    (let* ((cg_bytes (llvm:bitcast cg |i8*|)))
+      (llvm:call free cg_bytes)
+      (llvm:br 'done)))
+  (llvm:label 'done
+    (llvm:ret-void)))

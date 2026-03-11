@@ -46,7 +46,7 @@ vibe/
 │   ├── parser.vibe    # Parser in Vibe DSL
 │   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
 │   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
-│   └── codegen.vibe   # Codegen utilities (33 functions: Batch 1 + Batch 2 + Batch 3)
+│   └── codegen.vibe   # Codegen utilities (35 functions: Batch 1 + Batch 2 + Batch 3 + Tier 1)
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
 │   ├── design/        # Design documents and formal plans
@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12 functions; 33 total migrated, ~54 remaining)
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2 functions; 35 total migrated, ~52 remaining). Tier 2 (5 functions) deferred due to bootstrap compiler "Global not found" limitation for cross-block SSA values.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
