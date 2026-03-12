@@ -162,167 +162,14 @@ declare void @codegen_append_escaped_string(%CodeGen*, i8*, i64)
 
 ; Handle define-bitcode-type AST node
 ; codegen_define_llvm_type: Generate LLVM type definition using direct LLVM API
-define i32 @codegen_define_llvm_type(%CodeGen* %cg, %ASTNode* %node) {
-entry:
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
-    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
-    %type_name_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
-    %type_name_node = load %ASTNode*, %ASTNode** %type_name_node_ptr
-    %type_name_val_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 2
-    %type_name = load i8*, i8** %type_name_val_ptr
-    %type_name_len_ptr = getelementptr %ASTNode, %ASTNode* %type_name_node, i32 0, i32 3
-    %type_name_len = load i64, i64* %type_name_len_ptr
-    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
-    %fields_list = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
-    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
-    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
-    %context_null = icmp eq %LLVMContextRef %context, null
-    br i1 %context_null, label %error, label %collect_fields
-    
-collect_fields:
-    %types_array = alloca %LLVMTypeRef, i32 64
-    %field_count = call i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields_list, %LLVMTypeRef* %types_array, i32 64)
-    %field_count_zero = icmp eq i32 %field_count, 0
-    br i1 %field_count_zero, label %error, label %create_struct
-    
-create_struct:
-    %name_buf_size = add i64 %type_name_len, 1
-    %name_buf = call i8* @malloc(i64 %name_buf_size)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %type_name, i64 %type_name_len, i1 false)
-    %null_ptr = getelementptr i8, i8* %name_buf, i64 %type_name_len
-    store i8 0, i8* %null_ptr
-    %named_struct_type = call %LLVMTypeRef @llvm_create_named_struct_type(%LLVMContextRef %context, i8* %name_buf)
-    %named_struct_null = icmp eq %LLVMTypeRef %named_struct_type, null
-    br i1 %named_struct_null, label %free_name_buf_error, label %set_struct_body
-    
-free_name_buf_error:
-    call void @free(i8* %name_buf)
-    br label %error
-    
-set_struct_body:
-    call void @llvm_set_struct_body(%LLVMTypeRef %named_struct_type, %LLVMTypeRef* %types_array, i32 %field_count, i32 0)
-    call void @free(i8* %name_buf)
-    call void @codegen_store_type(%CodeGen* %cg, i8* %type_name, i64 %type_name_len, %LLVMTypeRef %named_struct_type)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %type_name, i64 %type_name_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([8 x i8], [8 x i8]* @.str.type_equals, i32 0, i32 0), i64 7)
-    call void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields_list)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
-    ret i32 0
-    
-error:
-    ret i32 -1
-}
+; codegen_define_llvm_type: Migrated to kernel/codegen.vibe
+declare i32 @codegen_define_llvm_type(%CodeGen* %cg, %ASTNode* %node)
 
 ; codegen_append_type_fields: Migrated to kernel/codegen.vibe
 declare void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields)
 
-; codegen_define_llvm_constant: Generate LLVM constant definition
-define i32 @codegen_define_llvm_constant(%CodeGen* %cg, %ASTNode* %node) {
-entry:
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %node, i32 0, i32 5
-    %cdr = load %ASTNode*, %ASTNode** %cdr_ptr
-    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
-    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
-    %name = load i8*, i8** %name_val_ptr
-    %name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
-    %name_len = load i64, i64* %name_len_ptr
-    %cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr, i32 0, i32 5
-    %cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_ptr
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type = load i8*, i8** %type_val_ptr
-    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
-    %type_len = load i64, i64* %type_len_ptr
-    %cdr_cdr_cdr_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr, i32 0, i32 5
-    %cdr_cdr_cdr = load %ASTNode*, %ASTNode** %cdr_cdr_cdr_ptr
-    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %cdr_cdr_cdr, i32 0, i32 4
-    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
-    %value_val_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 2
-    %value = load i8*, i8** %value_val_ptr
-    %value_len_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 3
-    %value_len = load i64, i64* %value_len_ptr
-    %value_node_type_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 0
-    %value_node_type = load i32, i32* %value_node_type_ptr
-    %is_atom = icmp eq i32 %value_node_type, 0
-    br i1 %is_atom, label %check_bytevector, label %not_bytevector
-    
-check_bytevector:
-    %atom_type_ptr = getelementptr %ASTNode, %ASTNode* %value_node, i32 0, i32 1
-    %atom_type = load i32, i32* %atom_type_ptr
-    %is_bytevector = icmp eq i32 %atom_type, 13
-    br i1 %is_bytevector, label %format_bytevector, label %not_bytevector
-    
-format_bytevector:
-    %context_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 5
-    %context = load %LLVMContextRef, %LLVMContextRef* %context_ptr
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %context_null = icmp eq %LLVMContextRef %context, null
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    %either_null = or i1 %context_null, %module_null
-    br i1 %either_null, label %text_only_constant, label %create_constant_direct
-    
-create_constant_direct:
-    %constant_type_ref = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type, i64 %type_len)
-    %constant_type_ref_null = icmp eq %LLVMTypeRef %constant_type_ref, null
-    br i1 %constant_type_ref_null, label %text_only_constant, label %create_string_constant
-    
-create_string_constant:
-    %i8_type_const = call %LLVMTypeRef @llvm_get_int8_type(%LLVMContextRef %context)
-    %i8_type_const_null = icmp eq %LLVMTypeRef %i8_type_const, null
-    br i1 %i8_type_const_null, label %text_only_constant, label %create_const_str
-    
-create_const_str:
-    %value_len_int_const = trunc i64 %value_len to i32
-    %const_str_value = call %LLVMValueRef @llvm_create_constant_string(%LLVMContextRef %context, i8* %value, i32 %value_len_int_const, i32 1)
-    %const_str_value_null = icmp eq %LLVMValueRef %const_str_value, null
-    br i1 %const_str_value_null, label %text_only_constant, label %create_global
-    
-create_global:
-    %name_buf_size = add i64 %name_len, 1
-    %name_buf = call i8* @malloc(i64 %name_buf_size)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
-    %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
-    store i8 0, i8* %name_null_ptr
-    %global_const = call %LLVMValueRef @llvm_add_global(%LLVMModuleRef %module, %LLVMTypeRef %constant_type_ref, i8* %name_buf)
-    call void @free(i8* %name_buf)
-    %global_const_null = icmp eq %LLVMValueRef %global_const, null
-    br i1 %global_const_null, label %text_only_constant, label %set_initializer
-    
-set_initializer:
-    call void @llvm_set_initializer(%LLVMValueRef %global_const, %LLVMValueRef %const_str_value)
-    call void @llvm_set_global_constant(%LLVMValueRef %global_const, i32 1)
-    call void @llvm_set_linkage(%LLVMValueRef %global_const, i32 0)
-    call void @codegen_store_constant(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef %global_const)
-    br label %text_only_constant
-    
-text_only_constant:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %type, i64 %type_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.c_quote_open, i32 0, i32 0), i64 2)
-    call void @codegen_append_bytevector(%CodeGen* %cg, i8* %value, i64 %value_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.quote, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
-    ret i32 0
-    
-not_bytevector:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.at_sign, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %name, i64 %name_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.constant_equals, i32 0, i32 0), i64 11)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %type, i64 %type_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %value, i64 %value_len)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.newline, i32 0, i32 0), i64 1)
-    ret i32 0
-}
+; codegen_define_llvm_constant: Migrated to kernel/codegen.vibe
+declare i32 @codegen_define_llvm_constant(%CodeGen* %cg, %ASTNode* %node)
 
 ; OLD PARSING CODE REMOVED - Now using direct LLVM API
 ; The following code was removed as it's no longer needed:
@@ -2022,13 +1869,13 @@ declare i32 @printf(i8*, ...)
 @.str.type_equals = external constant [8 x i8]
 @.str.lbrace = external constant [3 x i8]
 @.str.rbrace = external constant [2 x i8]
-@.str.newline = private unnamed_addr constant [2 x i8] c"\0A\00"
-@.str.at_sign = private unnamed_addr constant [2 x i8] c"@\00"
-@.str.constant_equals = private unnamed_addr constant [12 x i8] c" = constant\00"
-@.str.space = private unnamed_addr constant [2 x i8] c" \00"
+@.str.newline = external constant [2 x i8]
+@.str.at_sign = external constant [2 x i8]
+@.str.constant_equals = external constant [12 x i8]
+@.str.space = external constant [2 x i8]
 @.str.define = private unnamed_addr constant [8 x i8] c"define \00"
-@.str.c_quote_open = private unnamed_addr constant [3 x i8] c"c\22\00"
-@.str.quote = private unnamed_addr constant [2 x i8] c"\22\00"
+@.str.c_quote_open = external constant [3 x i8]
+@.str.quote = external constant [2 x i8]
 @.str.backslash_00 = private unnamed_addr constant [4 x i8] c"\\00\00"
 @.str.backslash_quote = private unnamed_addr constant [3 x i8] c"\\\22\00"
 @.str.backslash_backslash = private unnamed_addr constant [3 x i8] c"\\\\\00"
@@ -4163,37 +4010,8 @@ error:
     ret %LLVMValueRef null
 }
 
-; llvm-ret-void: Build return void instruction
-define %LLVMValueRef @codegen_dsl_ret_void(%CodeGen* %cg) {
-entry:
-    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
-    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
-    
-    %builder_null = icmp eq %LLVMBuilderRef %builder, null
-    br i1 %builder_null, label %error, label %get_current_function
-    
-get_current_function:
-    ; Ensure we have a current function (builder should be positioned in its entry block)
-    %current_function_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 8
-    %current_function = load %LLVMValueRef, %LLVMValueRef* %current_function_ptr
-    %func_null = icmp eq %LLVMValueRef %current_function, null
-    br i1 %func_null, label %error, label %build_ret
-    
-build_ret:
-    ; Build return void instruction - this should add it to the current basic block
-    ; The builder should already be positioned at the end of the entry block
-    ; after the previous call instruction was built
-    %ret_result = call %LLVMValueRef @llvm_build_ret_void(%LLVMBuilderRef %builder)
-    ; Validate that return instruction was created
-    %ret_null = icmp eq %LLVMValueRef %ret_result, null
-    br i1 %ret_null, label %error, label %success
-    
-success:
-    ret %LLVMValueRef %ret_result
-    
-error:
-    ret %LLVMValueRef null
-}
+; codegen_dsl_ret_void: Migrated to kernel/codegen.vibe
+declare %LLVMValueRef @codegen_dsl_ret_void(%CodeGen* %cg)
 
 ; llvm-ret: Build return with value
 ; Signature: (llvm-ret value)
@@ -4488,33 +4306,8 @@ error:
     ret %LLVMValueRef null
 }
 
-; llvm-const-null: Create null constant
-; Signature: (llvm-const-null type)
-define %LLVMValueRef @codegen_dsl_const_null(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %get_type_null
-    
-get_type_null:
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_str = load i8*, i8** %type_val_ptr
-    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
-    %type_len = load i64, i64* %type_len_ptr
-    
-    ; Resolve type
-    %null_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
-    %null_type_null = icmp eq %LLVMTypeRef %null_type, null
-    br i1 %null_type_null, label %error, label %create_null
-    
-create_null:
-    %null_const = call %LLVMValueRef @llvm_create_constant_null(%LLVMTypeRef %null_type)
-    ret %LLVMValueRef %null_const
-    
-error:
-    ret %LLVMValueRef null
-}
+; codegen_dsl_const_null: Migrated to kernel/codegen.vibe
+declare %LLVMValueRef @codegen_dsl_const_null(%CodeGen* %cg, %ASTNode* %args)
 
 ; llvm:bitcast: Build bitcast instruction
 ; Signature: (llvm:bitcast value target-type)
@@ -7096,41 +6889,8 @@ not_found_by_value:
     ret %LLVMTypeRef null
 }
 
-; codegen_dsl_undef: Handle llvm:undef form
-; Syntax: (llvm:undef type)
-; Parameters:
-;   cg: CodeGen pointer
-;   args: AST node list with (type)
-; Returns: LLVMValueRef for undef value of given type
-define %LLVMValueRef @codegen_dsl_undef(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %extract_type
-
-extract_type:
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    %type_node_null = icmp eq %ASTNode* %type_node, null
-    br i1 %type_node_null, label %error, label %get_type_string
-
-get_type_string:
-    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_val = load i8*, i8** %type_val_ptr
-    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
-    %type_len = load i64, i64* %type_len_ptr
-
-    ; Resolve type string to LLVMTypeRef
-    %undef_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_val, i64 %type_len)
-    %undef_type_null = icmp eq %LLVMTypeRef %undef_type, null
-    br i1 %undef_type_null, label %error, label %build_undef
-
-build_undef:
-    %undef_result = call %LLVMValueRef @llvm_get_undef(%LLVMTypeRef %undef_type)
-    ret %LLVMValueRef %undef_result
-
-error:
-    ret %LLVMValueRef null
-}
+; codegen_dsl_undef: Migrated to kernel/codegen.vibe
+declare %LLVMValueRef @codegen_dsl_undef(%CodeGen* %cg, %ASTNode* %args)
 
 ; codegen_dsl_insertvalue: Handle llvm:insertvalue form
 ; Syntax: (llvm:insertvalue agg-val elt-val index)

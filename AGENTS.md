@@ -46,7 +46,7 @@ vibe/
 │   ├── parser.vibe    # Parser in Vibe DSL
 │   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
 │   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
-│   └── codegen.vibe   # Codegen utilities (35 functions: Batch 1 + Batch 2 + Batch 3 + Tier 1)
+│   └── codegen.vibe   # Codegen utilities (40 functions: Batch 1 + Batch 2 + Batch 3 + Tier 1 + Tier 2 + Phase 2)
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
 │   ├── design/        # Design documents and formal plans
@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2 functions; 35 total migrated, ~52 remaining). Tier 2 (5 functions) deferred — use correct structure (labels inside `let*` body) when re-attempting; see "Cross-block variable usage" below.
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2, Tier 2: 4, Phase 2: 3 functions; 40 total migrated, ~47 remaining). Tier 2 complete: codegen_define_llvm_type, codegen_define_llvm_constant migrated with labels inside `let*` body. Phase 2: codegen_dsl_ret_void, codegen_dsl_const_null, codegen_dsl_undef migrated; see "Cross-block variable usage" below.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
