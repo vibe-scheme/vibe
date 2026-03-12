@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2, Tier 2: 4, Phase 2: 3 functions; 40 total migrated, ~47 remaining). Tier 2 complete: codegen_define_llvm_type, codegen_define_llvm_constant migrated with labels inside `let*` body. Phase 2: codegen_dsl_ret_void, codegen_dsl_const_null, codegen_dsl_undef migrated; see "Cross-block variable usage" below.
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2, Tier 2: 4, Phase 2: 3, Tier A: 18 functions; 58 total migrated, ~41 remaining). Tier A: codegen_dsl_add, codegen_dsl_or, codegen_dsl_sub, codegen_dsl_and, codegen_dsl_mul, codegen_dsl_const_int, codegen_dsl_bitcast, codegen_dsl_store, codegen_dsl_load, codegen_dsl_trunc, codegen_dsl_select, codegen_dsl_zext, codegen_dsl_urem, codegen_dsl_udiv, codegen_dsl_ptrtoint, codegen_dsl_insertvalue, codegen_dsl_extractvalue, codegen_dsl_icmp; see "Cross-block variable usage" and chat 0036.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
@@ -112,6 +112,10 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 
 **Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 
+**Phi nodes for cross-block values**: When a block has multiple predecessors and each contributes a value, use `(llvm:phi type (value1 'label1) (value2 'label2) ...)` — do NOT replace phi with alloca/store/load, as that dramatically hurts performance. Follow the pattern in `kernel/lexer.vibe` (e.g., `lex_read_identifier` around line 522). Chat 0034 incorrectly recommended alloca for loop state; use phi for SSA values that merge from multiple predecessors.
+
+**TODO (next session)**: Reconsider how we represent phi nodes in Vibe. The current form may be causing compilation failures or exposing codegen limitations. See chat 0036.
+
 **When to sync:**
 - After fixing a bug in either the `.ll` or `.vibe` version of a function
 - After adding new DSL methods that enable migrating more functions
@@ -119,7 +123,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 
 ## Development Chat Documentation
 
-**IMPORTANT**: All development conversations must be memorialized in the `doc/chats/` directory. Each conversation should be saved as a numbered markdown file (e.g., `0001-initial-setup.md`, `0002-lexer-implementation.md`, etc.).
+**IMPORTANT**: All development conversations must be memorialized in the `doc/chats/` directory. Each conversation should be saved as a numbered markdown file (e.g., `0001-initial-setup.md`, `0002-lexer-implementation.md`, etc.). **One session, one chat document** — do not split a single session across multiple chat files.
 
 ### Chat Documentation Format
 
@@ -157,6 +161,12 @@ $ date +"%Y-%m-%d"
 ```
 
 Then use this exact date in the chat document: `**Date**: 2025-12-28`
+
+### Chat Immutability and Precedence
+
+**Committed chats are immutable**: Once a chat document is committed, do not modify it. Each chat memorializes a session and its outcome; editing past chats would distort the historical record.
+
+**Contradictory evidence**: When later chats or code contradict an earlier chat, give precedence to the later chat. For example, if chat 0034 recommends alloca for loop state and chat 0036 corrects this to phi nodes, follow chat 0036. Document the correction in the newer chat rather than editing the older one.
 
 ## Coding Standards and Practices
 
