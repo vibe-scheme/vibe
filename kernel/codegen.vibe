@@ -91,6 +91,13 @@
 (llvm:declare-function (codegen_collect_string_constants (cg |%CodeGen*|) (exprs |%ASTNode*|)) |void|)
 (llvm:declare-function (codegen_collect_string_constants_from_args (cg |%CodeGen*|) (args |%ASTNode*|)) |void|)
 
+;; Forward declare Tier 2 functions (codegen_resolve_type_string stays in codegen_no_vibe.ll)
+(llvm:declare-function (codegen_resolve_type_string (cg |%CodeGen*|) (type_str |i8*|) (type_len |i64|)) |i8*|)
+(llvm:declare-function (codegen_append_type_fields (cg |%CodeGen*|) (fields |%ASTNode*|)) |void|)
+(llvm:declare-function (codegen_collect_field_types (cg |%CodeGen*|) (fields |%ASTNode*|) (types_array |i8*|) (max_fields |i32|)) |i32|)
+(llvm:declare-function (codegen_define_llvm_type (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|)
+(llvm:declare-function (codegen_define_llvm_constant (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|)
+
 ;; ============================================================================
 ;; 1. codegen_dsl_check_primitive
 ;; Check if identifier matches a DSL primitive name.
@@ -617,6 +624,153 @@
         (llvm:br 'iterate_type)))
     (llvm:label 'not_found_type
       (llvm:ret (llvm:const-null |i8*|)))))
+
+;; ============================================================================
+;; Tier 2: codegen_append_type_fields
+;; Generate field list for type definition (appends " { type1, type2, ... }").
+;; Parameters: cg (CodeGen*), fields (ASTNode*)
+;; ============================================================================
+(llvm:define-function (codegen_append_type_fields (cg |%CodeGen*|) (fields |%ASTNode*|)) |void|
+  (let* ((lbrace (llvm:gep |[3 x i8]| (llvm:get-global .str.lbrace) 0 0))
+         (rbrace (llvm:gep |[2 x i8]| (llvm:get-global .str.rbrace) 0 0))
+         (comma_space (llvm:gep |[3 x i8]| (llvm:get-global .str.comma_space) 0 0))
+         (current_field_ptr (llvm:alloca |%ASTNode*|))
+         (is_null (llvm:icmp 'eq fields (llvm:const-null |%ASTNode*|))))
+    (llvm:call codegen_append cg lbrace (llvm:const-int |i64| 2))
+    (llvm:br is_null 'done 'append_first)
+    (llvm:label 'append_first
+    (let* ((car_ptr (llvm:gep |%ASTNode| fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_cdr_ptr (llvm:gep |%ASTNode| field_pair 0 5))
+           (field_cdr (llvm:load field_cdr_ptr |%ASTNode*|))
+           (field_type_node_ptr (llvm:gep |%ASTNode| field_cdr 0 4))
+           (field_type_node (llvm:load field_type_node_ptr |%ASTNode*|))
+           (field_type_val_ptr (llvm:gep |%ASTNode| field_type_node 0 2))
+           (field_type (llvm:load field_type_val_ptr |i8*|))
+           (field_type_len_ptr (llvm:gep |%ASTNode| field_type_node 0 3))
+           (field_type_len (llvm:load field_type_len_ptr |i64|))
+           (cdr_ptr (llvm:gep |%ASTNode| fields 0 5))
+           (next (llvm:load cdr_ptr |%ASTNode*|))
+           (has_more (llvm:icmp 'ne next (llvm:const-null |%ASTNode*|))))
+      (llvm:store next current_field_ptr)
+      (llvm:call codegen_append cg field_type field_type_len)
+      (llvm:br has_more 'append_more 'done)))
+    (llvm:label 'append_more
+    (let* ((current_field (llvm:load current_field_ptr |%ASTNode*|))
+           (next_car_ptr (llvm:gep |%ASTNode| current_field 0 4))
+           (next_field_pair (llvm:load next_car_ptr |%ASTNode*|))
+           (next_field_cdr_ptr (llvm:gep |%ASTNode| next_field_pair 0 5))
+           (next_field_cdr (llvm:load next_field_cdr_ptr |%ASTNode*|))
+           (next_field_type_node_ptr (llvm:gep |%ASTNode| next_field_cdr 0 4))
+           (next_field_type_node (llvm:load next_field_type_node_ptr |%ASTNode*|))
+           (next_field_type_val_ptr (llvm:gep |%ASTNode| next_field_type_node 0 2))
+           (next_field_type (llvm:load next_field_type_val_ptr |i8*|))
+           (next_field_type_len_ptr (llvm:gep |%ASTNode| next_field_type_node 0 3))
+           (next_field_type_len (llvm:load next_field_type_len_ptr |i64|))
+           (next_cdr_ptr (llvm:gep |%ASTNode| current_field 0 5))
+           (next_field (llvm:load next_cdr_ptr |%ASTNode*|))
+           (has_more_more (llvm:icmp 'ne next_field (llvm:const-null |%ASTNode*|))))
+      (llvm:store next_field current_field_ptr)
+      (llvm:call codegen_append cg comma_space (llvm:const-int |i64| 2))
+      (llvm:call codegen_append cg next_field_type next_field_type_len)
+      (llvm:br has_more_more 'append_more 'done)))
+    (llvm:label 'done
+      (llvm:call codegen_append cg rbrace (llvm:const-int |i64| 1))
+      (llvm:ret-void))))
+
+;; ============================================================================
+;; Tier 2: codegen_collect_field_types
+;; Collect field types from AST list into array via codegen_resolve_type_string.
+;; Parameters: cg (CodeGen*), fields (ASTNode*), types_array (LLVMTypeRef*), max_fields (i32)
+;; Returns: number of field types collected
+;; ============================================================================
+(llvm:define-function (codegen_collect_field_types (cg |%CodeGen*|) (fields |%ASTNode*|) (types_array |i8*|) (max_fields |i32|)) |i32|
+  (let* ((count (llvm:alloca |i32|))
+         (current_fields_ptr (llvm:alloca |%ASTNode*|))
+         (fields_null (llvm:icmp 'eq fields (llvm:const-null |%ASTNode*|))))
+    (llvm:store (llvm:const-int |i32| 0) count)
+    (llvm:store fields current_fields_ptr)
+    (llvm:br fields_null 'done 'collect_loop)
+    (llvm:label 'collect_loop
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (current_count (llvm:load count |i32|))
+           (at_max (llvm:icmp 'uge current_count max_fields)))
+      (llvm:br at_max 'done 'get_field_pair)))
+    (llvm:label 'get_field_pair
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_pair_null (llvm:icmp 'eq field_pair (llvm:const-null |%ASTNode*|))))
+      (llvm:br field_pair_null 'done 'get_field_type)))
+    (llvm:label 'get_field_type
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_cdr_ptr (llvm:gep |%ASTNode| field_pair 0 5))
+           (field_cdr (llvm:load field_cdr_ptr |%ASTNode*|))
+           (field_cdr_null (llvm:icmp 'eq field_cdr (llvm:const-null |%ASTNode*|))))
+      (llvm:br field_cdr_null 'done 'get_type_node)))
+    (llvm:label 'get_type_node
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_cdr_ptr (llvm:gep |%ASTNode| field_pair 0 5))
+           (field_cdr (llvm:load field_cdr_ptr |%ASTNode*|))
+           (type_node_ptr (llvm:gep |%ASTNode| field_cdr 0 4))
+           (type_node (llvm:load type_node_ptr |%ASTNode*|))
+           (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
+      (llvm:br type_node_null 'done 'resolve_type)))
+    (llvm:label 'resolve_type
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_cdr_ptr (llvm:gep |%ASTNode| field_pair 0 5))
+           (field_cdr (llvm:load field_cdr_ptr |%ASTNode*|))
+           (type_node_ptr (llvm:gep |%ASTNode| field_cdr 0 4))
+           (type_node (llvm:load type_node_ptr |%ASTNode*|))
+           (type_val_ptr (llvm:gep |%ASTNode| type_node 0 2))
+           (type_str (llvm:load type_val_ptr |i8*|))
+           (type_len_ptr (llvm:gep |%ASTNode| type_node 0 3))
+           (type_len (llvm:load type_len_ptr |i64|))
+           (field_type (llvm:call codegen_resolve_type_string cg type_str type_len))
+           (field_type_null (llvm:icmp 'eq field_type (llvm:const-null |i8*|))))
+      (llvm:br field_type_null 'done 'store_type)))
+    (llvm:label 'store_type
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (car_ptr (llvm:gep |%ASTNode| current_fields 0 4))
+           (field_pair (llvm:load car_ptr |%ASTNode*|))
+           (field_cdr_ptr (llvm:gep |%ASTNode| field_pair 0 5))
+           (field_cdr (llvm:load field_cdr_ptr |%ASTNode*|))
+           (type_node_ptr (llvm:gep |%ASTNode| field_cdr 0 4))
+           (type_node (llvm:load type_node_ptr |%ASTNode*|))
+           (type_val_ptr (llvm:gep |%ASTNode| type_node 0 2))
+           (type_str (llvm:load type_val_ptr |i8*|))
+           (type_len_ptr (llvm:gep |%ASTNode| type_node 0 3))
+           (type_len (llvm:load type_len_ptr |i64|))
+           (field_type (llvm:call codegen_resolve_type_string cg type_str type_len))
+           (count_val (llvm:load count |i32|))
+           (array_idx (llvm:gep |i8*| types_array count_val))
+           (new_count (llvm:add count_val (llvm:const-int |i32| 1))))
+      (llvm:store field_type array_idx)
+      (llvm:store new_count count)
+      (llvm:br 'continue_collect)))
+    (llvm:label 'continue_collect
+    (let* ((current_fields (llvm:load current_fields_ptr |%ASTNode*|))
+           (cdr_ptr (llvm:gep |%ASTNode| current_fields 0 5))
+           (next_fields (llvm:load cdr_ptr |%ASTNode*|))
+           (has_more (llvm:icmp 'ne next_fields (llvm:const-null |%ASTNode*|))))
+      (llvm:store next_fields current_fields_ptr)
+      (llvm:br has_more 'collect_loop 'done)))
+    (llvm:label 'done
+      (llvm:ret (llvm:load count |i32|)))))
+
+;; codegen_define_llvm_type: Deferred - bootstrap compiler drops block terminators
+;; when llvm:label blocks reference entry-block allocas (types_array_storage).
+;; Stays in codegen_no_vibe.ll until bootstrap is fixed.
+;;
+;; codegen_define_llvm_constant: Deferred - similar multi-block structure with
+;; cross-block SSA (context, module, constant_type_ref, const_str_value, global_const).
+;; Stays in codegen_no_vibe.ll until bootstrap block terminator issues are fixed.
 
 ;; ============================================================================
 ;; 17. codegen_store_function_type
@@ -1421,9 +1575,14 @@
   (llvm:ret (llvm:call codegen_define_string_constant_only cg str len)))
 
 ;; ============================================================================
-;; codegen_init / codegen_dispose string constants
+;; codegen_init / codegen_dispose / Tier 2 string constants
 ;; ============================================================================
 (llvm:define-constant .str.module_name |[5 x i8]| #u8(118 105 98 101 0))
+(llvm:define-constant .str.percent |[2 x i8]| #u8(37 0))
+(llvm:define-constant .str.comma_space |[3 x i8]| #u8(44 32 0))
+(llvm:define-constant .str.type_equals |[8 x i8]| #u8(32 61 32 116 121 112 101 0))
+(llvm:define-constant .str.lbrace |[3 x i8]| #u8(32 123 0))
+(llvm:define-constant .str.rbrace |[2 x i8]| #u8(125 0))
 (llvm:define-constant .str.target_triple_value |[19 x i8]| #u8(97 114 109 54 52 45 97 112 112 108 101 45 100 97 114 119 105 110 0))
 (llvm:define-constant .str.data_layout_value |[34 x i8]| #u8(101 45 109 58 111 45 105 54 52 58 54 52 45 105 49 50 56 58 49 50 56 45 110 51 50 58 54 52 45 83 49 50 56 0))
 (llvm:define-constant .str.target_triple |[39 x i8]| #u8(116 97 114 103 101 116 32 116 114 105 112 108 101 32 61 32 34 97 114 109 54 52 45 97 112 112 108 101 45 100 97 114 119 105 110 34 10 10 0))

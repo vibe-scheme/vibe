@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2 functions; 35 total migrated, ~52 remaining). Tier 2 (5 functions) deferred due to bootstrap compiler "Global not found" limitation for cross-block SSA values.
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2 functions; 35 total migrated, ~52 remaining). Tier 2 (5 functions) deferred — use correct structure (labels inside `let*` body) when re-attempting; see "Cross-block variable usage" below.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
@@ -109,6 +109,8 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 5. When modifying `codegen.ll` (shared), changes automatically apply to all build modes
 6. **Debug logging divergence is acceptable**: bootstrap `.ll` files retain debug logging (printf calls) while kernel `.vibe` files remain silent. This is intentional -- bootstrap logging aids development, while kernel builds are cleaner
 7. **Deferred migrations**: When a bootstrap DSL bug blocks migrating a function to `.vibe`, keep the full `define` in the `.ll` file and add a comment in the `.vibe` file documenting the deferral. Migrate when the DSL bug is fixed.
+
+**Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 
 **When to sync:**
 - After fixing a bug in either the `.ll` or `.vibe` version of a function

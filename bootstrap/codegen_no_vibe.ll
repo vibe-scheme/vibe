@@ -214,53 +214,8 @@ error:
     ret i32 -1
 }
 
-; codegen_append_type_fields: Generate field list for type definition
-define void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields) {
-entry:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.lbrace, i32 0, i32 0), i64 2)
-    %is_null = icmp eq %ASTNode* %fields, null
-    br i1 %is_null, label %done, label %append_first
-    
-append_first:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %fields, i32 0, i32 4
-    %field_pair = load %ASTNode*, %ASTNode** %car_ptr
-    %field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %field_pair, i32 0, i32 5
-    %field_cdr = load %ASTNode*, %ASTNode** %field_cdr_ptr
-    %field_type_node_ptr = getelementptr %ASTNode, %ASTNode* %field_cdr, i32 0, i32 4
-    %field_type_node = load %ASTNode*, %ASTNode** %field_type_node_ptr
-    %field_type_val_ptr = getelementptr %ASTNode, %ASTNode* %field_type_node, i32 0, i32 2
-    %field_type = load i8*, i8** %field_type_val_ptr
-    %field_type_len_ptr = getelementptr %ASTNode, %ASTNode* %field_type_node, i32 0, i32 3
-    %field_type_len = load i64, i64* %field_type_len_ptr
-    call void @codegen_append(%CodeGen* %cg, i8* %field_type, i64 %field_type_len)
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %fields, i32 0, i32 5
-    %next = load %ASTNode*, %ASTNode** %cdr_ptr
-    %has_more = icmp ne %ASTNode* %next, null
-    br i1 %has_more, label %append_more, label %done
-    
-append_more:
-    %current_field = phi %ASTNode* [ %next, %append_first ], [ %next_field, %append_more ]
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2)
-    %next_car_ptr = getelementptr %ASTNode, %ASTNode* %current_field, i32 0, i32 4
-    %next_field_pair = load %ASTNode*, %ASTNode** %next_car_ptr
-    %next_field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %next_field_pair, i32 0, i32 5
-    %next_field_cdr = load %ASTNode*, %ASTNode** %next_field_cdr_ptr
-    %next_field_type_node_ptr = getelementptr %ASTNode, %ASTNode* %next_field_cdr, i32 0, i32 4
-    %next_field_type_node = load %ASTNode*, %ASTNode** %next_field_type_node_ptr
-    %next_field_type_val_ptr = getelementptr %ASTNode, %ASTNode* %next_field_type_node, i32 0, i32 2
-    %next_field_type = load i8*, i8** %next_field_type_val_ptr
-    %next_field_type_len_ptr = getelementptr %ASTNode, %ASTNode* %next_field_type_node, i32 0, i32 3
-    %next_field_type_len = load i64, i64* %next_field_type_len_ptr
-    call void @codegen_append(%CodeGen* %cg, i8* %next_field_type, i64 %next_field_type_len)
-    %next_cdr_ptr = getelementptr %ASTNode, %ASTNode* %current_field, i32 0, i32 5
-    %next_field = load %ASTNode*, %ASTNode** %next_cdr_ptr
-    %has_more_more = icmp ne %ASTNode* %next_field, null
-    br i1 %has_more_more, label %append_more, label %done
-    
-done:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.rbrace, i32 0, i32 0), i64 1)
-    ret void
-}
+; codegen_append_type_fields: Migrated to kernel/codegen.vibe
+declare void @codegen_append_type_fields(%CodeGen* %cg, %ASTNode* %fields)
 
 ; codegen_define_llvm_constant: Generate LLVM constant definition
 define i32 @codegen_define_llvm_constant(%CodeGen* %cg, %ASTNode* %node) {
@@ -397,65 +352,8 @@ declare i32 @codegen_is_array_type(%LLVMTypeRef)
 ; codegen_eval_dsl_expr: Evaluate DSL expressions (llvm-call, llvm-get-function, etc.)
 ; This function is defined later in the file (around line 4004)
 
-; codegen_collect_field_types: Collect field types from AST list into array
-define i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields, %LLVMTypeRef* %types_array, i32 %max_fields) {
-entry:
-    %count = alloca i32
-    store i32 0, i32* %count
-    %fields_null = icmp eq %ASTNode* %fields, null
-    br i1 %fields_null, label %done, label %collect_loop
-    
-collect_loop:
-    %current_fields = phi %ASTNode* [ %fields, %entry ], [ %next_fields, %continue_collect ]
-    %current_count = load i32, i32* %count
-    %at_max = icmp uge i32 %current_count, %max_fields
-    br i1 %at_max, label %done, label %get_field_pair
-    
-get_field_pair:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %current_fields, i32 0, i32 4
-    %field_pair = load %ASTNode*, %ASTNode** %car_ptr
-    %field_pair_null = icmp eq %ASTNode* %field_pair, null
-    br i1 %field_pair_null, label %done, label %get_field_type
-    
-get_field_type:
-    %field_cdr_ptr = getelementptr %ASTNode, %ASTNode* %field_pair, i32 0, i32 5
-    %field_cdr = load %ASTNode*, %ASTNode** %field_cdr_ptr
-    %field_cdr_null = icmp eq %ASTNode* %field_cdr, null
-    br i1 %field_cdr_null, label %done, label %get_type_node
-    
-get_type_node:
-    %type_node_ptr = getelementptr %ASTNode, %ASTNode* %field_cdr, i32 0, i32 4
-    %type_node = load %ASTNode*, %ASTNode** %type_node_ptr
-    %type_node_null = icmp eq %ASTNode* %type_node, null
-    br i1 %type_node_null, label %done, label %resolve_type
-    
-resolve_type:
-    %type_val_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 2
-    %type_str = load i8*, i8** %type_val_ptr
-    %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
-    %type_len = load i64, i64* %type_len_ptr
-    %field_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
-    %field_type_null = icmp eq %LLVMTypeRef %field_type, null
-    br i1 %field_type_null, label %done, label %store_type
-    
-store_type:
-    %count_val = load i32, i32* %count
-    %array_idx = getelementptr %LLVMTypeRef, %LLVMTypeRef* %types_array, i32 %count_val
-    store %LLVMTypeRef %field_type, %LLVMTypeRef* %array_idx
-    %new_count = add i32 %count_val, 1
-    store i32 %new_count, i32* %count
-    br label %continue_collect
-    
-continue_collect:
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %current_fields, i32 0, i32 5
-    %next_fields = load %ASTNode*, %ASTNode** %cdr_ptr
-    %has_more = icmp ne %ASTNode* %next_fields, null
-    br i1 %has_more, label %collect_loop, label %done
-    
-done:
-    %final_count = load i32, i32* %count
-    ret i32 %final_count
-}
+; codegen_collect_field_types: defined in codegen.vibe
+declare i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields, %LLVMTypeRef* %types_array, i32 %max_fields)
 
 ; DUPLICATE codegen_define_llvm_type REMOVED - the correct version is at line 568
 ; DUPLICATE codegen_append_type_fields REMOVED - the correct version is at line 629
@@ -2116,14 +2014,14 @@ declare i32 @printf(i8*, ...)
 @.str.rparen_brace = private unnamed_addr constant [4 x i8] c") {\00"
 @.str.close_brace = private unnamed_addr constant [2 x i8] c"}\00"
 @.str.i8_ptr = private unnamed_addr constant [4 x i8] c"i8*\00"
-@.str.percent = private unnamed_addr constant [2 x i8] c"%\00"
-@.str.comma_space = private unnamed_addr constant [3 x i8] c", \00"
+@.str.percent = external constant [2 x i8]
+@.str.comma_space = external constant [3 x i8]
 @.str.call_void = private unnamed_addr constant [10 x i8] c"call void\00"
 @.str.define_main = private unnamed_addr constant [21 x i8] c"define i32 @main() {\00"
 @.str.ret_zero = private unnamed_addr constant [12 x i8] c"  ret i32 0\00"
-@.str.type_equals = private unnamed_addr constant [8 x i8] c" = type\00"
-@.str.lbrace = private unnamed_addr constant [3 x i8] c" {\00"
-@.str.rbrace = private unnamed_addr constant [2 x i8] c"}\00"
+@.str.type_equals = external constant [8 x i8]
+@.str.lbrace = external constant [3 x i8]
+@.str.rbrace = external constant [2 x i8]
 @.str.newline = private unnamed_addr constant [2 x i8] c"\0A\00"
 @.str.at_sign = private unnamed_addr constant [2 x i8] c"@\00"
 @.str.constant_equals = private unnamed_addr constant [12 x i8] c" = constant\00"
