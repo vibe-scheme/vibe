@@ -112,9 +112,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 
 **Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 
-**Phi nodes for cross-block values**: When a block has multiple predecessors and each contributes a value, use `(llvm:phi type (value1 'label1) (value2 'label2) ...)` — do NOT replace phi with alloca/store/load, as that dramatically hurts performance. Follow the pattern in `kernel/lexer.vibe` (e.g., `lex_read_identifier` around line 522). Chat 0034 incorrectly recommended alloca for loop state; use phi for SSA values that merge from multiple predecessors.
-
-**TODO (next session)**: Reconsider how we represent phi nodes in Vibe. The current form may be causing compilation failures or exposing codegen limitations. See chat 0036.
+**Cross-block values**: Use alloca/store/load for values that flow across blocks. Each predecessor stores its value into an alloca; the merge block loads. A future mem2reg optimization pass (via LLVMRunPasses) will promote these to phi nodes. Do not use phi nodes for migration—they require cross-block variable resolution that can be fragile. See Chat 0034 and Chat 0036.
 
 **When to sync:**
 - After fixing a bug in either the `.ll` or `.vibe` version of a function

@@ -472,7 +472,7 @@
 ; lex_read_identifier: Read an identifier, symbol, or number token
 ; Determines token type by examining first character: # prefix means symbol,
 ; digit prefix triggers all-digit check for number, otherwise identifier.
-; Uses alloca at entry level for the digit-checking loop counter.
+; Uses alloca at entry level for the digit-checking loop counter and token type.
 (llvm:define-function (lex_read_identifier (lexer |%Lexer*|) (start |i64|) (start_len |i64|)) |%Token*|
   (let* ((pos_ptr (llvm:gep |%Lexer| lexer 0 2))
          (pos (llvm:load pos_ptr |i64|))
@@ -488,7 +488,8 @@
          (is_digit_first (llvm:icmp 'uge first_int (llvm:const-int |i32| 48)))
          (is_digit_first2 (llvm:icmp 'ule first_int (llvm:const-int |i32| 57)))
          (is_digit_first_both (llvm:and is_digit_first is_digit_first2))
-         (i_counter (llvm:alloca |i64|)))
+         (i_counter (llvm:alloca |i64|))
+         (token_type_ptr (llvm:alloca |i32|)))
     (llvm:br is_digit_first_both 'check_all_digits 'check_hash)
     (llvm:label 'check_all_digits
       (llvm:store (llvm:const-int |i64| 0) i_counter)
@@ -512,14 +513,16 @@
         (llvm:store i_new i_counter)
         (llvm:br 'digit_check_loop)))
     (llvm:label 'all_digits
+      (llvm:store (llvm:const-int |i32| 2) token_type_ptr)
       (llvm:br 'set_token_type))
     (llvm:label 'not_all_digits
       (llvm:br 'check_hash))
     (llvm:label 'check_hash
       (let* ((token_type (llvm:select is_hash (llvm:const-int |i32| 4) (llvm:const-int |i32| 1))))
+        (llvm:store token_type token_type_ptr)
         (llvm:br 'set_token_type)))
     (llvm:label 'set_token_type
-      (let* ((token_type_phi (llvm:phi |i32| (token_type 'check_hash) ((llvm:const-int |i32| 2) 'all_digits)))
+      (let* ((token_type_val (llvm:load token_type_ptr |i32|))
              (value (llvm:call malloc len))
              (_ (llvm:call memcpy value first_char_ptr len))
              (type_ptr (llvm:gep |%Token| token_ptr 0 0))
@@ -531,7 +534,7 @@
              (col_ptr (llvm:gep |%Lexer| lexer 0 4))
              (col (llvm:load col_ptr |i32|))
              (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
-        (llvm:store token_type_phi type_ptr)
+        (llvm:store token_type_val type_ptr)
         (llvm:store value val_ptr)
         (llvm:store len len_val_ptr)
         (llvm:store line line_val_ptr)
