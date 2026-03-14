@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (69 functions migrated, 34 remaining in `codegen_no_vibe.ll`). See chat 0039 and 0040 for migration notes. Phase 1: codegen_get_llvm_function and codegen_get_or_create_label deferred (complex let*/label causes segfault). **Important**: `codegen.vibe` must go through `.ll` + `llvm-as` (not direct `.bc`) in both KERNEL and SELF_HOST modes because it links with `codegen_no_vibe.ll` via `llvm-link`. This constraint lifts when all functions are migrated.
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (81 functions migrated, 22 remaining in `codegen_no_vibe.ll`). See chat 0039, 0040, and 0042 for migration notes. Deferred functions: `codegen_get_llvm_function` and `codegen_get_or_create_label` (complex let*/label causes segfault, chat 0040), `codegen_build_param_names` (always returns null when self-compiled, chat 0042). **Important**: `codegen.vibe` must go through `.ll` + `llvm-as` (not direct `.bc`) in both KERNEL and SELF_HOST modes because it links with `codegen_no_vibe.ll` via `llvm-link`. This constraint lifts when all functions are migrated.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**

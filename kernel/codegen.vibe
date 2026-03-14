@@ -3190,104 +3190,11 @@
 ;; codegen_build_param_names: Create AST list of (name index) pairs from params
 ;; Parameters: cg, func (LLVMValueRef), params (AST list of (param-name type) pairs)
 ;; Returns: ASTNode* list of (name . index) pairs
-(llvm:define-function (codegen_build_param_names (cg |%CodeGen*|) (func |i8*|) (params |%ASTNode*|)) |%ASTNode*|
-  (let* ((result (llvm:alloca |%ASTNode*|))
-         (current (llvm:alloca |%ASTNode*|))
-         (index (llvm:alloca |i32|))
-         (param_name_node_ptr (llvm:alloca |%ASTNode*|))
-         (params_null (llvm:icmp 'eq params (llvm:const-null |%ASTNode*|))))
-    (llvm:store (llvm:const-null |%ASTNode*|) result)
-    (llvm:store params current)
-    (llvm:store (llvm:const-int |i32| 0) index)
-    (llvm:label 'entry
-      (llvm:br params_null 'return_null 'build_loop))
-    (llvm:label 'return_null
-      (llvm:ret (llvm:const-null |%ASTNode*|)))
-    (llvm:label 'build_loop
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (current_null (llvm:icmp 'eq current_val (llvm:const-null |%ASTNode*|))))
-        (llvm:br current_null 'return_result 'create_pair)))
-    (llvm:label 'create_pair
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
-             (param_pair (llvm:load car_ptr |%ASTNode*|))
-             (param_pair_null (llvm:icmp 'eq param_pair (llvm:const-null |%ASTNode*|))))
-        (llvm:br param_pair_null 'skip_pair 'get_param_name)))
-    (llvm:label 'get_param_name
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
-             (param_pair (llvm:load car_ptr |%ASTNode*|))
-             (pair_car_ptr (llvm:gep |%ASTNode| param_pair 0 4))
-             (param_name_node (llvm:load pair_car_ptr |%ASTNode*|))
-             (param_name_node_null (llvm:icmp 'eq param_name_node (llvm:const-null |%ASTNode*|))))
-        (llvm:br param_name_node_null 'skip_pair 'check_name_node_type)))
-    (llvm:label 'check_name_node_type
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
-             (param_pair (llvm:load car_ptr |%ASTNode*|))
-             (pair_car_ptr (llvm:gep |%ASTNode| param_pair 0 4))
-             (param_name_node (llvm:load pair_car_ptr |%ASTNode*|))
-             (name_node_type_ptr (llvm:gep |%ASTNode| param_name_node 0 0))
-             (name_node_type (llvm:load name_node_type_ptr |i32|))
-             (is_atom (llvm:icmp 'eq name_node_type (llvm:const-int |i32| 0))))
-        (llvm:store param_name_node param_name_node_ptr)
-        (llvm:br is_atom 'check_name_node 'try_extract_from_list)))
-    (llvm:label 'try_extract_from_list
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
-             (param_pair (llvm:load car_ptr |%ASTNode*|))
-             (pair_car_ptr (llvm:gep |%ASTNode| param_pair 0 4))
-             (param_name_node (llvm:load pair_car_ptr |%ASTNode*|))
-             (list_car_ptr (llvm:gep |%ASTNode| param_name_node 0 4))
-             (list_car (llvm:load list_car_ptr |%ASTNode*|))
-             (list_car_null (llvm:icmp 'eq list_car (llvm:const-null |%ASTNode*|))))
-        (llvm:br list_car_null 'skip_pair 'check_list_car_type)))
-    (llvm:label 'check_list_car_type
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (car_ptr (llvm:gep |%ASTNode| current_val 0 4))
-             (param_pair (llvm:load car_ptr |%ASTNode*|))
-             (pair_car_ptr (llvm:gep |%ASTNode| param_pair 0 4))
-             (param_name_node (llvm:load pair_car_ptr |%ASTNode*|))
-             (list_car_ptr (llvm:gep |%ASTNode| param_name_node 0 4))
-             (list_car (llvm:load list_car_ptr |%ASTNode*|))
-             (list_car_type_ptr (llvm:gep |%ASTNode| list_car 0 0))
-             (list_car_type (llvm:load list_car_type_ptr |i32|))
-             (list_car_is_atom (llvm:icmp 'eq list_car_type (llvm:const-int |i32| 0))))
-        (llvm:store list_car param_name_node_ptr)
-        (llvm:br list_car_is_atom 'check_name_node 'skip_pair)))
-    (llvm:label 'check_name_node
-      (let* ((param_name_node_phi (llvm:load param_name_node_ptr |%ASTNode*|))
-             (name_val_ptr (llvm:gep |%ASTNode| param_name_node_phi 0 2))
-             (name_val_check (llvm:load name_val_ptr |i8*|))
-             (name_len_ptr (llvm:gep |%ASTNode| param_name_node_phi 0 3))
-             (name_len_check (llvm:load name_len_ptr |i64|))
-             (name_val_null (llvm:icmp 'eq name_val_check (llvm:const-null |i8*|)))
-             (name_len_zero (llvm:icmp 'eq name_len_check (llvm:const-int |i64| 0)))
-             (name_check_invalid (llvm:or name_val_null name_len_zero)))
-        (llvm:br name_check_invalid 'skip_pair 'get_index)))
-    (llvm:label 'get_index
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (param_name_node_phi (llvm:load param_name_node_ptr |%ASTNode*|))
-             (index_val (llvm:load index |i32|))
-             (index_node (llvm:call codegen_create_int_node index_val))
-             (name_index_pair (llvm:call codegen_create_pair param_name_node_phi index_node))
-             (result_val (llvm:load result |%ASTNode*|))
-             (new_cons (llvm:call codegen_create_cons name_index_pair result_val))
-             (index_new (llvm:add index_val (llvm:const-int |i32| 1)))
-             (cdr_ptr (llvm:gep |%ASTNode| current_val 0 5))
-             (cdr (llvm:load cdr_ptr |%ASTNode*|)))
-        (llvm:store new_cons result)
-        (llvm:store index_new index)
-        (llvm:store cdr current)
-        (llvm:br 'build_loop)))
-    (llvm:label 'skip_pair
-      (let* ((current_val (llvm:load current |%ASTNode*|))
-             (cdr_ptr (llvm:gep |%ASTNode| current_val 0 5))
-             (cdr (llvm:load cdr_ptr |%ASTNode*|)))
-        (llvm:store cdr current)
-        (llvm:br 'build_loop)))
-    (llvm:label 'return_result
-      (llvm:ret (llvm:load result |%ASTNode*|)))))
+;; DEFERRED: Always returns null when compiled from Vibe despite correct IR.
+;; Params are valid but function returns null. Root cause unknown - possibly
+;; LLVM optimization issue with alloca pattern or linking interaction.
+;; See chat 0042 for investigation details.
+(llvm:declare-function (codegen_build_param_names (cg |%CodeGen*|) (func |i8*|) (params |%ASTNode*|)) |%ASTNode*|)
 
 ;; codegen_get_function_type_by_value: Look up function type by function value
 (llvm:define-function (codegen_get_function_type_by_value (cg |%CodeGen*|) (func_value |i8*|)) |i8*|
