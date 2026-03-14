@@ -7013,7 +7013,12 @@ map_predicate:
     %pred_name = load i8*, i8** %pred_name_out
     %pred_len = load i64, i64* %pred_len_out
     %pred_enum = call i32 @codegen_map_predicate_string(i8* %pred_name, i64 %pred_len)
-    %pred_invalid = icmp eq i32 %pred_enum, -1
+    ; Reject -1 (unknown) or values outside LLVMIntPredicate range (32-41)
+    %is_neg_one = icmp eq i32 %pred_enum, -1
+    %below_range = icmp ult i32 %pred_enum, 32
+    %above_range = icmp ugt i32 %pred_enum, 41
+    %pred_invalid_or = or i1 %is_neg_one, %below_range
+    %pred_invalid = or i1 %pred_invalid_or, %above_range
     br i1 %pred_invalid, label %error, label %get_lhs
     
 get_lhs:

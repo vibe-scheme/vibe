@@ -165,23 +165,23 @@
            (is_ge_0 (llvm:icmp 'uge char_int (llvm:const-int |i32| 48)))
            (is_le_9 (llvm:icmp 'ule char_int (llvm:const-int |i32| 57)))
            (is_digit (llvm:and is_ge_0 is_le_9)))
-      (llvm:br is_digit 'accumulate 'return))
+      (llvm:br is_digit 'accumulate 'return)))
     (llvm:label 'accumulate
-      (let* ((i_val (llvm:load i_ptr |i64|))
-             (char_ptr (llvm:gep |i8| str i_val))
-             (char (llvm:load char_ptr |i8|))
-             (char_int (llvm:zext char |i8| |i32|))
-             (result_val (llvm:load result_ptr |i32|))
-             (result_new (llvm:mul result_val (llvm:const-int |i32| 10)))
-             (digit_val (llvm:sub char_int (llvm:const-int |i32| 48)))
-             (result_final (llvm:add result_new digit_val)))
-        (llvm:store result_final result_ptr)
-        (let* ((i_new (llvm:add i_val (llvm:const-int |i64| 1))))
-          (llvm:store i_new i_ptr)
-          (llvm:br 'loop)))
+    (let* ((i_val (llvm:load i_ptr |i64|))
+           (char_ptr (llvm:gep |i8| str i_val))
+           (char (llvm:load char_ptr |i8|))
+           (char_int (llvm:zext char |i8| |i32|))
+           (result_val (llvm:load result_ptr |i32|))
+           (result_new (llvm:mul result_val (llvm:const-int |i32| 10)))
+           (digit_val (llvm:sub char_int (llvm:const-int |i32| 48)))
+           (result_final (llvm:add result_new digit_val)))
+      (llvm:store result_final result_ptr)
+      (let* ((i_new (llvm:add i_val (llvm:const-int |i64| 1))))
+        (llvm:store i_new i_ptr)
+        (llvm:br 'loop)))
     (llvm:label 'return
       (let* ((result_ret (llvm:load result_ptr |i32|)))
-        (llvm:ret result_ret)))))))
+        (llvm:ret result_ret))))))
 
 ;; ============================================================================
 ;; 3. codegen_parse_int_from_ast
@@ -1552,7 +1552,9 @@
 ;; ============================================================================
 (llvm:define-function (codegen_dsl_store (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
   (let* ((value_ptr (llvm:alloca |i8*|))
-         (ptr_ptr (llvm:alloca |i8*|)))
+         (value_null_ptr (llvm:alloca |i1|))
+         (ptr_ptr (llvm:alloca |i8*|))
+         (ptr_null_ptr (llvm:alloca |i1|)))
     (llvm:label 'entry
       (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
              (builder (llvm:load builder_ptr |i8*|))
@@ -1567,6 +1569,10 @@
              (value (llvm:call codegen_eval_dsl_expr cg value_node))
              (value_null (llvm:icmp 'eq value (llvm:const-null |i8*|))))
         (llvm:store value value_ptr)
+        (llvm:store value_null value_null_ptr)
+        (llvm:br 'eval_value_br)))
+    (llvm:label 'eval_value_br
+      (let* ((value_null (llvm:load value_null_ptr |i1|)))
         (llvm:br value_null 'error 'get_ptr)))
     (llvm:label 'get_ptr
       (let* ((args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
@@ -1576,6 +1582,10 @@
              (ptr (llvm:call codegen_eval_dsl_expr cg ptr_node))
              (ptr_null (llvm:icmp 'eq ptr (llvm:const-null |i8*|))))
         (llvm:store ptr ptr_ptr)
+        (llvm:store ptr_null ptr_null_ptr)
+        (llvm:br 'get_ptr_br)))
+    (llvm:label 'get_ptr_br
+      (let* ((ptr_null (llvm:load ptr_null_ptr |i1|)))
         (llvm:br ptr_null 'error 'build_store)))
     (llvm:label 'build_store
       (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
@@ -1643,6 +1653,444 @@
         (llvm:store (llvm:call llvm_build_load builder load_type ptr (llvm:gep |[1 x i8]| (llvm:get-global .str.empty) 0 0)) result_ptr)
         (llvm:br 'load_ret)))
     (llvm:label 'load_ret
+      (llvm:ret (llvm:load result_ptr |i8*|)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))
+
+;; ============================================================================
+;; Phase 1: codegen_dsl_alloca
+;; Handle llvm:alloca form. Syntax: (llvm:alloca type)
+;; ============================================================================
+(llvm:define-function (codegen_dsl_alloca (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
+  (let* ((type_node_ptr (llvm:alloca |%ASTNode*|))
+         (type_node_null_ptr (llvm:alloca |i1|))
+         (alloca_type_ptr (llvm:alloca |i8*|))
+         (alloca_type_null_ptr (llvm:alloca |i1|))
+         (result_ptr (llvm:alloca |i8*|)))
+    (llvm:label 'entry
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (builder_null (llvm:icmp 'eq builder (llvm:const-null |i8*|))))
+        (llvm:br builder_null 'error 'get_type)))
+    (llvm:label 'get_type
+      (let* ((args_null (llvm:icmp 'eq args (llvm:const-null |%ASTNode*|))))
+        (llvm:br args_null 'error 'extract_type)))
+    (llvm:label 'extract_type
+      (let* ((type_node_gep (llvm:gep |%ASTNode| args 0 4))
+             (type_node (llvm:load type_node_gep |%ASTNode*|))
+             (type_node_null (llvm:icmp 'eq type_node (llvm:const-null |%ASTNode*|))))
+        (llvm:store type_node type_node_ptr)
+        (llvm:store type_node_null type_node_null_ptr)
+        (llvm:br 'extract_type_br)))
+    (llvm:label 'extract_type_br
+      (let* ((type_node_null (llvm:load type_node_null_ptr |i1|)))
+        (llvm:br type_node_null 'error 'get_type_string)))
+    (llvm:label 'get_type_string
+      (let* ((type_node (llvm:load type_node_ptr |%ASTNode*|))
+             (type_val_ptr (llvm:gep |%ASTNode| type_node 0 2))
+             (type_val (llvm:load type_val_ptr |i8*|))
+             (type_len_ptr (llvm:gep |%ASTNode| type_node 0 3))
+             (type_len (llvm:load type_len_ptr |i64|))
+             (alloca_type (llvm:call codegen_resolve_type_string cg type_val type_len))
+             (alloca_type_null (llvm:icmp 'eq alloca_type (llvm:const-null |i8*|))))
+        (llvm:store alloca_type alloca_type_ptr)
+        (llvm:store alloca_type_null alloca_type_null_ptr)
+        (llvm:br 'get_type_string_br)))
+    (llvm:label 'get_type_string_br
+      (let* ((alloca_type_null (llvm:load alloca_type_null_ptr |i1|)))
+        (llvm:br alloca_type_null 'error 'build_alloca)))
+    (llvm:label 'build_alloca
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (alloca_type (llvm:load alloca_type_ptr |i8*|)))
+        (llvm:store (llvm:call llvm_build_alloca builder alloca_type (llvm:gep |[1 x i8]| (llvm:get-global .str.empty) 0 0)) result_ptr)
+        (llvm:br 'alloca_ret)))
+    (llvm:label 'alloca_ret
+      (llvm:ret (llvm:load result_ptr |i8*|)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))
+
+;; ============================================================================
+;; Phase 1: codegen_dsl_br
+;; Handle llvm:br form. Syntax: (llvm:br 'label) or (llvm:br cond 'then 'else)
+;; ============================================================================
+(llvm:define-function (codegen_dsl_br (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
+  (let* ((first_arg_ptr (llvm:alloca |%ASTNode*|))
+         (label_name_out (llvm:alloca |i8*|))
+         (label_len_out (llvm:alloca |i64|))
+         (block_ptr (llvm:alloca |i8*|))
+         (block_null_ptr (llvm:alloca |i1|))
+         (then_label_name_out (llvm:alloca |i8*|))
+         (then_label_len_out (llvm:alloca |i64|))
+         (else_label_name_out (llvm:alloca |i8*|))
+         (else_label_len_out (llvm:alloca |i64|))
+         (then_block_ptr (llvm:alloca |i8*|))
+         (then_block_null_ptr (llvm:alloca |i1|))
+         (else_block_ptr (llvm:alloca |i8*|))
+         (else_block_null_ptr (llvm:alloca |i1|))
+         (cond_ptr (llvm:alloca |i8*|))
+         (result_ptr (llvm:alloca |i8*|)))
+    (llvm:label 'entry
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (builder_null (llvm:icmp 'eq builder (llvm:const-null |i8*|))))
+        (llvm:br builder_null 'error 'get_func)))
+    (llvm:label 'get_func
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (func_null (llvm:icmp 'eq func (llvm:const-null |i8*|))))
+        (llvm:br func_null 'error 'check_args)))
+    (llvm:label 'check_args
+      (let* ((args_null (llvm:icmp 'eq args (llvm:const-null |%ASTNode*|))))
+        (llvm:br args_null 'error 'check_first_arg)))
+    (llvm:label 'check_first_arg
+      (let* ((first_arg_gep (llvm:gep |%ASTNode| args 0 4))
+             (first_arg (llvm:load first_arg_gep |%ASTNode*|))
+             (first_arg_null (llvm:icmp 'eq first_arg (llvm:const-null |%ASTNode*|))))
+        (llvm:store first_arg first_arg_ptr)
+        (llvm:br first_arg_null 'error 'check_if_quote)))
+    (llvm:label 'check_if_quote
+      (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|))
+             (first_arg_type_ptr (llvm:gep |%ASTNode| first_arg 0 0))
+             (first_arg_type (llvm:load first_arg_type_ptr |i32|))
+             (is_quote (llvm:icmp 'eq first_arg_type (llvm:const-int |i32| 2))))
+        (llvm:br is_quote 'unconditional_br 'conditional_br)))
+    (llvm:label 'unconditional_br
+      (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|))
+             (extract_result (llvm:call codegen_extract_quoted_atom first_arg label_name_out label_len_out))
+             (extract_failed (llvm:icmp 'ne extract_result (llvm:const-int |i32| 0))))
+        (llvm:br extract_failed 'error 'get_uncond_label)))
+    (llvm:label 'get_uncond_label
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (label_name (llvm:load label_name_out |i8*|))
+             (label_len (llvm:load label_len_out |i64|))
+             (block (llvm:call codegen_get_or_create_label cg func label_name label_len))
+             (block_null (llvm:icmp 'eq block (llvm:const-null |i8*|))))
+        (llvm:store block block_ptr)
+        (llvm:store block_null block_null_ptr)
+        (llvm:br 'get_uncond_label_br)))
+    (llvm:label 'get_uncond_label_br
+      (let* ((block_null (llvm:load block_null_ptr |i1|)))
+        (llvm:br block_null 'error 'build_uncond_br)))
+    (llvm:label 'build_uncond_br
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (block (llvm:load block_ptr |i8*|)))
+        (llvm:store (llvm:call llvm_build_br builder block) result_ptr)
+        (llvm:br 'br_ret)))
+    (llvm:label 'conditional_br
+      (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|))
+             (cond (llvm:call codegen_eval_dsl_expr cg first_arg))
+             (cond_null (llvm:icmp 'eq cond (llvm:const-null |i8*|))))
+        (llvm:store cond cond_ptr)
+        (llvm:br cond_null 'error 'get_then_label)))
+    (llvm:label 'get_then_label
+      (let* ((args_cdr1_ptr (llvm:gep |%ASTNode| args 0 5))
+             (args_cdr1 (llvm:load args_cdr1_ptr |%ASTNode*|))
+             (then_label_node_ptr (llvm:gep |%ASTNode| args_cdr1 0 4))
+             (then_label_node (llvm:load then_label_node_ptr |%ASTNode*|))
+             (extract_then_result (llvm:call codegen_extract_quoted_atom then_label_node then_label_name_out then_label_len_out))
+             (extract_then_failed (llvm:icmp 'ne extract_then_result (llvm:const-int |i32| 0))))
+        (llvm:br extract_then_failed 'error 'get_else_label)))
+    (llvm:label 'get_else_label
+      (let* ((args_cdr1_ptr (llvm:gep |%ASTNode| args 0 5))
+             (args_cdr1 (llvm:load args_cdr1_ptr |%ASTNode*|))
+             (args_cdr2_ptr (llvm:gep |%ASTNode| args_cdr1 0 5))
+             (args_cdr2 (llvm:load args_cdr2_ptr |%ASTNode*|))
+             (else_label_node_ptr (llvm:gep |%ASTNode| args_cdr2 0 4))
+             (else_label_node (llvm:load else_label_node_ptr |%ASTNode*|))
+             (extract_else_result (llvm:call codegen_extract_quoted_atom else_label_node else_label_name_out else_label_len_out))
+             (extract_else_failed (llvm:icmp 'ne extract_else_result (llvm:const-int |i32| 0))))
+        (llvm:br extract_else_failed 'error 'get_blocks)))
+    (llvm:label 'get_blocks
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (then_label_name (llvm:load then_label_name_out |i8*|))
+             (then_label_len (llvm:load then_label_len_out |i64|))
+             (then_block (llvm:call codegen_get_or_create_label cg func then_label_name then_label_len))
+             (then_block_null (llvm:icmp 'eq then_block (llvm:const-null |i8*|))))
+        (llvm:store then_block then_block_ptr)
+        (llvm:store then_block_null then_block_null_ptr)
+        (llvm:br 'get_blocks_br)))
+    (llvm:label 'get_blocks_br
+      (let* ((then_block_null (llvm:load then_block_null_ptr |i1|)))
+        (llvm:br then_block_null 'error 'get_else_block)))
+    (llvm:label 'get_else_block
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (else_label_name (llvm:load else_label_name_out |i8*|))
+             (else_label_len (llvm:load else_label_len_out |i64|))
+             (else_block (llvm:call codegen_get_or_create_label cg func else_label_name else_label_len))
+             (else_block_null (llvm:icmp 'eq else_block (llvm:const-null |i8*|))))
+        (llvm:store else_block else_block_ptr)
+        (llvm:store else_block_null else_block_null_ptr)
+        (llvm:br 'get_else_block_br)))
+    (llvm:label 'get_else_block_br
+      (let* ((else_block_null (llvm:load else_block_null_ptr |i1|)))
+        (llvm:br else_block_null 'error 'build_cond_br)))
+    (llvm:label 'build_cond_br
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (cond (llvm:load cond_ptr |i8*|))
+             (then_block (llvm:load then_block_ptr |i8*|))
+             (else_block (llvm:load else_block_ptr |i8*|)))
+        (llvm:store (llvm:call llvm_build_cond_br builder cond then_block else_block) result_ptr)
+        (llvm:br 'br_ret)))
+    (llvm:label 'br_ret
+      (llvm:ret (llvm:load result_ptr |i8*|)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))
+
+;; ============================================================================
+;; Phase 1: codegen_dsl_label
+;; Handle llvm:label form. Syntax: (llvm:label 'name body ...)
+;; ============================================================================
+(llvm:define-function (codegen_dsl_label (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
+  (let* ((name_node_ptr (llvm:alloca |%ASTNode*|))
+         (name_node_null_ptr (llvm:alloca |i1|))
+         (label_name_out (llvm:alloca |i8*|))
+         (label_len_out (llvm:alloca |i64|))
+         (block_ptr (llvm:alloca |i8*|))
+         (block_null_ptr (llvm:alloca |i1|))
+         (label_has_no_term_ptr (llvm:alloca |i1|))
+         (current_block_null_ptr (llvm:alloca |i1|))
+         (still_on_label_ptr (llvm:alloca |i1|))
+         (saved_block_null_ptr (llvm:alloca |i1|))
+         (saved_block_ptr (llvm:alloca |i8*|))
+         (result_ptr (llvm:alloca |i8*|)))
+    (llvm:label 'entry
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (builder_null (llvm:icmp 'eq builder (llvm:const-null |i8*|))))
+        (llvm:br builder_null 'error 'get_func)))
+    (llvm:label 'get_func
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (func_null (llvm:icmp 'eq func (llvm:const-null |i8*|))))
+        (llvm:br func_null 'error 'get_name)))
+    (llvm:label 'get_name
+      (let* ((args_null (llvm:icmp 'eq args (llvm:const-null |%ASTNode*|))))
+        (llvm:br args_null 'error 'extract_name)))
+    (llvm:label 'extract_name
+      (let* ((name_node_gep (llvm:gep |%ASTNode| args 0 4))
+             (name_node (llvm:load name_node_gep |%ASTNode*|))
+             (name_node_null (llvm:icmp 'eq name_node (llvm:const-null |%ASTNode*|))))
+        (llvm:store name_node name_node_ptr)
+        (llvm:store name_node_null name_node_null_ptr)
+        (llvm:br 'extract_name_br)))
+    (llvm:label 'extract_name_br
+      (let* ((name_node_null (llvm:load name_node_null_ptr |i1|)))
+        (llvm:br name_node_null 'error 'extract_atom_name)))
+    (llvm:label 'extract_atom_name
+      (let* ((name_node (llvm:load name_node_ptr |%ASTNode*|))
+             (extract_result (llvm:call codegen_extract_quoted_atom name_node label_name_out label_len_out))
+             (extract_failed (llvm:icmp 'ne extract_result (llvm:const-int |i32| 0))))
+        (llvm:br extract_failed 'error 'get_or_create_block)))
+    (llvm:label 'get_or_create_block
+      (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (func (llvm:load func_ptr |i8*|))
+             (label_name (llvm:load label_name_out |i8*|))
+             (label_len (llvm:load label_len_out |i64|))
+             (block (llvm:call codegen_get_or_create_label cg func label_name label_len))
+             (block_null (llvm:icmp 'eq block (llvm:const-null |i8*|))))
+        (llvm:store block block_ptr)
+        (llvm:store block_null block_null_ptr)
+        (llvm:br 'get_or_create_block_br)))
+    (llvm:label 'get_or_create_block_br
+      (let* ((block_null (llvm:load block_null_ptr |i1|)))
+        (llvm:br block_null 'error 'position_builder)))
+    (llvm:label 'position_builder
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (block (llvm:load block_ptr |i8*|))
+             (saved_block (llvm:call llvm_get_insert_block builder))
+             (args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
+             (body (llvm:load args_cdr_ptr |%ASTNode*|)))
+        (llvm:store saved_block saved_block_ptr)
+        (llvm:call llvm_position_builder_at_end builder block)
+        (llvm:call codegen_eval_dsl_body cg body)
+        (llvm:br 'check_terminator)))
+    (llvm:label 'check_terminator
+      (let* ((block (llvm:load block_ptr |i8*|))
+             (label_terminator (llvm:call llvm_get_basic_block_terminator block))
+             (label_has_no_term (llvm:icmp 'eq label_terminator (llvm:const-null |i8*|))))
+        (llvm:store label_has_no_term label_has_no_term_ptr)
+        (llvm:br 'check_terminator_br)))
+    (llvm:label 'check_terminator_br
+      (let* ((label_has_no_term (llvm:load label_has_no_term_ptr |i1|)))
+        (llvm:br label_has_no_term 'error 'check_restore)))
+    (llvm:label 'check_restore
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (block (llvm:load block_ptr |i8*|))
+             (current_block_after (llvm:call llvm_get_insert_block builder))
+             (current_block_null (llvm:icmp 'eq current_block_after (llvm:const-null |i8*|))))
+        (llvm:store current_block_null current_block_null_ptr)
+        (llvm:br 'check_restore_br)))
+    (llvm:label 'check_restore_br
+      (let* ((current_block_null (llvm:load current_block_null_ptr |i1|)))
+        (llvm:br current_block_null 'return_block 'check_if_still_on_label)))
+    (llvm:label 'check_if_still_on_label
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (block (llvm:load block_ptr |i8*|))
+             (current_block_after (llvm:call llvm_get_insert_block builder))
+             (still_on_label (llvm:icmp 'eq current_block_after block)))
+        (llvm:store still_on_label still_on_label_ptr)
+        (llvm:br 'check_if_still_on_label_br)))
+    (llvm:label 'check_if_still_on_label_br
+      (let* ((still_on_label (llvm:load still_on_label_ptr |i1|)))
+        (llvm:br still_on_label 'return_block 'check_saved_null)))
+    (llvm:label 'check_saved_null
+      (let* ((saved_block (llvm:load saved_block_ptr |i8*|))
+             (saved_block_null (llvm:icmp 'eq saved_block (llvm:const-null |i8*|))))
+        (llvm:store saved_block_null saved_block_null_ptr)
+        (llvm:br 'check_saved_null_br)))
+    (llvm:label 'check_saved_null_br
+      (let* ((saved_block_null (llvm:load saved_block_null_ptr |i1|)))
+        (llvm:br saved_block_null 'return_block 'restore_position)))
+    (llvm:label 'restore_position
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (saved_block (llvm:load saved_block_ptr |i8*|)))
+        (llvm:call llvm_position_builder_at_end builder saved_block)
+        (llvm:br 'return_block)))
+    (llvm:label 'return_block
+      (let* ((block (llvm:load block_ptr |i8*|)))
+        (llvm:store block result_ptr)
+        (llvm:br 'label_ret)))
+    (llvm:label 'label_ret
+      (llvm:ret (llvm:load result_ptr |i8*|)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))
+
+;; ============================================================================
+;; Phase 1: codegen_dsl_phi
+;; Handle llvm:phi form. Syntax: (llvm:phi type (value1 'label1) (value2 'label2) ...)
+;; ============================================================================
+(llvm:define-function (codegen_dsl_phi (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
+  (let* ((phi_type_ptr (llvm:alloca |i8*|))
+         (phi_type_null_ptr (llvm:alloca |i1|))
+         (phi_ptr (llvm:alloca |i8*|))
+         (phi_null_ptr (llvm:alloca |i1|))
+         (current_pair_ptr (llvm:alloca |%ASTNode*|))
+         (phi_label_name_out (llvm:alloca |i8*|))
+         (phi_label_len_out (llvm:alloca |i64|))
+         (incoming_value_ptr (llvm:alloca |i8*|))
+         (incoming_value_null_ptr (llvm:alloca |i1|))
+         (incoming_bb_ptr (llvm:alloca |i8*|))
+         (incoming_bb_null_ptr (llvm:alloca |i1|))
+         (result_ptr (llvm:alloca |i8*|)))
+    (llvm:label 'entry
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (builder_null (llvm:icmp 'eq builder (llvm:const-null |i8*|))))
+        (llvm:br builder_null 'error 'get_phi_type)))
+    (llvm:label 'get_phi_type
+      (let* ((args_null (llvm:icmp 'eq args (llvm:const-null |%ASTNode*|))))
+        (llvm:br args_null 'error 'extract_phi_type)))
+    (llvm:label 'extract_phi_type
+      (let* ((type_node_ptr (llvm:gep |%ASTNode| args 0 4))
+             (type_node (llvm:load type_node_ptr |%ASTNode*|))
+             (type_val_ptr (llvm:gep |%ASTNode| type_node 0 2))
+             (type_val (llvm:load type_val_ptr |i8*|))
+             (type_len_ptr (llvm:gep |%ASTNode| type_node 0 3))
+             (type_len (llvm:load type_len_ptr |i64|))
+             (phi_type (llvm:call codegen_resolve_type_string cg type_val type_len))
+             (phi_type_null (llvm:icmp 'eq phi_type (llvm:const-null |i8*|))))
+        (llvm:store phi_type phi_type_ptr)
+        (llvm:store phi_type_null phi_type_null_ptr)
+        (llvm:br 'extract_phi_type_br)))
+    (llvm:label 'extract_phi_type_br
+      (let* ((phi_type_null (llvm:load phi_type_null_ptr |i1|)))
+        (llvm:br phi_type_null 'error 'build_phi_node)))
+    (llvm:label 'build_phi_node
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (phi_type (llvm:load phi_type_ptr |i8*|))
+             (phi (llvm:call llvm_build_phi builder phi_type (llvm:gep |[1 x i8]| (llvm:get-global .str.empty) 0 0)))
+             (phi_null (llvm:icmp 'eq phi (llvm:const-null |i8*|))))
+        (llvm:store phi phi_ptr)
+        (llvm:store phi_null phi_null_ptr)
+        (llvm:br 'build_phi_node_br)))
+    (llvm:label 'build_phi_node_br
+      (let* ((phi_null (llvm:load phi_null_ptr |i1|)))
+        (llvm:br phi_null 'error 'get_incoming_pairs)))
+    (llvm:label 'get_incoming_pairs
+      (let* ((pairs_start_ptr (llvm:gep |%ASTNode| args 0 5))
+             (pairs_start (llvm:load pairs_start_ptr |%ASTNode*|)))
+        (llvm:store pairs_start current_pair_ptr)
+        (llvm:br 'phi_loop)))
+    (llvm:label 'phi_loop
+      (let* ((current_pair (llvm:load current_pair_ptr |%ASTNode*|))
+             (current_pair_null (llvm:icmp 'eq current_pair (llvm:const-null |%ASTNode*|))))
+        (llvm:br current_pair_null 'phi_done 'process_pair)))
+    (llvm:label 'process_pair
+      (let* ((current_pair (llvm:load current_pair_ptr |%ASTNode*|))
+             (pair_node_ptr (llvm:gep |%ASTNode| current_pair 0 4))
+             (pair_node (llvm:load pair_node_ptr |%ASTNode*|))
+             (pair_node_null (llvm:icmp 'eq pair_node (llvm:const-null |%ASTNode*|))))
+        (llvm:br pair_node_null 'phi_done 'extract_value_from_pair)))
+    (llvm:label 'extract_value_from_pair
+      (let* ((current_pair (llvm:load current_pair_ptr |%ASTNode*|))
+             (pair_node_ptr (llvm:gep |%ASTNode| current_pair 0 4))
+             (pair_node (llvm:load pair_node_ptr |%ASTNode*|))
+             (value_node_ptr (llvm:gep |%ASTNode| pair_node 0 4))
+             (value_node (llvm:load value_node_ptr |%ASTNode*|))
+             (incoming_value (llvm:call codegen_eval_dsl_expr cg value_node))
+             (incoming_value_null (llvm:icmp 'eq incoming_value (llvm:const-null |i8*|))))
+        (llvm:store incoming_value incoming_value_ptr)
+        (llvm:store incoming_value_null incoming_value_null_ptr)
+        (llvm:br 'extract_value_from_pair_br)))
+    (llvm:label 'extract_value_from_pair_br
+      (let* ((incoming_value_null (llvm:load incoming_value_null_ptr |i1|)))
+        (llvm:br incoming_value_null 'error 'extract_label_from_pair)))
+    (llvm:label 'extract_label_from_pair
+      (let* ((current_pair (llvm:load current_pair_ptr |%ASTNode*|))
+             (pair_node_ptr (llvm:gep |%ASTNode| current_pair 0 4))
+             (pair_node (llvm:load pair_node_ptr |%ASTNode*|))
+             (pair_cdr_ptr (llvm:gep |%ASTNode| pair_node 0 5))
+             (pair_cdr (llvm:load pair_cdr_ptr |%ASTNode*|))
+             (label_node_ptr (llvm:gep |%ASTNode| pair_cdr 0 4))
+             (label_node (llvm:load label_node_ptr |%ASTNode*|))
+             (phi_extract_result (llvm:call codegen_extract_quoted_atom label_node phi_label_name_out phi_label_len_out))
+             (phi_extract_failed (llvm:icmp 'ne phi_extract_result (llvm:const-int |i32| 0))))
+        (llvm:br phi_extract_failed 'error 'get_phi_bb)))
+    (llvm:label 'get_phi_bb
+      (let* ((phi_label_name (llvm:load phi_label_name_out |i8*|))
+             (phi_label_len (llvm:load phi_label_len_out |i64|))
+             (phi_func_ptr (llvm:gep |%CodeGen| cg 0 8))
+             (phi_func (llvm:load phi_func_ptr |i8*|))
+             (incoming_bb (llvm:call codegen_get_or_create_label cg phi_func phi_label_name phi_label_len))
+             (incoming_bb_null (llvm:icmp 'eq incoming_bb (llvm:const-null |i8*|))))
+        (llvm:store incoming_bb incoming_bb_ptr)
+        (llvm:store incoming_bb_null incoming_bb_null_ptr)
+        (llvm:br 'get_phi_bb_br)))
+    (llvm:label 'get_phi_bb_br
+      (let* ((incoming_bb_null (llvm:load incoming_bb_null_ptr |i1|)))
+        (llvm:br incoming_bb_null 'error 'add_one_incoming)))
+    (llvm:label 'add_one_incoming
+      (let* ((phi (llvm:load phi_ptr |i8*|))
+             (incoming_value (llvm:load incoming_value_ptr |i8*|))
+             (incoming_bb (llvm:load incoming_bb_ptr |i8*|))
+             (val_array (llvm:alloca |i8*|))
+             (bb_array (llvm:alloca |i8*|)))
+        (llvm:store incoming_value val_array)
+        (llvm:store incoming_bb bb_array)
+        (llvm:call llvm_add_incoming phi val_array bb_array (llvm:const-int |i32| 1))
+        (llvm:br 'add_incoming_done)))
+    (llvm:label 'add_incoming_done
+      (let* ((current_pair (llvm:load current_pair_ptr |%ASTNode*|))
+             (next_pair_ptr (llvm:gep |%ASTNode| current_pair 0 5))
+             (next_pair (llvm:load next_pair_ptr |%ASTNode*|)))
+        (llvm:store next_pair current_pair_ptr)
+        (llvm:br 'phi_loop)))
+    (llvm:label 'phi_done
+      (let* ((phi (llvm:load phi_ptr |i8*|)))
+        (llvm:store phi result_ptr)
+        (llvm:br 'phi_ret)))
+    (llvm:label 'phi_ret
       (llvm:ret (llvm:load result_ptr |i8*|)))
     (llvm:label 'error
       (llvm:ret (llvm:const-null |i8*|)))))
@@ -2052,7 +2500,10 @@
       (let* ((pred_name (llvm:load pred_name_out |i8*|))
              (pred_len (llvm:load pred_len_out |i64|))
              (pred_enum (llvm:call codegen_map_predicate_string pred_name pred_len))
-             (pred_invalid (llvm:icmp 'eq pred_enum (llvm:const-int |i32| -1))))
+             (is_neg_one (llvm:icmp 'eq pred_enum (llvm:const-int |i32| -1)))
+             (below_range (llvm:icmp 'ult pred_enum (llvm:const-int |i32| 32)))
+             (above_range (llvm:icmp 'ugt pred_enum (llvm:const-int |i32| 41)))
+             (pred_invalid (llvm:or is_neg_one (llvm:or below_range above_range))))
         (llvm:store pred_enum pred_ptr)
         (llvm:store pred_invalid pred_invalid_ptr)
         (llvm:br 'map_predicate_br)))
@@ -2084,9 +2535,11 @@
              (builder (llvm:load builder_ptr |i8*|))
              (pred (llvm:load pred_ptr |i32|))
              (lhs (llvm:load lhs_ptr |i8*|))
-             (rhs (llvm:load rhs_ptr |i8*|)))
-        (llvm:store (llvm:call llvm_build_icmp builder pred lhs rhs (llvm:gep |[1 x i8]| (llvm:get-global .str.empty) 0 0)) result_ptr)
-        (llvm:br 'icmp_ret)))
+             (rhs (llvm:load rhs_ptr |i8*|))
+             (icmp_result (llvm:call llvm_build_icmp builder pred lhs rhs (llvm:gep |[1 x i8]| (llvm:get-global .str.empty) 0 0)))
+             (icmp_null (llvm:icmp 'eq icmp_result (llvm:const-null |i8*|))))
+        (llvm:store icmp_result result_ptr)
+        (llvm:br icmp_null 'error 'icmp_ret)))
     (llvm:label 'icmp_ret
       (llvm:ret (llvm:load result_ptr |i8*|)))
     (llvm:label 'error
