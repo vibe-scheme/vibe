@@ -98,7 +98,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
 - `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (Batch 1: 9, Batch 2: 4, Batch 3: 12, Tier 1: 2, Tier 2: 4, Phase 2: 3, Tier A: 18, Phase 1: 4 functions; 62 total migrated, ~37 remaining). Phase 1: codegen_dsl_br, codegen_dsl_label, codegen_dsl_alloca, codegen_dsl_phi. Tier A: codegen_dsl_add, codegen_dsl_or, codegen_dsl_sub, codegen_dsl_and, codegen_dsl_mul, codegen_dsl_const_int, codegen_dsl_bitcast, codegen_dsl_store, codegen_dsl_load, codegen_dsl_trunc, codegen_dsl_select, codegen_dsl_zext, codegen_dsl_urem, codegen_dsl_udiv, codegen_dsl_ptrtoint, codegen_dsl_insertvalue, codegen_dsl_extractvalue, codegen_dsl_icmp; see "Cross-block variable usage" and chat 0036.
+- `bootstrap/codegen.ll` / `bootstrap/codegen_no_vibe.ll` / `kernel/codegen.vibe` -- partially migrated (66 functions migrated, 37 remaining in `codegen_no_vibe.ll`). See chat 0039 for complete list of remaining functions and migration notes. **Important**: `codegen.vibe` must go through `.ll` + `llvm-as` (not direct `.bc`) in both KERNEL and SELF_HOST modes because it links with `codegen_no_vibe.ll` via `llvm-link`. This constraint lifts when all functions are migrated.
 - `bootstrap/main.ll`, `bootstrap/types.ll` -- shared by all modes
 
 **Sync rules:**
@@ -109,6 +109,8 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 5. When modifying `codegen.ll` (shared), changes automatically apply to all build modes
 6. **Debug logging divergence is acceptable**: bootstrap `.ll` files retain debug logging (printf calls) while kernel `.vibe` files remain silent. This is intentional -- bootstrap logging aids development, while kernel builds are cleaner
 7. **Deferred migrations**: When a bootstrap DSL bug blocks migrating a function to `.vibe`, keep the full `define` in the `.ll` file and add a comment in the `.vibe` file documenting the deferral. Migrate when the DSL bug is fixed.
+
+**Forward declarations required**: Every function called via `(llvm:call ...)` in a `.vibe` file must be visible at the call site. The compiler resolves calls by searching (1) local bindings, (2) the function list, (3) parameters, (4) constants. If a called function is defined in another module (e.g., `dsl.vibe`, `codegen_no_vibe.ll`) or later in the same file, it must be forward-declared with `(llvm:declare-function ...)` at the top of the file. **Calls to undeclared functions silently return null**, causing dependent `let*` bindings to be dropped without any error message. See chat 0039.
 
 **Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 

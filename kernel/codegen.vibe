@@ -122,6 +122,23 @@
 (llvm:declare-function (llvm_build_urem (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
 (llvm:declare-function (llvm_build_udiv (builder |i8*|) (lhs |i8*|) (rhs |i8*|) (name |i8*|)) |i8*|)
 (llvm:declare-function (llvm_build_ptrtoint (builder |i8*|) (value |i8*|) (dest_type |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (llvm_build_alloca (builder |i8*|) (ty |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (llvm_build_br (builder |i8*|) (dest |i8*|)) |i8*|)
+(llvm:declare-function (llvm_build_cond_br (builder |i8*|) (cond |i8*|) (then_block |i8*|) (else_block |i8*|)) |i8*|)
+(llvm:declare-function (llvm_get_insert_block (builder |i8*|)) |i8*|)
+(llvm:declare-function (llvm_position_builder_at_end (builder |i8*|) (bb |i8*|)) |void|)
+(llvm:declare-function (llvm_get_basic_block_terminator (block |i8*|)) |i8*|)
+(llvm:declare-function (llvm_build_phi (builder |i8*|) (ty |i8*|) (name |i8*|)) |i8*|)
+(llvm:declare-function (llvm_add_incoming (phi |i8*|) (values |i8*|) (blocks |i8*|) (count |i32|)) |void|)
+
+;; Forward declare codegen functions (from codegen_no_vibe.ll)
+(llvm:declare-function (codegen_get_or_create_label (cg |%CodeGen*|) (func |i8*|) (name |i8*|) (name_len |i64|)) |i8*|)
+(llvm:declare-function (codegen_eval_dsl_body (cg |%CodeGen*|) (body |%ASTNode*|)) |void|)
+
+;; Forward declare functions defined later in this file
+(llvm:declare-function (codegen_store_constant (cg |%CodeGen*|) (name |i8*|) (name_len |i64|) (value |i8*|)) |void|)
+(llvm:declare-function (codegen_append_bytevector (cg |%CodeGen*|) (data |i8*|) (len |i64|)) |void|)
+(llvm:declare-function (codegen_map_predicate_string (pred_str |i8*|) (pred_len |i64|)) |i32|)
 
 ;; Empty string constant for llvm_build_* name parameter (must be defined before Tier A functions)
 (llvm:define-constant .str.empty |[1 x i8]| #u8(0))

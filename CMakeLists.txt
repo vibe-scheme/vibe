@@ -77,6 +77,15 @@ message(STATUS "Found llvm-as: ${LLVM_AS}")
 message(STATUS "Found llvm-link: ${LLVM_LINK}")
 message(STATUS "Found llc: ${LLC}")
 
+# Find zstd library (required by LLVM's compression support)
+find_library(ZSTD_LIBRARY NAMES zstd PATHS /opt/homebrew/lib NO_DEFAULT_PATH)
+if(NOT ZSTD_LIBRARY)
+    find_library(ZSTD_LIBRARY NAMES zstd)
+endif()
+if(ZSTD_LIBRARY)
+    message(STATUS "Found zstd: ${ZSTD_LIBRARY}")
+endif()
+
 # Note: The bootstrap compiler executable does not link against LLVM libraries.
 # It only uses LLVM tools to process bitcode files. The executable itself
 # is compiled from LLVM IR to native code and only needs standard C libraries.
@@ -149,7 +158,7 @@ if(USE_VIBE_FILES)
     # Note: bootstrap_compiler must exist (build.sh checks this)
     # Step 1: Compile lexer.vibe to bitcode
     if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
             COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
@@ -159,11 +168,7 @@ if(USE_VIBE_FILES)
             COMMENT "Compiling lexer.vibe to bitcode using vibe_kernel"
         )
     else()
-        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
-        # Note: LLVMWriteBitcodeToFile produces bitcode that llvm-link rejects for multi-function modules.
-        # We write IR text first, then convert with llvm-as to ensure compatibility with llvm-link.
-        # TODO: Investigate using LLVMLinkModules2 API via a custom linker tool instead of llvm-link
-        #       to support direct bitcode output from bootstrap_compiler.
+        # KERNEL mode: Write IR text, then convert with llvm-as
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
             COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
@@ -231,7 +236,7 @@ if(USE_VIBE_FILES)
     # Note: bootstrap_compiler must exist (build.sh checks this)
     # Step 1: Compile parser.vibe to bitcode
     if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
             COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
@@ -241,8 +246,7 @@ if(USE_VIBE_FILES)
             COMMENT "Compiling parser.vibe to bitcode using vibe_kernel"
         )
     else()
-        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
-        # Write IR text first, then convert with llvm-as (same workaround as lexer)
+        # KERNEL mode: Write IR text, then convert with llvm-as
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
             COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
@@ -304,7 +308,7 @@ endif()
 if(USE_VIBE_FILES)
     # KERNEL/SELF_HOST mode: Compile ffi.vibe and dsl.vibe
     if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
+        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
             COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
@@ -322,8 +326,7 @@ if(USE_VIBE_FILES)
             COMMENT "Compiling dsl.vibe to bitcode using vibe_kernel"
         )
     else()
-        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
-        # Write IR text first, then convert with llvm-as (same workaround as lexer/parser)
+        # KERNEL mode: Write IR text, then convert with llvm-as
         add_custom_command(
             OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.ll
             COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
@@ -412,33 +415,25 @@ endif()
 if(USE_VIBE_FILES)
     # KERNEL/SELF_HOST mode: Compile codegen.vibe + codegen_no_vibe.ll
     if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Use vibe_kernel to compile .vibe files
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
-                ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-            COMMENT "Compiling codegen.vibe to bitcode using vibe_kernel"
-        )
+        set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
     else()
-        # KERNEL mode: Use bootstrap_compiler to compile .vibe files
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-                ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-            COMMENT "Compiling codegen.vibe to IR text using bootstrap_compiler"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-                -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-            COMMENT "Converting codegen IR text to bitcode using llvm-as"
-        )
+        set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler)
     endif()
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+        COMMAND ${VIBE_COMPILER}
+            ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+        DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+        COMMENT "Compiling codegen.vibe to IR text"
+    )
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
+        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
+        COMMENT "Converting codegen IR text to bitcode using llvm-as"
+    )
 
     # Assemble codegen_no_vibe.ll (unmigrated functions)
     add_custom_command(
@@ -589,6 +584,9 @@ if(USE_VIBE_FILES)
     if(UNIX AND NOT APPLE)
         target_link_libraries(vibe_kernel dl)
     endif()
+    if(ZSTD_LIBRARY)
+        target_link_libraries(vibe_kernel ${ZSTD_LIBRARY})
+    endif()
     add_dependencies(vibe_kernel bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_ffi bootstrap_codegen)
 else()
     # BOOTSTRAP mode: Build bootstrap_compiler
@@ -691,6 +689,9 @@ if(NOT USE_VIBE_FILES)
     elseif(APPLE)
         # macOS doesn't need separate dl library (dlopen is in libc)
         # No additional libraries needed
+    endif()
+    if(ZSTD_LIBRARY)
+        target_link_libraries(bootstrap_compiler ${ZSTD_LIBRARY})
     endif()
     
     # Make bootstrap_compiler depend on all bitcode modules
