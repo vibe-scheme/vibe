@@ -227,192 +227,88 @@ declare i32 @codegen_collect_field_types(%CodeGen* %cg, %ASTNode* %fields, %LLVM
 ; codegen_store_llvm_function: defined in codegen.vibe
 declare void @codegen_store_llvm_function(%CodeGen*, i8*, i64, %LLVMValueRef, %LLVMTypeRef)
 
-; Get function by name
 ; codegen_get_llvm_function: Look up a function by name and return LLVMValueRef and LLVMTypeRef
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   name: Function name
-;   name_len: Name length
-;   func_value_out: Pointer to store LLVMValueRef
-;   func_type_out: Pointer to store LLVMTypeRef
-; Returns: 1 if found, 0 if not found
+; Deferred migration: complex let*/label structure causes segfault when bootstrap compiles codegen.vibe
 define i32 @codegen_get_llvm_function(%CodeGen* %cg, i8* %name, i64 %name_len, %LLVMValueRef* %func_value_out, %LLVMTypeRef* %func_type_out) {
 entry:
-    ; Debug: Looking up function
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_looking_up_function, i32 0, i32 0))
-    ; Print function name if valid
-    %name_not_null = icmp ne i8* %name, null
-    %name_len_valid = icmp ugt i64 %name_len, 0
-    %can_print_name = and i1 %name_not_null, %name_len_valid
-    br i1 %can_print_name, label %print_func_name, label %skip_print_func_name
-    
-print_func_name:
-    %name_len_plus1_func = add i64 %name_len, 1
-    %name_buf_func = call i8* @malloc(i64 %name_len_plus1_func)
-    %name_buf_func_null = icmp eq i8* %name_buf_func, null
-    br i1 %name_buf_func_null, label %skip_print_func_name, label %do_print_func_name
-    
-do_print_func_name:
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_func, i8* %name, i64 %name_len, i1 false)
-    %name_null_func = getelementptr i8, i8* %name_buf_func, i64 %name_len
-    store i8 0, i8* %name_null_func
-    call i32 (i8*, ...) @printf(i8* %name_buf_func)
-    call void @free(i8* %name_buf_func)
-    br label %skip_print_func_name
-    
-skip_print_func_name:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
     ; Get llvm_functions list
     %llvm_functions_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 14
     %functions = load %ASTNode*, %ASTNode** %llvm_functions_ptr
-    
     %functions_null = icmp eq %ASTNode* %functions, null
-    br i1 %functions_null, label %not_found_func_debug, label %count_functions
-    
-not_found_func_debug:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_function_not_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %not_found_func
-    
-count_functions:
-    ; Count functions in list for debug output
-    %func_count = alloca i32
-    store i32 0, i32* %func_count
-    %current_func_count = alloca %ASTNode*
-    store %ASTNode* %functions, %ASTNode** %current_func_count
-    br label %count_loop
-    
-count_loop:
-    %current_val_count = load %ASTNode*, %ASTNode** %current_func_count
-    %current_null_count = icmp eq %ASTNode* %current_val_count, null
-    br i1 %current_null_count, label %count_done, label %increment_count
-    
-increment_count:
-    %count_val = load i32, i32* %func_count
-    %count_inc = add i32 %count_val, 1
-    store i32 %count_inc, i32* %func_count
-    %cdr_ptr_count = getelementptr %ASTNode, %ASTNode* %current_val_count, i32 0, i32 5
-    %cdr_count = load %ASTNode*, %ASTNode** %cdr_ptr_count
-    store %ASTNode* %cdr_count, %ASTNode** %current_func_count
-    br label %count_loop
-    
-count_done:
-    %final_count = load i32, i32* %func_count
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([32 x i8], [32 x i8]* @.str.debug_function_list_size, i32 0, i32 0), i32 %final_count)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    br label %search_loop_func
-    
+    br i1 %functions_null, label %not_found_func, label %search_loop_func
+
 search_loop_func:
     %current_func = alloca %ASTNode*
     store %ASTNode* %functions, %ASTNode** %current_func
     br label %iterate_func
-    
+
 iterate_func:
     %current_val_func = load %ASTNode*, %ASTNode** %current_func
     %current_null_func = icmp eq %ASTNode* %current_val_func, null
     br i1 %current_null_func, label %not_found_func, label %check_pair_func
-    
+
 check_pair_func:
-    ; Get pair from car: (name . (func_value . func_type))
     %car_ptr_func = getelementptr %ASTNode, %ASTNode* %current_val_func, i32 0, i32 4
     %pair_func = load %ASTNode*, %ASTNode** %car_ptr_func
     %pair_null_func = icmp eq %ASTNode* %pair_func, null
     br i1 %pair_null_func, label %next_func, label %compare_name_func
-    
+
 compare_name_func:
-    ; Get name from pair.car
     %pair_car_ptr_func = getelementptr %ASTNode, %ASTNode* %pair_func, i32 0, i32 4
     %name_node_func = load %ASTNode*, %ASTNode** %pair_car_ptr_func
     %name_node_null_func = icmp eq %ASTNode* %name_node_func, null
     br i1 %name_node_null_func, label %next_func, label %get_name_func
-    
+
 get_name_func:
     %stored_name_ptr_func = getelementptr %ASTNode, %ASTNode* %name_node_func, i32 0, i32 2
     %stored_name_func = load i8*, i8** %stored_name_ptr_func
     %stored_len_ptr_func = getelementptr %ASTNode, %ASTNode* %name_node_func, i32 0, i32 3
     %stored_len_func = load i64, i64* %stored_len_ptr_func
-    
-    ; Compare names
     %len_match_func = icmp eq i64 %stored_len_func, %name_len
     br i1 %len_match_func, label %compare_chars_func, label %next_func
-    
+
 compare_chars_func:
     %len_int_func = trunc i64 %name_len to i32
     %cmp_result_func = call i32 @strncmp(i8* %stored_name_func, i8* %name, i32 %len_int_func)
     %is_match_func = icmp eq i32 %cmp_result_func, 0
     br i1 %is_match_func, label %found_func, label %next_func
-    
+
 found_func:
-    ; Debug: Function found
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([20 x i8], [20 x i8]* @.str.debug_function_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Get (func_value . func_type) from pair.cdr
     %pair_cdr_ptr_func = getelementptr %ASTNode, %ASTNode* %pair_func, i32 0, i32 5
     %value_type_pair = load %ASTNode*, %ASTNode** %pair_cdr_ptr_func
     %value_type_pair_null = icmp eq %ASTNode* %value_type_pair, null
     br i1 %value_type_pair_null, label %not_found_func, label %extract_func_value
-    
+
 extract_func_value:
-    ; Get func_value from value_type_pair.car
     %value_type_car_ptr = getelementptr %ASTNode, %ASTNode* %value_type_pair, i32 0, i32 4
     %func_value_node = load %ASTNode*, %ASTNode** %value_type_car_ptr
     %func_value_node_null = icmp eq %ASTNode* %func_value_node, null
     br i1 %func_value_node_null, label %not_found_func, label %extract_func_type
-    
+
 extract_func_type:
-    ; Get func_type from value_type_pair.cdr
     %value_type_cdr_ptr = getelementptr %ASTNode, %ASTNode* %value_type_pair, i32 0, i32 5
     %func_type_node = load %ASTNode*, %ASTNode** %value_type_cdr_ptr
     %func_type_node_null = icmp eq %ASTNode* %func_type_node, null
-    br i1 %func_type_node_null, label %not_found_func, label %verify_and_extract
-    
-verify_and_extract:
-    ; Verify both are pointer nodes (atom_type 999)
-    %func_value_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %func_value_node, i32 0, i32 1
-    %func_value_atom_type = load i32, i32* %func_value_atom_type_ptr
-    %func_type_atom_type_ptr = getelementptr %ASTNode, %ASTNode* %func_type_node, i32 0, i32 1
-    %func_type_atom_type = load i32, i32* %func_type_atom_type_ptr
-    %both_are_pointers = and i1 true, true  ; Always true, but we'll check atom types
-    %func_value_is_ptr = icmp eq i32 %func_value_atom_type, 999
-    %func_type_is_ptr = icmp eq i32 %func_type_atom_type, 999
-    %both_pointers = and i1 %func_value_is_ptr, %func_type_is_ptr
-    br i1 %both_pointers, label %cast_back_func, label %not_found_func
-    
+    br i1 %func_type_node_null, label %not_found_func, label %cast_back_func
+
 cast_back_func:
-    ; Extract func_value
     %func_value_ptr_field = getelementptr %ASTNode, %ASTNode* %func_value_node, i32 0, i32 2
     %func_value_ptr = load i8*, i8** %func_value_ptr_field
     %func_value_ref = bitcast i8* %func_value_ptr to %LLVMValueRef
-    
-    ; Extract func_type
     %func_type_ptr_field = getelementptr %ASTNode, %ASTNode* %func_type_node, i32 0, i32 2
     %func_type_ptr = load i8*, i8** %func_type_ptr_field
     %func_type_ref = bitcast i8* %func_type_ptr to %LLVMTypeRef
-    
-    ; Store in output parameters
     store %LLVMValueRef %func_value_ref, %LLVMValueRef* %func_value_out
     store %LLVMTypeRef %func_type_ref, %LLVMTypeRef* %func_type_out
-    
     ret i32 1
-    
+
 next_func:
-    ; Move to next in list
     %cdr_ptr_func = getelementptr %ASTNode, %ASTNode* %current_val_func, i32 0, i32 5
     %cdr_func = load %ASTNode*, %ASTNode** %cdr_ptr_func
     store %ASTNode* %cdr_func, %ASTNode** %current_func
     br label %iterate_func
-    
+
 not_found_func:
-    ; Debug: Function not found after searching
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_function_not_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret i32 0
 }
 
@@ -792,44 +688,8 @@ entry:
     ret void
 }
 
-; Append parameter list
-; codegen_append_params: Append parameter list to function signature
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   params: AST node list of parameters
-define void @codegen_append_params(%CodeGen* %cg, %ASTNode* %params) {
-entry:
-    %is_null = icmp eq %ASTNode* %params, null
-    br i1 %is_null, label %done, label %append_first
-
-append_first:
-    %car_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 4
-    %param_node = load %ASTNode*, %ASTNode** %car_ptr
-    %param_val_ptr = getelementptr %ASTNode, %ASTNode* %param_node, i32 0, i32 2
-    %param_name = load i8*, i8** %param_val_ptr
-    %param_name_len_ptr = getelementptr %ASTNode, %ASTNode* %param_node, i32 0, i32 3
-    %param_name_len = load i64, i64* %param_name_len_ptr
-    
-    ; Append: i8* %param_name
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([4 x i8], [4 x i8]* @.str.i8_ptr, i32 0, i32 0), i64 3)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.space, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.percent, i32 0, i32 0), i64 1)
-    call void @codegen_append(%CodeGen* %cg, i8* %param_name, i64 %param_name_len)
-    
-    ; Check for more parameters
-    %cdr_ptr = getelementptr %ASTNode, %ASTNode* %params, i32 0, i32 5
-    %next = load %ASTNode*, %ASTNode** %cdr_ptr
-    %has_more = icmp ne %ASTNode* %next, null
-    br i1 %has_more, label %append_more, label %done
-
-append_more:
-    call void @codegen_append(%CodeGen* %cg, i8* getelementptr inbounds ([3 x i8], [3 x i8]* @.str.comma_space, i32 0, i32 0), i64 2)
-    call void @codegen_append_params(%CodeGen* %cg, %ASTNode* %next)
-    br label %done
-
-done:
-    ret void
-}
+; codegen_append_params: defined in codegen.vibe
+declare void @codegen_append_params(%CodeGen* %cg, %ASTNode* %params)
 
 ; Generate function call
 ; codegen_call: Generate a function call
@@ -1551,78 +1411,11 @@ error:
     ret i32 -1
 }
 
-; Write bitcode to file
+; codegen_write_ir_text: defined in codegen.vibe
+declare i32 @codegen_write_ir_text(%CodeGen* %cg, i8* %filename)
 
-; codegen_write_ir_text: Write module IR text to file using LLVM API
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   filename: Output file path (null-terminated string)
-; Returns: 0 on success, -1 on error
-define i32 @codegen_write_ir_text(%CodeGen* %cg, i8* %filename) {
-entry:
-    %cg_null = icmp eq %CodeGen* %cg, null
-    br i1 %cg_null, label %error, label %get_module
-    
-get_module:
-    ; Get LLVM module from CodeGen structure
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    br i1 %module_null, label %error, label %write
-    
-write:
-    ; Write IR text to file
-    %error_msg = alloca i8*
-    store i8* null, i8** %error_msg
-    %result = call i32 @llvm_print_module_to_file(%LLVMModuleRef %module, i8* %filename, i8** %error_msg)
-    %write_failed = icmp ne i32 %result, 0
-    br i1 %write_failed, label %error, label %success
-    
-success:
-    ret i32 0
-    
-error:
-    ret i32 -1
-}
-
-; codegen_write_bitcode: Write module bitcode to file using LLVM API
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   filename: Output file path (null-terminated string)
-; Returns: 0 on success, -1 on error
-define i32 @codegen_write_bitcode(%CodeGen* %cg, i8* %filename) {
-entry:
-    %cg_null = icmp eq %CodeGen* %cg, null
-    br i1 %cg_null, label %error, label %get_module
-    
-get_module:
-    ; Get LLVM module from CodeGen structure
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    br i1 %module_null, label %error, label %write
-    
-write:
-    ; Verify module before writing (helps ensure module is in valid state)
-    ; Note: We ignore verification errors as they may be false positives
-    ; (e.g., vararg functions, global initializers), but verification itself
-    ; may help finalize module state for proper bitcode writing
-    %verify_error_msg = alloca i8*
-    store i8* null, i8** %verify_error_msg
-    %verify_result = call i32 @llvm_verify_module(%LLVMModuleRef %module, i32 1, i8** %verify_error_msg)
-    ; Continue regardless of verification result
-    
-    ; Write bitcode to file
-    %result = call i32 @llvm_write_bitcode_to_file(%LLVMModuleRef %module, i8* %filename)
-    %write_failed = icmp ne i32 %result, 0
-    br i1 %write_failed, label %error, label %success
-    
-success:
-    ret i32 0
-    
-error:
-    ret i32 -1
-}
+; codegen_write_bitcode: defined in codegen.vibe
+declare i32 @codegen_write_bitcode(%CodeGen* %cg, i8* %filename)
 
 ; Write object file
 ; codegen_write_object_file: Write module directly to object file using TargetMachine API
@@ -1953,33 +1746,8 @@ declare i32 @printf(i8*, ...)
 ; Debug Logging Helpers
 ; ============================================================================
 
-; debug_log_string: Print debug message with prefix
-; Parameters:
-;   prefix: Prefix string (e.g., "[LEXER] ")
-;   message: Message string
-;   message_len: Message length
-define void @debug_log_string(i8* %prefix, i8* %message, i64 %message_len) {
-entry:
-    ; Print prefix
-    call i32 (i8*, ...) @printf(i8* %prefix)
-    
-    ; Create null-terminated message
-    %buf_size = add i64 %message_len, 1
-    %buf = call i8* @malloc(i64 %buf_size)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %buf, i8* %message, i64 %message_len, i1 false)
-    %null_ptr = getelementptr i8, i8* %buf, i64 %message_len
-    store i8 0, i8* %null_ptr
-    
-    ; Print message
-    call i32 (i8*, ...) @printf(i8* %buf)
-    
-    ; Print newline
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Free buffer
-    call void @free(i8* %buf)
-    ret void
-}
+; debug_log_string: defined in codegen.vibe
+declare void @debug_log_string(i8* %prefix, i8* %message, i64 %message_len)
 
 ; codegen_append_bytevector: defined in codegen.vibe
 declare void @codegen_append_bytevector(%CodeGen*, i8*, i64)
@@ -4013,99 +3781,11 @@ error:
 ; codegen_dsl_ret_void: Migrated to kernel/codegen.vibe
 declare %LLVMValueRef @codegen_dsl_ret_void(%CodeGen* %cg)
 
-; llvm-ret: Build return with value
-; Signature: (llvm-ret value)
-define %LLVMValueRef @codegen_dsl_ret(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %builder_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 7
-    %builder = load %LLVMBuilderRef, %LLVMBuilderRef* %builder_ptr
-    
-    %builder_null = icmp eq %LLVMBuilderRef %builder, null
-    br i1 %builder_null, label %error, label %get_value
-    
-get_value:
-    %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %eval_value
-    
-eval_value:
-    %value_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %value_node = load %ASTNode*, %ASTNode** %value_node_ptr
-    %value = call %LLVMValueRef @codegen_eval_dsl_expr(%CodeGen* %cg, %ASTNode* %value_node)
-    
-    %value_null = icmp eq %LLVMValueRef %value, null
-    br i1 %value_null, label %error, label %build_ret_val
-    
-build_ret_val:
-    %ret_result = call %LLVMValueRef @llvm_build_ret(%LLVMBuilderRef %builder, %LLVMValueRef %value)
-    ret %LLVMValueRef %ret_result
-    
-error:
-    ret %LLVMValueRef null
-}
+; llvm-ret: Build return with value; defined in codegen.vibe
+declare %LLVMValueRef @codegen_dsl_ret(%CodeGen* %cg, %ASTNode* %args)
 
-; llvm-get-global: Get global variable by name
-; Signature: (llvm-get-global name)
-define %LLVMValueRef @codegen_dsl_get_global(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
-    %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    
-    %module_null = icmp eq %LLVMModuleRef %module, null
-    br i1 %module_null, label %error, label %get_name_global
-    
-get_name_global:
-    %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %get_name_node
-    
-get_name_node:
-    %name_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
-    %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
-    %name = load i8*, i8** %name_val_ptr
-    %name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
-    %name_len = load i64, i64* %name_len_ptr
-    
-    ; Debug: Print global name being looked up
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_looking_up_global, i32 0, i32 0))
-    %name_len_plus1_global = add i64 %name_len, 1
-    %name_buf_global = call i8* @malloc(i64 %name_len_plus1_global)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_global, i8* %name, i64 %name_len, i1 false)
-    %name_null_global = getelementptr i8, i8* %name_buf_global, i64 %name_len
-    store i8 0, i8* %name_null_global
-    call i32 (i8*, ...) @printf(i8* %name_buf_global)
-    call void @free(i8* %name_buf_global)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Create null-terminated name for LLVM API
-    %name_buf_plus1 = add i64 %name_len, 1
-    %name_buf_full = call i8* @malloc(i64 %name_buf_plus1)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf_full, i8* %name, i64 %name_len, i1 false)
-    %name_null_ptr = getelementptr i8, i8* %name_buf_full, i64 %name_len
-    store i8 0, i8* %name_null_ptr
-    
-    %global = call %LLVMValueRef @llvm_get_named_global(%LLVMModuleRef %module, i8* %name_buf_full)
-    call void @free(i8* %name_buf_full)
-    
-    ; Debug: Check if global was found
-    %global_null = icmp eq %LLVMValueRef %global, null
-    br i1 %global_null, label %global_not_found, label %global_found
-    
-global_not_found:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_global_not_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    ret %LLVMValueRef null
-    
-global_found:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([22 x i8], [22 x i8]* @.str.debug_global_found, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    ret %LLVMValueRef %global
-    
-error:
-    ret %LLVMValueRef null
-}
+; llvm-get-global: Get global variable by name; defined in codegen.vibe
+declare %LLVMValueRef @codegen_dsl_get_global(%CodeGen* %cg, %ASTNode* %args)
 
 ; llvm-get-function: Get function by name
 ; Signature: (llvm-get-function name)
@@ -4113,137 +3793,51 @@ define %LLVMValueRef @codegen_dsl_get_function(%CodeGen* %cg, %ASTNode* %args) {
 entry:
     %module_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 6
     %module = load %LLVMModuleRef, %LLVMModuleRef* %module_ptr
-    
     %module_null = icmp eq %LLVMModuleRef %module, null
     br i1 %module_null, label %error, label %get_name_func
-    
 get_name_func:
     %args_null = icmp eq %ASTNode* %args, null
     br i1 %args_null, label %error, label %get_name_node_func
-    
 get_name_node_func:
     %name_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
     %name_node = load %ASTNode*, %ASTNode** %name_node_ptr
     %name_node_null = icmp eq %ASTNode* %name_node, null
     br i1 %name_node_null, label %error, label %get_name_val
-    
 get_name_val:
     %name_val_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 2
     %name = load i8*, i8** %name_val_ptr
     %name_len_ptr = getelementptr %ASTNode, %ASTNode* %name_node, i32 0, i32 3
     %name_len = load i64, i64* %name_len_ptr
-    
-    ; Debug logging - print function name being looked up
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([24 x i8], [24 x i8]* @.str.debug_looking_up_func, i32 0, i32 0))
-    ; Print name (create null-terminated copy for printing)
-    %print_buf_size = add i64 %name_len, 1
-    %print_buf = call i8* @malloc(i64 %print_buf_size)
-    call void @llvm.memcpy.p0i8.p0i8.i64(i8* %print_buf, i8* %name, i64 %name_len, i1 false)
-    %print_null_ptr = getelementptr i8, i8* %print_buf, i64 %name_len
-    store i8 0, i8* %print_null_ptr
-    call i32 (i8*, ...) @printf(i8* %print_buf)
-    call void @free(i8* %print_buf)
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Create null-terminated string for lookup
     %name_buf_size = add i64 %name_len, 1
     %name_buf = call i8* @malloc(i64 %name_buf_size)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
     %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
     store i8 0, i8* %name_null_ptr
-    
     %func = call %LLVMValueRef @llvm_get_named_function(%LLVMModuleRef %module, i8* %name_buf)
-    
-    ; Debug logging - print result
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([25 x i8], [25 x i8]* @.str.debug_get_function_result, i32 0, i32 0))
-    %func_is_null = icmp eq %LLVMValueRef %func, null
-    br i1 %func_is_null, label %print_null, label %print_not_null
-    
-print_null:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([6 x i8], [6 x i8]* @.str.debug_null, i32 0, i32 0))
-    br label %print_done
-    
-print_not_null:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([5 x i8], [5 x i8]* @.str.debug_not_null, i32 0, i32 0))
-    br label %print_done
-    
-print_done:
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
-    
-    ; Check if function was found
     %func_found = icmp ne %LLVMValueRef %func, null
     br i1 %func_found, label %store_func_type, label %func_not_found
-    
 store_func_type:
-    ; Store function and its type for later use in llvm-call
-    ; Get function type from stored mapping (if available) or from LLVMTypeOf
     %stored_func_type = call %LLVMTypeRef @codegen_get_function_type(%CodeGen* %cg, i8* %name_buf, i64 %name_len)
     %has_stored_type = icmp ne %LLVMTypeRef %stored_func_type, null
     br i1 %has_stored_type, label %use_stored_type, label %get_type_from_func
-    
 use_stored_type:
-    ; Use stored function type
     br label %store_both
-    
 get_type_from_func:
-    ; Fallback: get type from function value using LLVMTypeOf
     %func_type_from_value = call %LLVMTypeRef @llvm_type_of(%LLVMValueRef %func)
     br label %store_both
-    
 store_both:
-    ; Use phi to select between stored type and type from function value
     %func_type_to_store = phi %LLVMTypeRef [ %stored_func_type, %use_stored_type ], [ %func_type_from_value, %get_type_from_func ]
-    
-    ; Store both function value and type for llvm-call to use
     call void @codegen_store_llvm_function(%CodeGen* %cg, i8* %name_buf, i64 %name_len, %LLVMValueRef %func, %LLVMTypeRef %func_type_to_store)
-    
-    ; Free name buffer
     call void @free(i8* %name_buf)
-    
     ret %LLVMValueRef %func
-    
 func_not_found:
-    ; Function not found - this is an error
-    ; Print error message
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([12 x i8], [12 x i8]* @.str.debug_prefix_dsl_expr, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([30 x i8], [30 x i8]* @.str.debug_func_not_found_error, i32 0, i32 0))
-    call i32 (i8*, ...) @printf(i8* getelementptr inbounds ([2 x i8], [2 x i8]* @.str.debug_newline, i32 0, i32 0))
     ret %LLVMValueRef null
-    
 error:
     ret %LLVMValueRef null
 }
 
-; llvm-get-param: Get function parameter by index
-; Signature: (llvm-get-param index)
-define %LLVMValueRef @codegen_dsl_get_param(%CodeGen* %cg, %ASTNode* %args) {
-entry:
-    %current_function_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 8
-    %current_function = load %LLVMValueRef, %LLVMValueRef* %current_function_ptr
-    
-    %func_null = icmp eq %LLVMValueRef %current_function, null
-    br i1 %func_null, label %error, label %get_index
-    
-get_index:
-    %args_null = icmp eq %ASTNode* %args, null
-    br i1 %args_null, label %error, label %get_index_node
-    
-get_index_node:
-    ; Get index node (first element of args list)
-    %index_node_ptr = getelementptr %ASTNode, %ASTNode* %args, i32 0, i32 4
-    %index_node = load %ASTNode*, %ASTNode** %index_node_ptr
-    
-    ; Parse index from AST node
-    %index = call i32 @codegen_parse_int_from_ast(%ASTNode* %index_node)
-    
-    %param = call %LLVMValueRef @llvm_get_param(%LLVMValueRef %current_function, i32 %index)
-    ret %LLVMValueRef %param
-    
-error:
-    ret %LLVMValueRef null
-}
+; llvm-get-param: Get function parameter by index; defined in codegen.vibe
+declare %LLVMValueRef @codegen_dsl_get_param(%CodeGen* %cg, %ASTNode* %args)
 
 ; codegen_dsl_const_int: Migrated to kernel/codegen.vibe
 declare %LLVMValueRef @codegen_dsl_const_int(%CodeGen* %cg, %ASTNode* %args)
@@ -4305,77 +3899,52 @@ declare %LLVMValueRef @codegen_dsl_icmp(%CodeGen* %cg, %ASTNode* %args)
 %LabelEntry = type { i8*, i64, %LLVMBasicBlockRef, %LabelEntry* }
 
 ; codegen_get_or_create_label: Get or create a basic block with given name
-; Parameters:
-;   cg: CodeGen pointer
-;   func: LLVMValueRef for function
-;   name: Label name string
-;   name_len: Label name length
-; Returns: LLVMBasicBlockRef for the label, or null on error
-; Note: First checks if a block with this name already exists, then creates if needed
+; Deferred migration: complex let*/label structure causes segfault when bootstrap compiles codegen.vibe
 define %LLVMBasicBlockRef @codegen_get_or_create_label(%CodeGen* %cg, %LLVMValueRef %func, i8* %name, i64 %name_len) {
 entry:
     %func_null = icmp eq %LLVMValueRef %func, null
     br i1 %func_null, label %error, label %check_existing
-    
+
 check_existing:
-    ; First, check if a block with this name already exists
-    ; Iterate through all basic blocks in the function
     %first_block = call %LLVMBasicBlockRef @llvm_get_first_basic_block(%LLVMValueRef %func)
     %first_block_null = icmp eq %LLVMBasicBlockRef %first_block, null
     br i1 %first_block_null, label %create_label, label %iterate_blocks
-    
+
 iterate_blocks:
     %current_block = phi %LLVMBasicBlockRef [ %first_block, %check_existing ], [ %next_block_val, %check_next_block ]
-    
-    ; Get the name of the current block
     %block_name = call i8* @llvm_get_basic_block_name(%LLVMBasicBlockRef %current_block)
     %block_name_null = icmp eq i8* %block_name, null
     br i1 %block_name_null, label %check_next_block, label %compare_names
-    
+
 compare_names:
-    ; Compare block name with desired name
-    ; We need to compare the full strings. Since block_name is null-terminated and
-    ; name is not (we have name_len), we'll compare up to name_len characters,
-    ; then check that block_name is null-terminated at that position
     %name_len_int = trunc i64 %name_len to i32
     %cmp_result = call i32 @strncmp(i8* %block_name, i8* %name, i32 %name_len_int)
     %names_match = icmp eq i32 %cmp_result, 0
     br i1 %names_match, label %check_null_term, label %check_next_block
-    
+
 check_null_term:
-    ; Check that the block name is exactly name_len characters (null-terminated at name_len)
-    ; This ensures "same" matches "same" but not "same1"
     %block_name_at_len = getelementptr i8, i8* %block_name, i64 %name_len
     %block_char_at_len = load i8, i8* %block_name_at_len
     %is_null_term = icmp eq i8 %block_char_at_len, 0
     br i1 %is_null_term, label %found_existing, label %check_next_block
-    
+
 found_existing:
-    ; Found an existing block with matching name - return it
     ret %LLVMBasicBlockRef %current_block
-    
+
 check_next_block:
-    ; Move to next block
     %next_block_val = call %LLVMBasicBlockRef @llvm_get_next_basic_block(%LLVMBasicBlockRef %current_block)
     %next_block_null = icmp eq %LLVMBasicBlockRef %next_block_val, null
     br i1 %next_block_null, label %create_label, label %iterate_blocks
-    
+
 create_label:
-    ; No existing block found - create a new one
-    ; Create null-terminated name string
     %name_buf_size = add i64 %name_len, 1
     %name_buf = call i8* @malloc(i64 %name_buf_size)
     call void @llvm.memcpy.p0i8.p0i8.i64(i8* %name_buf, i8* %name, i64 %name_len, i1 false)
     %name_null_ptr = getelementptr i8, i8* %name_buf, i64 %name_len
     store i8 0, i8* %name_null_ptr
-    
-    ; Create basic block with name
     %block = call %LLVMBasicBlockRef @llvm_append_basic_block(%LLVMValueRef %func, i8* %name_buf)
-    
-    ; Note: We don't free name_buf here because LLVM may keep a reference to it
-    ; In a production system, we'd want to track allocated strings and free them later
     ret %LLVMBasicBlockRef %block
-    
+
 error:
     ret %LLVMBasicBlockRef null
 }
@@ -5824,86 +5393,8 @@ declare i64 @codegen_int_to_string(i32, i8*)
 declare %ASTNode* @codegen_create_int_node(i32)
 
 
-; Get function type from function value (reverse lookup)
-; codegen_get_function_type_by_value: Look up function type by function value
-; Parameters:
-;   cg: Pointer to CodeGen structure
-;   func_value: LLVMValueRef for the function
-; Returns: LLVMTypeRef for function type, or null if not found
-define %LLVMTypeRef @codegen_get_function_type_by_value(%CodeGen* %cg, %LLVMValueRef %func_value) {
-entry:
-    ; Get llvm_functions list
-    %llvm_functions_ptr = getelementptr %CodeGen, %CodeGen* %cg, i32 0, i32 14
-    %functions = load %ASTNode*, %ASTNode** %llvm_functions_ptr
-    
-    %functions_null = icmp eq %ASTNode* %functions, null
-    br i1 %functions_null, label %not_found_by_value, label %search_loop_by_value
-    
-search_loop_by_value:
-    %current_by_value = alloca %ASTNode*
-    store %ASTNode* %functions, %ASTNode** %current_by_value
-    br label %iterate_by_value
-    
-iterate_by_value:
-    %current_val_by_value = load %ASTNode*, %ASTNode** %current_by_value
-    %current_null_by_value = icmp eq %ASTNode* %current_val_by_value, null
-    br i1 %current_null_by_value, label %not_found_by_value, label %check_pair_by_value
-    
-check_pair_by_value:
-    ; Get pair from car: (name . (func_value . func_type))
-    %car_ptr_by_value = getelementptr %ASTNode, %ASTNode* %current_val_by_value, i32 0, i32 4
-    %pair_by_value = load %ASTNode*, %ASTNode** %car_ptr_by_value
-    %pair_null_by_value = icmp eq %ASTNode* %pair_by_value, null
-    br i1 %pair_null_by_value, label %next_by_value, label %get_value_type_pair
-    
-get_value_type_pair:
-    ; Get (func_value . func_type) from pair.cdr
-    %pair_cdr_ptr_by_value = getelementptr %ASTNode, %ASTNode* %pair_by_value, i32 0, i32 5
-    %value_type_pair_by_value = load %ASTNode*, %ASTNode** %pair_cdr_ptr_by_value
-    %value_type_pair_null_by_value = icmp eq %ASTNode* %value_type_pair_by_value, null
-    br i1 %value_type_pair_null_by_value, label %next_by_value, label %extract_func_value_by_value
-    
-extract_func_value_by_value:
-    ; Get func_value from value_type_pair.car
-    %value_type_car_ptr_by_value = getelementptr %ASTNode, %ASTNode* %value_type_pair_by_value, i32 0, i32 4
-    %func_value_node_by_value = load %ASTNode*, %ASTNode** %value_type_car_ptr_by_value
-    %func_value_node_null_by_value = icmp eq %ASTNode* %func_value_node_by_value, null
-    br i1 %func_value_node_null_by_value, label %next_by_value, label %compare_values
-    
-compare_values:
-    ; Extract stored func_value
-    %func_value_ptr_field_by_value = getelementptr %ASTNode, %ASTNode* %func_value_node_by_value, i32 0, i32 2
-    %stored_func_value_ptr = load i8*, i8** %func_value_ptr_field_by_value
-    %stored_func_value = bitcast i8* %stored_func_value_ptr to %LLVMValueRef
-    
-    ; Compare function values (pointer comparison)
-    %values_match = icmp eq %LLVMValueRef %stored_func_value, %func_value
-    br i1 %values_match, label %extract_func_type_by_value, label %next_by_value
-    
-extract_func_type_by_value:
-    ; Get func_type from value_type_pair.cdr
-    %value_type_cdr_ptr_by_value = getelementptr %ASTNode, %ASTNode* %value_type_pair_by_value, i32 0, i32 5
-    %func_type_node_by_value = load %ASTNode*, %ASTNode** %value_type_cdr_ptr_by_value
-    %func_type_node_null_by_value = icmp eq %ASTNode* %func_type_node_by_value, null
-    br i1 %func_type_node_null_by_value, label %not_found_by_value, label %cast_back_type
-    
-cast_back_type:
-    ; Extract func_type
-    %func_type_ptr_field_by_value = getelementptr %ASTNode, %ASTNode* %func_type_node_by_value, i32 0, i32 2
-    %func_type_ptr_by_value = load i8*, i8** %func_type_ptr_field_by_value
-    %func_type_ref_by_value = bitcast i8* %func_type_ptr_by_value to %LLVMTypeRef
-    ret %LLVMTypeRef %func_type_ref_by_value
-    
-next_by_value:
-    ; Move to next in list
-    %cdr_ptr_by_value = getelementptr %ASTNode, %ASTNode* %current_val_by_value, i32 0, i32 5
-    %cdr_by_value = load %ASTNode*, %ASTNode** %cdr_ptr_by_value
-    store %ASTNode* %cdr_by_value, %ASTNode** %current_by_value
-    br label %iterate_by_value
-    
-not_found_by_value:
-    ret %LLVMTypeRef null
-}
+; codegen_get_function_type_by_value: defined in codegen.vibe
+declare %LLVMTypeRef @codegen_get_function_type_by_value(%CodeGen* %cg, %LLVMValueRef %func_value)
 
 ; codegen_dsl_undef: Migrated to kernel/codegen.vibe
 declare %LLVMValueRef @codegen_dsl_undef(%CodeGen* %cg, %ASTNode* %args)
