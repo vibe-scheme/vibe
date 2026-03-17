@@ -515,7 +515,7 @@ endif()
 
 # Bootstrap Compiler - Main executable
 if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile main.vibe + main_no_vibe.ll
+    # KERNEL/SELF_HOST mode: Compile main.vibe (provides main + helpers)
     if(USE_VIBE_KERNEL)
         set(MAIN_VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
     else()
@@ -537,23 +537,15 @@ if(USE_VIBE_FILES)
         COMMENT "Converting main IR text to bitcode using llvm-as"
     )
     add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/main_no_vibe.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/main_no_vibe.ll
-        COMMENT "Assembling main_no_vibe bitcode (temp)"
-    )
-    add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
         COMMAND ${LLVM_LINK}
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
             ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
             -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
         DEPENDS
             ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
             ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
-        COMMENT "Linking compiler main with types and main.vibe"
+        COMMENT "Linking compiler main (main.vibe provides main + helpers)"
     )
     add_custom_target(bootstrap_main_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc)
 else()

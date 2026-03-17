@@ -39,14 +39,13 @@ vibe/
 │   ├── ffi.ll         # FFI and LLVM C API wrappers
 │   ├── codegen.ll     # Code generator (full, used in BOOTSTRAP mode)
 │   ├── dsl.ll         # LLVM C API wrappers (bootstrap version)
-│   ├── main.ll        # Compiler driver (BOOTSTRAP mode only)
-│   └── main_no_vibe.ll # Compiler driver (KERNEL/SELF_HOST: main + declares)
+│   └── main.ll        # Compiler driver (BOOTSTRAP mode only)
 ├── kernel/            # Kernel compiler (Vibe source, .vibe files)
 │   ├── lexer.vibe     # Lexer in Vibe DSL
 │   ├── parser.vibe    # Parser in Vibe DSL
 │   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
 │   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
-│   ├── main.vibe      # Compiler driver helpers (8 functions: print_usage, read_file, etc.)
+│   ├── main.vibe      # Compiler driver (main + helpers)
 │   └── codegen.vibe   # Codegen utilities
 ├── src/               # Future self-hosted Vibe code
 ├── doc/               # Documentation repository
@@ -88,7 +87,7 @@ The Vibe project uses a three-phase build system that enables gradual migration 
 
 ### File Type Relationships
 
-- **`.ll` files** (in `bootstrap/`): Pure LLVM IR implementations. In BOOTSTRAP mode, all `.ll` files are used. In KERNEL/SELF_HOST modes, `main.ll` is used for BOOTSTRAP only; `main_no_vibe.ll` + `main.vibe` are used for KERNEL/SELF_HOST. Codegen uses `codegen.vibe` only (codegen_no_vibe.ll was removed in chat 0045).
+- **`.ll` files** (in `bootstrap/`): Pure LLVM IR implementations. In BOOTSTRAP mode, all `.ll` files are used. In KERNEL/SELF_HOST modes, `main.ll` is used for BOOTSTRAP only; `main.vibe` provides the compiler driver (main + helpers). Codegen uses `codegen.vibe` only (codegen_no_vibe.ll was removed in chat 0045).
 - **`.vibe` files** (in `kernel/`): Vibe source code that gets compiled to LLVM bitcode by the bootstrap compiler (KERNEL mode) or the kernel compiler itself (SELF_HOST mode). These replace their `.ll` counterparts for modules that have been migrated.
 
 ### Bootstrap/Kernel Sync Strategy
@@ -101,7 +100,7 @@ When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same mod
 - `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
 - `bootstrap/codegen.ll` / `kernel/codegen.vibe` -- fully migrated (codegen_no_vibe.ll removed in chat 0045)
 - `bootstrap/main.ll` -- unchanged, used by BOOTSTRAP mode only
-- `bootstrap/main_no_vibe.ll` / `kernel/main.vibe` -- partially migrated (8 helper functions in main.vibe, `main` remains in main_no_vibe.ll)
+- `kernel/main.vibe` -- fully migrated (main + all helpers)
 - `bootstrap/types.ll` -- shared by all modes (type definitions only)
 
 **Sync rules:**
