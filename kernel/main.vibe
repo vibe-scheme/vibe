@@ -1,0 +1,249 @@
+; Bootstrap Compiler Main - Helper functions migrated to Vibe DSL
+; Compiler driver helpers (print_usage, print_error, read_file, etc.)
+; main() remains in bootstrap/main_no_vibe.ll
+
+; C library declarations (resolved at link time from libc/other modules)
+(llvm:declare-function (malloc (size |i64|)) |i8*|)
+(llvm:declare-function (free (ptr |i8*|)) |void|)
+(llvm:declare-function (strlen (s |i8*|)) |i64|)
+(llvm:declare-function (write (fd |i32|) (buf |i8*|) (count |i32|)) |i64|)
+(llvm:declare-function (open (path |i8*|) (flags |i32|) (mode |i32|)) |i32|)
+(llvm:declare-function (read (fd |i32|) (buf |i8*|) (count |i64|)) |i64|)
+(llvm:declare-function (close (fd |i32|)) |i32|)
+(llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
+
+; String constant for usage message (must be before print_usage - forward reference fix)
+; "Usage: bootstrap_compiler <input> [-o output]\n"
+(llvm:define-constant .str.usage |[47 x i8]| #u8(85 115 97 103 101 58 32 98 111 111 116 115 116 114 97 112 95 99 111 109 112 105 108 101 114 32 60 105 110 112 117 116 62 32 91 45 111 32 111 117 116 112 117 116 93 10 0))
+
+; print_string: Print a string to stdout (defined first - called by print_usage, print_error)
+(llvm:define-function (print_string (str |i8*|)) |void|
+  (let* ((len (llvm:call strlen str))
+         (len_int (llvm:trunc len |i64| |i32|)))
+    (llvm:call write (llvm:const-int |i32| 1) str len_int)
+    (llvm:ret-void)))
+
+; print_usage: Print usage message
+(llvm:define-function (print_usage) |void|
+  (let* ((usage_msg (llvm:gep |[47 x i8]| (llvm:get-global .str.usage) 0 0)))
+    (llvm:call print_string usage_msg)
+    (llvm:ret-void)))
+
+; print_error: Print error message (pass-through to print_string)
+(llvm:define-function (print_error (message |i8*|)) |void|
+  (llvm:call print_string message)
+  (llvm:ret-void))
+
+; check_identifier: Check if an identifier matches a string
+(llvm:define-function (check_identifier (id |i8*|) (id_len |i64|) (target |i8*|) (target_len |i64|)) |i32|
+  (llvm:br (llvm:icmp 'eq id_len target_len) 'compare_chars 'no_match)
+  (llvm:label 'compare_chars
+    (let* ((len_int (llvm:trunc id_len |i64| |i32|))
+           (cmp_result (llvm:call strncmp id target len_int))
+           (is_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0))))
+      (llvm:br is_match 'match 'no_match)))
+  (llvm:label 'match
+    (llvm:ret (llvm:const-int |i32| 1)))
+  (llvm:label 'no_match
+    (llvm:ret (llvm:const-int |i32| 0))))
+
+; check_extension: Check if filename ends with extension
+(llvm:define-function (check_extension (filename |i8*|) (extension |i8*|)) |i32|
+  (let* ((filename_len (llvm:call strlen filename))
+         (ext_len (llvm:call strlen extension))
+         (len_ok (llvm:icmp 'uge filename_len ext_len)))
+    (llvm:br len_ok 'check_suffix 'no_match)
+    (llvm:label 'check_suffix
+      (let* ((suffix_offset (llvm:sub filename_len ext_len))
+             (suffix_ptr (llvm:gep |i8| filename suffix_offset))
+             (ext_len_int (llvm:trunc ext_len |i64| |i32|))
+             (cmp_result (llvm:call strncmp suffix_ptr extension ext_len_int))
+             (is_match (llvm:icmp 'eq cmp_result (llvm:const-int |i32| 0))))
+        (llvm:br is_match 'match 'no_match)))
+    (llvm:label 'match
+      (llvm:ret (llvm:const-int |i32| 1)))
+    (llvm:label 'no_match
+      (llvm:ret (llvm:const-int |i32| 0)))))
+
+; read_file: Read a file into memory
+(llvm:define-function (read_file (filename |i8*|)) |i8*|
+  (let* ((fd_ptr (llvm:alloca |i32|))
+         (buffer_ptr (llvm:alloca |i8*|))
+         (bytes_read_ptr (llvm:alloca |i64|))
+         (fd (llvm:call open filename (llvm:const-int |i32| 0) (llvm:const-int |i32| 0)))
+         (fd_neg (llvm:icmp 'slt fd (llvm:const-int |i32| 0))))
+    (llvm:store fd fd_ptr)
+    (llvm:br fd_neg 'error 'get_size)
+    (llvm:label 'get_size
+      (let* ((fd (llvm:load fd_ptr |i32|))
+             (buffer_size (llvm:const-int |i64| 524288))
+             (buffer (llvm:call malloc buffer_size))
+             (bytes_read (llvm:call read fd buffer buffer_size)))
+        (llvm:store buffer buffer_ptr)
+        (llvm:store bytes_read bytes_read_ptr)
+        (llvm:call close fd)
+        (llvm:br (llvm:icmp 'slt bytes_read (llvm:const-int |i64| 0)) 'read_fail 'success)))
+    (llvm:label 'read_fail
+      (let* ((buffer (llvm:load buffer_ptr |i8*|)))
+        (llvm:call free buffer)
+        (llvm:br 'error)))
+    (llvm:label 'success
+      (let* ((buffer (llvm:load buffer_ptr |i8*|))
+             (bytes_read (llvm:load bytes_read_ptr |i64|))
+             (null_ptr (llvm:gep |i8| buffer bytes_read)))
+        (llvm:store (llvm:const-int |i8| 0) null_ptr)
+        (llvm:ret buffer)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))
+
+; write_file: Write content to file
+(llvm:define-function (write_file (filename |i8*|) (content |i8*|) (len |i64|)) |i32|
+  (let* ((fd_ptr (llvm:alloca |i32|))
+         (fd (llvm:call open filename (llvm:const-int |i32| 577) (llvm:const-int |i32| 420)))
+         (fd_neg (llvm:icmp 'slt fd (llvm:const-int |i32| 0))))
+    (llvm:store fd fd_ptr)
+    (llvm:br fd_neg 'error 'write_content)
+    (llvm:label 'write_content
+      (let* ((fd (llvm:load fd_ptr |i32|))
+             (len_int (llvm:trunc len |i64| |i32|))
+             (bytes_written (llvm:call write fd content len_int)))
+        (llvm:call close fd)
+        (llvm:br (llvm:icmp 'slt bytes_written (llvm:const-int |i64| 0)) 'error 'success)))
+    (llvm:label 'success
+      (llvm:ret (llvm:const-int |i32| 0)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-int |i32| -1)))))
+
+; extract_module_name: Extract module name from file path
+(llvm:define-function (extract_module_name (filepath |i8*|)) |i8*|
+  (let* ((path_len_ptr (llvm:alloca |i64|))
+         (last_slash_pos (llvm:alloca |i64|))
+         (i_ptr (llvm:alloca |i64|))
+         (basename_start_ptr (llvm:alloca |i64|))
+         (basename_len_ptr (llvm:alloca |i64|))
+         (last_dot_pos (llvm:alloca |i64|))
+         (j_ptr (llvm:alloca |i64|))
+         (final_len_ptr (llvm:alloca |i64|))
+         (buf_ptr (llvm:alloca |i8*|))
+         (i_copy_ptr (llvm:alloca |i64|))
+         (basename_ptr_storage (llvm:alloca |i8*|)))
+    (llvm:br (llvm:icmp 'eq filepath (llvm:const-null |i8*|)) 'error 'get_length)
+    (llvm:label 'get_length
+      (let* ((path_len (llvm:call strlen filepath))
+             (path_len_zero (llvm:icmp 'eq path_len (llvm:const-int |i64| 0))))
+        (llvm:store path_len path_len_ptr)
+        (llvm:br path_len_zero 'error 'find_last_slash)))
+    (llvm:label 'find_last_slash
+      (llvm:store (llvm:const-int |i64| 0) last_slash_pos)
+      (llvm:store (llvm:const-int |i64| 0) i_ptr)
+      (llvm:br 'slash_loop))
+    (llvm:label 'slash_loop
+      (let* ((path_len (llvm:load path_len_ptr |i64|))
+             (i_val (llvm:load i_ptr |i64|))
+             (done (llvm:icmp 'uge i_val path_len)))
+        (llvm:br done 'extract_basename 'check_slash)))
+    (llvm:label 'check_slash
+      (let* ((i_val (llvm:load i_ptr |i64|))
+             (char_ptr (llvm:gep |i8| filepath i_val))
+             (char (llvm:load char_ptr |i8|))
+             (char_int (llvm:zext char |i8| |i32|))
+             (is_slash (llvm:icmp 'eq char_int (llvm:const-int |i32| 47))))
+        (llvm:br is_slash 'update_slash_pos 'increment_slash)))
+    (llvm:label 'update_slash_pos
+      (let* ((i_val (llvm:load i_ptr |i64|))
+             (slash_pos_after (llvm:add i_val (llvm:const-int |i64| 1))))
+        (llvm:store slash_pos_after last_slash_pos)
+        (llvm:br 'increment_slash)))
+    (llvm:label 'increment_slash
+      (let* ((i_val (llvm:load i_ptr |i64|))
+             (i_next (llvm:add i_val (llvm:const-int |i64| 1))))
+        (llvm:store i_next i_ptr)
+        (llvm:br 'slash_loop)))
+    (llvm:label 'extract_basename
+      (let* ((path_len (llvm:load path_len_ptr |i64|))
+             (basename_start (llvm:load last_slash_pos |i64|))
+             (basename_len (llvm:sub path_len basename_start))
+             (basename_len_zero (llvm:icmp 'eq basename_len (llvm:const-int |i64| 0))))
+        (llvm:store basename_start basename_start_ptr)
+        (llvm:store basename_len basename_len_ptr)
+        (llvm:br basename_len_zero 'error 'find_last_dot)))
+    (llvm:label 'find_last_dot
+      (llvm:store (llvm:const-int |i64| 0) last_dot_pos)
+      (llvm:store (llvm:const-int |i64| 0) j_ptr)
+      (llvm:br 'dot_loop))
+    (llvm:label 'dot_loop
+      (let* ((basename_len (llvm:load basename_len_ptr |i64|))
+             (j_val (llvm:load j_ptr |i64|))
+             (dot_done (llvm:icmp 'uge j_val basename_len)))
+        (llvm:br dot_done 'determine_length 'check_dot)))
+    (llvm:label 'check_dot
+      (let* ((basename_start (llvm:load basename_start_ptr |i64|))
+             (j_val (llvm:load j_ptr |i64|))
+             (basename_char_offset (llvm:gep |i8| filepath (llvm:add basename_start j_val)))
+             (basename_char (llvm:load basename_char_offset |i8|))
+             (basename_char_int (llvm:zext basename_char |i8| |i32|))
+             (is_dot (llvm:icmp 'eq basename_char_int (llvm:const-int |i32| 46))))
+        (llvm:br is_dot 'update_dot_pos 'increment_dot)))
+    (llvm:label 'update_dot_pos
+      (let* ((j_val (llvm:load j_ptr |i64|)))
+        (llvm:store j_val last_dot_pos)
+        (llvm:br 'increment_dot)))
+    (llvm:label 'increment_dot
+      (let* ((j_val (llvm:load j_ptr |i64|))
+             (j_next (llvm:add j_val (llvm:const-int |i64| 1))))
+        (llvm:store j_next j_ptr)
+        (llvm:br 'dot_loop)))
+    (llvm:label 'determine_length
+      (let* ((dot_pos (llvm:load last_dot_pos |i64|))
+             (basename_len (llvm:load basename_len_ptr |i64|))
+             (has_dot (llvm:icmp 'ne dot_pos (llvm:const-int |i64| 0))))
+        (llvm:br has_dot 'use_dot_length 'use_full_length)))
+    (llvm:label 'use_dot_length
+      (let* ((dot_pos (llvm:load last_dot_pos |i64|)))
+        (llvm:store dot_pos final_len_ptr)
+        (llvm:br 'allocate_name)))
+    (llvm:label 'use_full_length
+      (let* ((basename_len (llvm:load basename_len_ptr |i64|)))
+        (llvm:store basename_len final_len_ptr)
+        (llvm:br 'allocate_name)))
+    (llvm:label 'allocate_name
+      (let* ((final_len (llvm:load final_len_ptr |i64|))
+             (final_len_zero (llvm:icmp 'eq final_len (llvm:const-int |i64| 0))))
+        (llvm:br final_len_zero 'error 'alloc_buf)))
+    (llvm:label 'alloc_buf
+      (let* ((final_len (llvm:load final_len_ptr |i64|))
+             (buf_size (llvm:add final_len (llvm:const-int |i64| 1)))
+             (buf (llvm:call malloc buf_size))
+             (buf_null (llvm:icmp 'eq buf (llvm:const-null |i8*|))))
+        (llvm:store buf buf_ptr)
+        (llvm:br buf_null 'error 'copy_name)))
+    (llvm:label 'copy_name
+      (let* ((basename_start (llvm:load basename_start_ptr |i64|))
+             (basename_ptr (llvm:gep |i8| filepath basename_start)))
+        (llvm:store basename_ptr basename_ptr_storage)
+        (llvm:store (llvm:const-int |i64| 0) i_copy_ptr)
+        (llvm:br 'copy_loop)))
+    (llvm:label 'copy_loop
+      (let* ((final_len (llvm:load final_len_ptr |i64|))
+             (i_copy_val (llvm:load i_copy_ptr |i64|))
+             (copy_done (llvm:icmp 'uge i_copy_val final_len)))
+        (llvm:br copy_done 'null_terminate 'copy_char)))
+    (llvm:label 'copy_char
+      (let* ((basename_ptr (llvm:load basename_ptr_storage |i8*|))
+             (buf (llvm:load buf_ptr |i8*|))
+             (i_copy_val (llvm:load i_copy_ptr |i64|))
+             (src_char_ptr (llvm:gep |i8| basename_ptr i_copy_val))
+             (src_char (llvm:load src_char_ptr |i8|))
+             (dst_char_ptr (llvm:gep |i8| buf i_copy_val))
+             (i_copy_next (llvm:add i_copy_val (llvm:const-int |i64| 1))))
+        (llvm:store src_char dst_char_ptr)
+        (llvm:store i_copy_next i_copy_ptr)
+        (llvm:br 'copy_loop)))
+    (llvm:label 'null_terminate
+      (let* ((buf (llvm:load buf_ptr |i8*|))
+             (final_len (llvm:load final_len_ptr |i64|))
+             (null_ptr (llvm:gep |i8| buf final_len)))
+        (llvm:store (llvm:const-int |i8| 0) null_ptr)
+        (llvm:ret buf)))
+    (llvm:label 'error
+      (llvm:ret (llvm:const-null |i8*|)))))

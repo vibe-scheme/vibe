@@ -514,20 +514,63 @@ elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
 endif()
 
 # Bootstrap Compiler - Main executable
-# First compile main.ll to bitcode, then link all modules and compile to native
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/main.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/main.ll
-    COMMENT "Assembling compiler main bitcode (temp)"
-)
-
-add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-    COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-    DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-    COMMENT "Linking compiler main with types"
-)
+if(USE_VIBE_FILES)
+    # KERNEL/SELF_HOST mode: Compile main.vibe + main_no_vibe.ll
+    if(USE_VIBE_KERNEL)
+        set(MAIN_VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
+    else()
+        set(MAIN_VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler)
+    endif()
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
+        COMMAND ${MAIN_VIBE_COMPILER}
+            ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+            -o ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
+        DEPENDS ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+        COMMENT "Compiling main.vibe to IR text"
+    )
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
+            -o ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
+        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
+        COMMENT "Converting main IR text to bitcode using llvm-as"
+    )
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/main_no_vibe.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/main_no_vibe.ll
+        COMMENT "Assembling main_no_vibe bitcode (temp)"
+    )
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+        COMMAND ${LLVM_LINK}
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
+            -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+        DEPENDS
+            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_no_vibe_temp.bc
+            ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
+        COMMENT "Linking compiler main with types and main.vibe"
+    )
+    add_custom_target(bootstrap_main_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc)
+else()
+    # BOOTSTRAP mode: Use main.ll only (unchanged)
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
+        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/main.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
+        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/main.ll
+        COMMENT "Assembling compiler main bitcode (temp)"
+    )
+    add_custom_command(
+        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+        COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
+        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
+        COMMENT "Linking compiler main with types"
+    )
+endif()
 
 if(USE_VIBE_FILES)
     # KERNEL mode: Build vibe_kernel
@@ -575,7 +618,7 @@ if(USE_VIBE_FILES)
     if(ZSTD_LIBRARY)
         target_link_libraries(vibe_kernel ${ZSTD_LIBRARY})
     endif()
-    add_dependencies(vibe_kernel bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_ffi bootstrap_codegen)
+    add_dependencies(vibe_kernel bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_ffi bootstrap_codegen bootstrap_main_vibe_temp)
 else()
     # BOOTSTRAP mode: Build bootstrap_compiler
     add_custom_command(

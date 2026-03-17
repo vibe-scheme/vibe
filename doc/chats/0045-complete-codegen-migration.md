@@ -1,7 +1,7 @@
 # Chat 0045: Complete Codegen Migration - Remove codegen_no_vibe.ll
 
 **Date**: 2026-03-17
-**Model**: Claude Opus 4.6
+**Model**: Claude Opus 4.6 (Claude Code)
 
 ## Overview
 
