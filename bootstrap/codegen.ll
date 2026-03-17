@@ -3618,8 +3618,29 @@ check_context:
     
     ; Check for null context
     %context_null = icmp eq %LLVMContextRef %context, null
-    br i1 %context_null, label %error, label %check_void
-    
+    br i1 %context_null, label %error, label %check_pointer_suffix
+
+check_pointer_suffix:
+    ; General pointer type handling: if type ends with '*', strip it,
+    ; recursively resolve the base type, and wrap in pointer type.
+    ; This handles i8*, i8**, i32*, %ASTNode*, etc. uniformly.
+    %last_idx = sub i64 %type_len, 1
+    %last_ptr = getelementptr i8, i8* %type_str, i64 %last_idx
+    %last_ch = load i8, i8* %last_ptr
+    %is_ptr_suffix = icmp eq i8 %last_ch, 42  ; '*' = 42
+    br i1 %is_ptr_suffix, label %resolve_pointer_base, label %check_void
+
+resolve_pointer_base:
+    ; Strip trailing '*' and recursively resolve
+    %base_len = sub i64 %type_len, 1
+    %base_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %base_len)
+    %base_null = icmp eq %LLVMTypeRef %base_type, null
+    br i1 %base_null, label %error, label %wrap_pointer
+
+wrap_pointer:
+    %ptr_type = call %LLVMTypeRef @llvm_get_pointer_type(%LLVMTypeRef %base_type, i32 0)
+    ret %LLVMTypeRef %ptr_type
+
 check_named_type:
     ; Check if type is a named type (fallback after all built-in types checked)
     ; Note: Parser already stripped % prefix, lexer already stripped bars
@@ -5436,7 +5457,7 @@ extract_type_string:
     %type_str = load i8*, i8** %type_val_ptr
     %type_len_ptr = getelementptr %ASTNode, %ASTNode* %type_node, i32 0, i32 3
     %type_len = load i64, i64* %type_len_ptr
-    
+
     ; Resolve type string to LLVMTypeRef
     %gep_type = call %LLVMTypeRef @codegen_resolve_type_string(%CodeGen* %cg, i8* %type_str, i64 %type_len)
     %gep_type_null = icmp eq %LLVMTypeRef %gep_type, null
@@ -7784,11 +7805,16 @@ count_inc:
     br label %count_iter
     
 eval_loop:
-    ; Evaluate each element
+    ; Evaluate each element, capping at max_count
     %count_final = load i32, i32* %count
     %count_ge_max = icmp uge i32 %count_final, %max_count
-    br i1 %count_ge_max, label %return_count, label %eval_elements
-    
+    br i1 %count_ge_max, label %cap_count, label %eval_elements
+
+cap_count:
+    ; Cap the count at max_count to prevent buffer overflow
+    store i32 %max_count, i32* %count
+    br label %eval_elements
+
 eval_elements:
     %i = alloca i32
     store i32 0, i32* %i
