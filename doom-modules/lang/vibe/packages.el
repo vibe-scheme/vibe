@@ -1,12 +1,12 @@
-;;; lang/vibe/packages.el --- No external packages  -*- lexical-binding: t; -*-
+;;; lang/vibe/packages.el --- Vibe language support  -*- lexical-binding: t; -*-
 
-;; This module uses local files from the Vibe repo only.
-;; No MELPA or other package dependencies.
+;; Packages are pulled from the public Vibe repo on GitHub.
+;; No symlinks or local paths required.
 
 (package! vibe-mode
-  :recipe (:local-repo "/Users/jballanc/Source/vibe/emacs/"))
+  :recipe (:host github :repo "vibe-scheme/vibe" :files ("emacs/vibe-mode.el")))
 
 (package! vibe-ts
-  :recipe (:local-repo "/Users/jballanc/Source/vibe/emacs/"))
+  :recipe (:host github :repo "vibe-scheme/vibe" :files ("emacs/vibe-ts.el")))
 
 ;;; packages.el ends here

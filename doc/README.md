@@ -7,12 +7,20 @@ This directory contains all documentation for the Vibe language project.
 ### `design/`
 
 Formal design documents and architectural plans:
-- `bootstrap-plan.md` - Implementation plan for the bootstrap compiler
+- `vision.md` — Mission, goals, architecture, downstream possibilities
+- `macro-system.md` — Macro implementation roadmap and strategy
+- `primitive-forms.md` — Primitive vs derived form analysis
+- `r7rs-compliance.md` — R7RS Small compliance tracker
+- `cross-compilation-plan.md` — Plan for multi-architecture support
+- `bootstrap-plan.md` — Historical bootstrap compiler plan (retired)
 
 ### `chats/`
 
-Recorded development conversations, numbered sequentially:
-- `0001-initial-setup.md` - Initial bootstrap compiler setup conversation
+Recorded development conversations, numbered sequentially (e.g., `0050-macro-expander-foundation.md`).
+
+### `pages/`
+
+GitHub Pages site (`index.html`) — public-facing project introduction, status, and links.
 
 ### `examples/`
 
