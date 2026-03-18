@@ -4,51 +4,43 @@
 
 This document provides guidance for AI agents contributing to the Vibe language project. Vibe is a R7RS Small Scheme derivative that compiles to LLVM bitcode, with a focus on self-hosting and extensibility.
 
+**Vibe is fully self-hosted.** The compiler (`vibe_kernel`) compiles itself from `.vibe` source files. The original bootstrap compiler (written in LLVM IR) has been retired and is available only in git history for reference.
+
 ## Vibe Coding Strategy and Philosophy
 
 ### Core Principles
 
-1. **Self-Hosting**: The goal is to write Vibe in Vibe itself. The bootstrap compiler is written in LLVM IR, but the eventual goal is to have the entire compiler written in Vibe.
+1. **Self-Hosting**: Vibe is written in Vibe. The compiler compiles itself from `.vibe` source files in the `kernel/` directory. A seed binary (from a GitHub release) is used only for initial bootstrapping on a clean checkout.
 
 2. **Human-Language Descriptions**: All functions should be documented with clear, human-language descriptions explaining what they do and why. This is part of Vibe's philosophy of making code readable and understandable.
 
-3. **Minimal Bootstrap**: The bootstrap compiler should be minimal - only what's absolutely necessary to bootstrap the language. Once we can write Vibe in Vibe, we can expand functionality.
+3. **`define-bitcode` Primitive**: This is the central primitive that enables the Vibe kernel to be written in Vibe itself. It allows binding LLVM modules to names, enabling core language features (like `lambda`) to be implemented in Vibe.
 
-4. **`define-bitcode` Primitive**: This is the central primitive that enables the Vibe kernel to be written in Vibe itself. It allows binding LLVM modules to names, enabling core language features (like `lambda`) to be implemented in Vibe.
+4. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. Prioritize correctness and proper architecture over maintaining broken behavior.
 
-5. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. For example, if the lexer isn't recognizing numbers correctly, fix the lexer rather than adding fallback logic in the codegen. We don't need to worry about backwards compatibility until we actually have something working - prioritize correctness and proper architecture over maintaining broken behavior.
-
-6. **Parser/Codegen Separation**: The parser phase should handle all syntax normalization (e.g., stripping vertical bars `|` from symbols like `|%Foo|` → `%Foo`), while the codegen phase should only handle semantic resolution (e.g., mapping type names to LLVM types). Syntax variations like `|i8*|` vs `i8*` should be normalized by the parser before reaching codegen. This separation simplifies both layers and makes the codebase more maintainable.
+5. **Parser/Codegen Separation**: The parser phase should handle all syntax normalization (e.g., stripping vertical bars `|` from symbols like `|%Foo|` → `%Foo`), while the codegen phase should only handle semantic resolution (e.g., mapping type names to LLVM types). This separation simplifies both layers and makes the codebase more maintainable.
 
 ### Code Style
 
 - **Naming Conventions**: Use `snake_case` for LLVM functions and variables
 - **Documentation**: Every function should have a comment explaining its purpose
 - **Error Handling**: Handle errors gracefully with informative error messages
-- **Modularity**: Keep components separate and well-defined (lexer, parser, runtime, etc.)
-- **Parentheses**: Take care to keep parentheses balanced in Vibe source (`.vibe` files). Unclosed `)` causes infinite parse loops; extra `)` can trigger spurious main generation. The compiler now reports "unexpected end of file (unclosed parentheses)" or "unexpected ) (too many closing parens)" when it detects imbalance.
+- **Modularity**: Keep components separate and well-defined (lexer, parser, codegen, etc.)
+- **Parentheses**: Take care to keep parentheses balanced in Vibe source (`.vibe` files). Unclosed `)` causes infinite parse loops; extra `)` can trigger spurious main generation. The compiler reports "unexpected end of file (unclosed parentheses)" or "unexpected ) (too many closing parens)" when it detects imbalance.
 
 ## Directory Structure
 
 ```
 vibe/
-├── bootstrap/          # Bootstrap compiler (pure LLVM IR, .ll files)
-│   ├── types.ll       # Shared type definitions
-│   ├── lexer.ll       # Lexer implementation
-│   ├── parser.ll      # Parser implementation
-│   ├── ffi.ll         # FFI and LLVM C API wrappers
-│   ├── codegen.ll     # Code generator (full, used in BOOTSTRAP mode)
-│   ├── dsl.ll         # LLVM C API wrappers (bootstrap version)
-│   └── main.ll        # Compiler driver (BOOTSTRAP mode only)
-├── kernel/            # Kernel compiler (Vibe source, .vibe files)
-│   ├── lexer.vibe     # Lexer in Vibe DSL
-│   ├── parser.vibe    # Parser in Vibe DSL
-│   ├── ffi.vibe       # FFI dynamic library functions in Vibe DSL
-│   ├── dsl.vibe       # LLVM C API wrappers in Vibe DSL
+├── kernel/            # Compiler source (Vibe, .vibe files)
+│   ├── lexer.vibe     # Lexer
+│   ├── parser.vibe    # Parser
+│   ├── ffi.vibe       # FFI dynamic library functions
+│   ├── dsl.vibe       # LLVM C API wrappers
 │   ├── main.vibe      # Compiler driver (main + helpers)
-│   └── codegen.vibe   # Codegen utilities
-├── src/               # Future self-hosted Vibe code
-├── doc/               # Documentation repository
+│   └── codegen.vibe   # Code generator
+├── src/               # Future standard library code
+├── doc/               # Documentation
 │   ├── design/        # Design documents and formal plans
 │   ├── chats/         # Recorded development conversations
 │   └── examples/      # Example programs and tutorials
@@ -58,70 +50,39 @@ vibe/
 
 ## Build System Overview
 
-**IMPORTANT**: When modifying bootstrap compiler code (`.ll` files in `bootstrap/`), always rebuild before testing:
-- Run `./build.sh bootstrap` to rebuild the bootstrap compiler
-- Or run `./build.sh` which will automatically rebuild if needed
-- Never test with an outdated binary - LLVM IR changes require recompilation
-- **After upgrading LLVM**: Run `./build.sh clean` first so CMake reconfigures and finds the new LLVM paths
+The Vibe compiler is self-hosted: `vibe_kernel` compiles `.vibe` source files to produce a new `vibe_kernel`.
 
-The Vibe project uses a three-phase build system that enables gradual migration from pure LLVM IR to self-hosted Vibe code:
+### Building
 
-### Build Modes
+```bash
+./build.sh build    # Build the compiler (default)
+./build.sh clean    # Remove build directory
+./build.sh test     # Run tests
+./build.sh install  # Install
+```
 
-1. **BOOTSTRAP** (`./build.sh bootstrap`):
-   - Uses pure `.ll` files (no `.vibe` files)
-   - Produces `bootstrap_compiler` executable
-   - This is the initial bootstrap compiler written entirely in LLVM IR
+On a clean checkout with no existing `vibe_kernel` binary, `build.sh` automatically downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.1-seed) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`.
 
-2. **KERNEL** (`./build.sh build_kernel`):
-   - Uses `.vibe` files from `kernel/` + shared `.ll` files from `bootstrap/`
-   - Compiles `.vibe` files using `bootstrap_compiler`
-   - Produces `vibe_kernel` executable
-   - Represents the transition phase where some code is migrated to Vibe
+**After upgrading LLVM**: Run `./build.sh clean` first so CMake reconfigures and finds the new LLVM paths.
 
-3. **SELF_HOST** (`./build.sh build`):
-   - Uses `.vibe` files from `kernel/` + shared `.ll` files from `bootstrap/`
-   - Compiles `.vibe` files using `vibe_kernel` itself
-   - Produces `vibe_kernel` executable (self-compiled)
-   - This is the self-hosting phase where Vibe compiles itself
+### Build Pipeline
 
-### File Type Relationships
+1. `vibe_kernel` compiles each `.vibe` file in `kernel/` to LLVM bitcode (`.bc`)
+2. `llvm-link` links all bitcode modules together
+3. `llc` compiles the linked bitcode to a native object file
+4. The system linker produces the `vibe_kernel` executable, linked against LLVM C API libraries
 
-- **`.ll` files** (in `bootstrap/`): Pure LLVM IR implementations. In BOOTSTRAP mode, all `.ll` files are used. In KERNEL/SELF_HOST modes, `main.ll` is used for BOOTSTRAP only; `main.vibe` provides the compiler driver (main + helpers). Codegen uses `codegen.vibe` only (codegen_no_vibe.ll was removed in chat 0045).
-- **`.vibe` files** (in `kernel/`): Vibe source code that gets compiled to LLVM bitcode by the bootstrap compiler (KERNEL mode) or the kernel compiler itself (SELF_HOST mode). These replace their `.ll` counterparts for modules that have been migrated.
+### Seed Binary
 
-### Bootstrap/Kernel Sync Strategy
+The seed compiler is hosted as a GitHub release asset at `v0.0.1-seed`. It was produced through the original bootstrap chain (LLVM IR → bootstrap compiler → kernel compiler → self-hosted compiler) and verified to compile all kernel modules correctly. The original LLVM IR bootstrap source remains in git history for emergency re-bootstrapping.
 
-When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same module, they must be kept in behavioral sync. This section documents the strategy for maintaining this sync.
+### Vibe DSL Conventions
 
-**Current migration status:**
-- `bootstrap/lexer.ll` / `kernel/lexer.vibe` -- fully migrated, both complete
-- `bootstrap/parser.ll` / `kernel/parser.vibe` -- fully migrated, both complete
-- `bootstrap/ffi.ll` / `kernel/ffi.vibe` + `kernel/dsl.vibe` -- fully migrated, both complete
-- `bootstrap/codegen.ll` / `kernel/codegen.vibe` -- fully migrated (codegen_no_vibe.ll removed in chat 0045)
-- `bootstrap/main.ll` -- unchanged, used by BOOTSTRAP mode only
-- `kernel/main.vibe` -- fully migrated (main + all helpers)
-- `bootstrap/types.ll` -- shared by all modes (type definitions only)
-
-**Sync rules:**
-1. The `.vibe` file is the **canonical source** for function behavior in the kernel
-2. The `.ll` file must **match functionally** but may include additional debug logging
-3. **Bug fixes** must be applied to both `.ll` and `.vibe` versions of the same function
-4. **New functions** added to `.vibe` must have equivalents in the `.ll` file (and vice versa)
-5. When modifying `codegen.ll` (shared), changes automatically apply to all build modes
-6. **Debug logging divergence is acceptable**: bootstrap `.ll` files retain debug logging (printf calls) while kernel `.vibe` files remain silent. This is intentional -- bootstrap logging aids development, while kernel builds are cleaner
-7. **Deferred migrations**: When a bootstrap DSL bug blocks migrating a function to `.vibe`, keep the full `define` in the `.ll` file and add a comment in the `.vibe` file documenting the deferral. Migrate when the DSL bug is fixed.
-
-**Forward declarations required**: Every function called via `(llvm:call ...)` in a `.vibe` file must be visible at the call site. The compiler resolves calls by searching (1) local bindings, (2) the function list, (3) parameters, (4) constants. If a called function is defined in another module (e.g., `dsl.vibe`, `codegen_no_vibe.ll`) or later in the same file, it must be forward-declared with `(llvm:declare-function ...)` at the top of the file. **Calls to undeclared functions silently return null**, causing dependent `let*` bindings to be dropped without any error message. See chat 0039.
+**Forward declarations required**: Every function called via `(llvm:call ...)` in a `.vibe` file must be visible at the call site. The compiler resolves calls by searching (1) local bindings, (2) the function list, (3) parameters, (4) constants. If a called function is defined in another module or later in the same file, it must be forward-declared with `(llvm:declare-function ...)` at the top of the file. **Calls to undeclared functions silently return null**, causing dependent `let*` bindings to be dropped without any error message. See chat 0039.
 
 **Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 
 **Cross-block values**: Use alloca/store/load for values that flow across blocks. Each predecessor stores its value into an alloca; the merge block loads. A future mem2reg optimization pass (via LLVMRunPasses) will promote these to phi nodes. Do not use phi nodes for migration—they require cross-block variable resolution that can be fragile. See Chat 0034 and Chat 0036.
-
-**When to sync:**
-- After fixing a bug in either the `.ll` or `.vibe` version of a function
-- After adding new DSL methods that enable migrating more functions
-- After any behavioral change to a function that exists in both forms
 
 ## Development Chat Documentation
 
@@ -144,7 +105,7 @@ Each chat document should include:
 - Any important notes or considerations
 - Links to related design documents or code
 
-**Note**: Early in development, sessions often involve multiple related fixes and investigations. The chat documentation should reflect the full breadth of work accomplished, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
+**Note**: Sessions often involve multiple related fixes and investigations. The chat documentation should reflect the full breadth of work accomplished, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 
 ### Date Verification for Chat Documents
 
@@ -156,38 +117,13 @@ Each chat document should include:
 3. If updating an existing chat document, verify the date is still correct
 4. When in doubt, check the system date rather than guessing
 
-**Example**:
-```bash
-$ date +"%Y-%m-%d"
-2025-12-28
-```
-
-Then use this exact date in the chat document: `**Date**: 2025-12-28`
-
 ### Chat Immutability and Precedence
 
 **Committed chats are immutable**: Once a chat document is committed, do not modify it. Each chat memorializes a session and its outcome; editing past chats would distort the historical record.
 
-**Contradictory evidence**: When later chats or code contradict an earlier chat, give precedence to the later chat. For example, if chat 0034 recommends alloca for loop state and chat 0036 corrects this to phi nodes, follow chat 0036. Document the correction in the newer chat rather than editing the older one.
+**Contradictory evidence**: When later chats or code contradict an earlier chat, give precedence to the later chat. Document the correction in the newer chat rather than editing the older one.
 
 ## Coding Standards and Practices
-
-### LLVM IR Code
-
-- Use LLVM IR directly (not C/C++) for all bootstrap code
-- Ensure all code compiles to bitcode that can be linked together
-- Use consistent type definitions across modules
-- Document all functions with their purpose and parameters
-
-### Synchronizing Bootstrap and Kernel Files
-
-**IMPORTANT**: When `.ll` files (bootstrap) and `.vibe` files (kernel) coexist for the same module (e.g., `lexer.ll` and `lexer.vibe`, `parser.ll` and `parser.vibe`), you must keep them functionally synchronized. See the "Bootstrap/Kernel Sync Strategy" section under Build System Overview for detailed rules.
-
-- **When to synchronize**: Any time you modify function behavior in a `.ll` file that also exists in the corresponding `.vibe` file (or vice versa)
-- **What to synchronize**: Function logic and semantics. Debug logging differences are acceptable.
-- **Future goal**: Eventually all code will be migrated to `.vibe` files, making the `.ll` versions unnecessary for KERNEL/SELF_HOST builds
-
-**Note on `*_no_vibe.ll` files**: These files existed as a bridge during migration, containing functions not yet migrated to `.vibe`. As of the current codebase, both lexer and parser are fully migrated and have no `*_no_vibe.ll` files. If future modules use this pattern during their migration, the same sync rules apply.
 
 ### Error Handling
 
@@ -206,13 +142,7 @@ Then use this exact date in the chat document: `**Date**: 2025-12-28`
 
 1. **Understand the Architecture**: Read the design documents in `doc/design/` to understand the overall architecture and goals.
 
-2. **Follow the Implementation Order**: The bootstrap compiler should be implemented in phases:
-   - Phase 1: Project Structure
-   - Phase 2: Lexer
-   - Phase 3: Parser
-   - Phase 4: Runtime Foundation (including `define-bitcode`)
-   - Phase 5: FFI System
-   - Phase 6: Compiler Driver
+2. **Build and Test**: Run `./build.sh build` to build from source. The seed compiler is downloaded automatically on first build.
 
 3. **Document Your Work**: 
    - Add comments to code explaining functionality
@@ -224,16 +154,14 @@ Then use this exact date in the chat document: `**Date**: 2025-12-28`
    - Test integration between components
    - Test error conditions
 
-5. **Keep It Minimal**: Remember that the bootstrap compiler should be minimal. Don't add features that aren't necessary for bootstrapping.
-
 ## Documentation Structure
 
 ### Design Documents (`doc/design/`)
 
 Formal plans and architectural decisions. Examples:
-- `bootstrap-plan.md` - Plan for bootstrap compiler
-- `runtime-design.md` - Runtime system design
-- `ffi-design.md` - FFI system design
+- `bootstrap-plan.md` - Historical bootstrap compiler plan
+- `cross-compilation-plan.md` - Plan for cross-compilation support
+- `ffi-llvm-integration.md` - FFI system design
 
 ### Chat Documentation (`doc/chats/`)
 
@@ -250,49 +178,28 @@ Example programs and tutorials demonstrating Vibe features.
 
 ### LLVM Version Requirements
 
-- **LLVM 21** is required (specifically version 21.x)
-- The bootstrap compiler uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) during build time
-- The bootstrap compiler links against LLVM libraries via FFI for bitcode generation
-- FFI is used to call LLVM C API functions for generating bitcode programmatically
+- **LLVM 21+** is required
+- The build uses LLVM tools (`llvm-as`, `llvm-link`, `llc`) during build time
+- The compiler links against LLVM C API libraries for bitcode generation
 - Verify installation with: `llvm-as --version`, `llvm-link --version`, `llc --version`
 
-### Target Triple Restriction
+### Target Architecture
 
-**IMPORTANT**: All LLVM IR files currently hardcode the target triple to the build system's architecture. This means:
-
-- The bootstrap compiler will only work on the same architecture/OS it was built on
-- Cross-compilation is not currently supported (this is a future goal)
-- Developers should be aware that target triples in `.ll` files match their development machine
+The compiler currently hardcodes the target triple `arm64-apple-darwin` in `kernel/codegen.vibe`. See `doc/design/cross-compilation-plan.md` for the plan to support runtime target detection and cross-compilation.
 
 **Current Configuration**:
 - **Apple Silicon (arm64)**: `arm64-apple-darwin` with data layout `"e-m:o-i64:64-i128:128-n32:64-S128"`
-- **Intel macOS (x86_64)**: The codebase currently targets arm64. For x86_64 macOS, update target triples to `x86_64-apple-macosx10.15.0` with appropriate data layout.
-
-When adding new `.ll` files, use the same target triple as existing files. The target triple can be found at the top of any `.ll` file:
-```
-target triple = "arm64-apple-darwin"
-target datalayout = "e-m:o-i64:64-i128:128-n32:64-S128"
-```
-
-For Linux builds, update the target triple to match your distribution (e.g., `x86_64-unknown-linux-gnu` or `aarch64-unknown-linux-gnu` for ARM64 Linux).
 
 ### Build System Notes
 
 - The CMake build system finds LLVM tools and LLVM libraries for linking
-- The bootstrap compiler executable links against LLVM C API libraries (Core, IR, Support, Target, etc.)
-- FFI enables calling LLVM C API functions at runtime
-- FFI requires dynamic library loading (dlopen/dlsym) - libdl on Linux, built-in on macOS
-- LLVM libraries are loaded via FFI at runtime for bitcode generation
-- Architecture-specific LLVM components are automatically linked based on the target triple (AArch64 for arm64, X86 for x86_64)
+- The compiler executable links against LLVM C API libraries (Core, BitWriter, Support, Target, MC, Linker)
+- FFI enables calling platform functions at runtime (dlopen/dlsym)
+- Architecture-specific LLVM components are automatically linked based on the detected target triple (AArch64 for arm64, X86 for x86_64)
 
 ### Platform-Aware Target Initialization
 
-The `llvm_initialize_native_target()` function in `bootstrap/ffi.ll` (and `kernel/dsl.vibe`) automatically detects the target architecture at runtime and initializes the appropriate LLVM target components:
-
-- **ARM64/AArch64**: Initializes AArch64 target components (`LLVMInitializeAArch64TargetInfo`, etc.)
-- **X86_64**: Initializes X86 target components (`LLVMInitializeX86TargetInfo`, etc.)
-
-The function uses `LLVMGetDefaultTargetTriple()` to detect the architecture and calls the appropriate initialization functions. This allows the same code to work on both arm64 and x86_64 platforms without requiring separate code paths.
+The `llvm_initialize_native_target()` function in `kernel/dsl.vibe` detects the target architecture at runtime and initializes the appropriate LLVM target components. Currently only AArch64 is supported; see `doc/design/cross-compilation-plan.md` for X86 support plans.
 
 ## Key Concepts
 
@@ -306,78 +213,53 @@ These are the core primitives that enable self-hosting. They allow binding LLVM 
   ...)
 ```
 
-This primitive is implemented in the bootstrap runtime and is essential for implementing the Vibe kernel in Vibe.
-
 ### FFI System
 
-The FFI (Foreign Function Interface) system allows Vibe to call functions from dynamic libraries. This is necessary for:
-- System calls
-- Calling C libraries
-- Platform-specific functionality
-- **LLVM C API integration** - calling LLVM functions for bitcode generation
-
-The FFI system is implemented in `bootstrap/ffi.ll` (and `kernel/ffi.vibe` + `kernel/dsl.vibe`) and provides:
-- Library loading (`ffi_load_library`) - Load LLVM libraries dynamically
-- Symbol resolution (`ffi_get_symbol`) - Get LLVM C API function pointers
-- Function calling (`ffi_call`) - Call foreign functions including LLVM C API
-- Type mapping (`ffi_define_type`) - Map Vibe types to C/LLVM types
+The FFI (Foreign Function Interface) system allows Vibe to call functions from dynamic libraries. The FFI system is implemented in `kernel/ffi.vibe` and `kernel/dsl.vibe` and provides:
+- Library loading (`ffi_load_library`) via dlopen
+- Symbol resolution (`ffi_get_symbol`) via dlsym
 - LLVM-specific wrappers for creating contexts, modules, functions, etc.
 
-### LLVM Integration via FFI
+### LLVM Integration
 
-The bootstrap compiler uses FFI to call LLVM C API functions for bitcode generation. This approach:
-
-- **Keeps bootstrap pure LLVM IR**: No C++ dependency, maintains pure LLVM IR bootstrap
-- **Enables runtime flexibility**: Can load different LLVM versions at runtime
-- **Provides platform abstraction**: FFI handles platform differences (macOS/Linux/Windows)
-- **Future-proof**: Aligns with 2nd generation bootstrap goals where bootstrap .ll files will be converted to `define-bitcode-*` methods
-- **Direct bitcode generation**: Can generate bitcode directly via LLVM API instead of text IR strings
-
-The LLVM C API integration via FFI allows:
+The compiler uses LLVM C API functions (statically linked) for bitcode generation:
 - Creating LLVM contexts and modules programmatically
 - Generating functions, types, and constants via API calls
-- Writing bitcode files directly without text IR intermediate format
-- Better error handling and validation through LLVM's API
+- Writing bitcode files directly
+- Error handling and validation through LLVM's API
 
 ### Future: `define-bitcode-ffi-function`
 
-When we begin rewriting `.ll` files in `.vibe`, we should implement `define-bitcode-ffi-function` to:
+A planned primitive to declare external C functions from Vibe code:
 
-1. **Declare external C functions from Vibe code**:
-   ```scheme
-   (define-bitcode-ffi-function printf
-     (return-type |i32|)
-     (params (|i8*| format) ...)
-     (linkage external)
-     (vararg #t))
-   ```
+```scheme
+(define-bitcode-ffi-function printf
+  (return-type |i32|)
+  (params (|i8*| format) ...)
+  (linkage external)
+  (vararg #t))
+```
 
-2. **Replace hardcoded declarations**: Move `printf` and other C library function declarations from hardcoded `codegen_init()` calls to Vibe code, making the compiler more flexible and extensible.
-
-3. **Support user-defined FFI**: Allow users to declare their own external functions for calling C libraries, enabling better integration with system libraries.
-
-4. **Pattern for FFI usage**: This will establish the pattern for declaring and using FFI functions from Vibe code, which is essential for the self-hosting goals.
-
-**Current status**: External function declarations (like `printf`) are hardcoded in `codegen_init()`. The infrastructure for FFI exists, but `define-bitcode-ffi-function` is not yet implemented. This will be implemented as part of the 2nd generation bootstrap when rewriting `.ll` files in `.vibe`.
+This will replace hardcoded external function declarations in `codegen_init()` and allow user-defined FFI declarations.
 
 ### Future: Remove Implicit Main Insertion
 
-The bootstrap compiler currently has `codegen_main` inject a `main` function when a module has top-level executable expressions (forms that fall through to `exprs_list`). This should be removed in favor of explicit `main` definition: require exactly one compilation unit to define `main` when building an executable. Revisit this after self-hosting is complete.
+The compiler currently has `codegen_main` inject a `main` function when a module has top-level executable expressions. This should be removed in favor of explicit `main` definition.
 
-## Next Steps After Bootstrap
+## Next Steps
 
-Once the bootstrap compiler is complete:
-1. Write the core Vibe kernel in Vibe itself (using `define-bitcode`)
-2. Convert bootstrap .ll files to `define-bitcode-*` methods (2nd gen bootstrap)
+Now that Vibe is self-hosted, priorities are:
+1. Cross-compilation support (see `doc/design/cross-compilation-plan.md`)
+2. Implement `define-bitcode-ffi-function` for user-defined FFI
 3. Implement the macro system
-4. Begin self-hosting the compiler
-5. The 2nd gen bootstrap will use FFI for LLVM C API calls instead of text IR generation
+4. Expand the standard library
+5. Optimize code generation
 
 ## Questions or Issues
 
 If you encounter issues or have questions:
 1. Check existing documentation in `doc/design/` and `doc/chats/`
-2. Review the implementation plan in `doc/design/bootstrap-plan.md`
+2. Review the design documents for architectural context
 3. Document any new insights or decisions in the appropriate chat document
 
 ## End-of-Session Practices
@@ -402,8 +284,6 @@ Create a new chat document in `doc/chats/` following the naming convention:
   - Files modified (with specific changes)
   - Related documentation references
 
-**Important**: Early in development, sessions often involve multiple fixes, cleanups, and investigations. The chat document should reflect the full breadth of work, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
-
 ### 2. Generate Git Commit Message
 
 Create a commit message following best practices:
@@ -411,25 +291,6 @@ Create a commit message following best practices:
 - **Blank line**: Separate summary from body
 - **Body**: Detailed explanation of changes, why they were made, and any important notes
 - **Format**: Use present tense, imperative mood (e.g., "Fix string constant generation" not "Fixed string constant generation")
-
-Example:
-```
-Fix string constant generation in function calls
-
-String constants were being generated inline within function call
-arguments, causing invalid LLVM IR syntax. Implemented two-phase
-constant generation: collect all string constants at module level
-before generating functions, then generate only references in function
-calls.
-
-- Add codegen_collect_string_constants to traverse AST and generate
-  constants at module level
-- Fix getelementptr syntax to include result type and parentheses
-- Update codegen_append_call_args to use constant references only
-
-Fixes compilation errors when string literals are used as function
-arguments.
-```
 
 ### 3. Update AGENTS.md (if needed)
 

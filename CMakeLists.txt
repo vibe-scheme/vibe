@@ -2,19 +2,16 @@ cmake_minimum_required(VERSION 3.20)
 project(Vibe LANGUAGES C CXX)
 
 # Find LLVM package (version 21)
-# Note: We require LLVM 21. The bootstrap compiler uses LLVM tools (llvm-as, llvm-link, llc)
-# during build time and links against LLVM C API libraries via FFI for bitcode generation.
+# The Vibe compiler uses LLVM tools (llvm-as, llvm-link, llc) during build time
+# and links against LLVM C API libraries for bitcode generation.
 
 # Try to find LLVM 21 in common locations first
-# Homebrew on macOS typically installs to /usr/local/opt/llvm or /opt/homebrew/opt/llvm
 if(APPLE)
-    # Check for Homebrew LLVM installations
     if(EXISTS "/opt/homebrew/opt/llvm/lib/cmake/llvm")
         set(LLVM_DIR "/opt/homebrew/opt/llvm/lib/cmake/llvm")
     elseif(EXISTS "/usr/local/opt/llvm/lib/cmake/llvm")
         set(LLVM_DIR "/usr/local/opt/llvm/lib/cmake/llvm")
     elseif(EXISTS "/usr/local/Cellar/llvm")
-        # Find the latest LLVM 21.x in Cellar
         file(GLOB LLVM_CELLAR_VERSIONS "/usr/local/Cellar/llvm/21.*")
         if(LLVM_CELLAR_VERSIONS)
             list(SORT LLVM_CELLAR_VERSIONS)
@@ -25,14 +22,9 @@ if(APPLE)
     endif()
 endif()
 
-# Find LLVM - we need version 21.x
-# Note: CMake's version checking can be finicky with LLVM, so we find it first
-# then verify the version manually
 if(LLVM_DIR)
-    # LLVM_DIR was set above, use it
     find_package(LLVM REQUIRED CONFIG)
 else()
-    # Let CMake find it, but don't enforce version (we'll check manually)
     find_package(LLVM REQUIRED CONFIG)
 endif()
 
@@ -50,9 +42,7 @@ else()
 endif()
 
 # Set up LLVM toolchain
-# LLVM_TOOLS_BINARY_DIR is set by find_package(LLVM)
 if(NOT LLVM_TOOLS_BINARY_DIR)
-    # Fallback: try to find llvm tools in common locations
     find_program(LLVM_AS NAMES llvm-as PATHS
         ${LLVM_TOOLS_BINARY_DIR}
         /usr/local/opt/llvm/bin
@@ -67,8 +57,6 @@ message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
 message(STATUS "LLVM tools directory: ${LLVM_TOOLS_BINARY_DIR}")
 
-# Verify required LLVM tools are available
-# Search in LLVM_TOOLS_BINARY_DIR first to avoid finding old versions in PATH
 find_program(LLVM_AS NAMES llvm-as PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
 find_program(LLVM_LINK NAMES llvm-link PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
 find_program(LLC NAMES llc PATHS ${LLVM_TOOLS_BINARY_DIR} NO_DEFAULT_PATH REQUIRED)
@@ -86,400 +74,150 @@ if(ZSTD_LIBRARY)
     message(STATUS "Found zstd: ${ZSTD_LIBRARY}")
 endif()
 
-# Note: The bootstrap compiler executable does not link against LLVM libraries.
-# It only uses LLVM tools to process bitcode files. The executable itself
-# is compiled from LLVM IR to native code and only needs standard C libraries.
-
 # Set output directories
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 
-# Detect target architecture from LLVM IR files
-# Check the first .ll file to determine target triple
-file(READ "${CMAKE_SOURCE_DIR}/bootstrap/types.ll" TYPES_LL_CONTENT)
-string(REGEX MATCH "target triple = \"([^\"]+)\"" _ "${TYPES_LL_CONTENT}")
-if(CMAKE_MATCH_1)
-    set(LLVM_TARGET_TRIPLE "${CMAKE_MATCH_1}")
-    message(STATUS "Detected target triple from LLVM IR: ${LLVM_TARGET_TRIPLE}")
-else()
-    # Fallback: detect from system
-    if(APPLE)
-        execute_process(
-            COMMAND sysctl -n machdep.cpu.brand_string
-            OUTPUT_VARIABLE CPU_BRAND
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        if(CPU_BRAND MATCHES "Apple")
-            set(LLVM_TARGET_TRIPLE "arm64-apple-darwin")
-        else()
-            set(LLVM_TARGET_TRIPLE "x86_64-apple-macosx10.15.0")
-        endif()
+# Detect target architecture from the system
+if(APPLE)
+    execute_process(
+        COMMAND sysctl -n machdep.cpu.brand_string
+        OUTPUT_VARIABLE CPU_BRAND
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(CPU_BRAND MATCHES "Apple")
+        set(LLVM_TARGET_TRIPLE "arm64-apple-darwin")
     else()
-        set(LLVM_TARGET_TRIPLE "${CMAKE_SYSTEM_PROCESSOR}-unknown-linux-gnu")
+        set(LLVM_TARGET_TRIPLE "x86_64-apple-macosx10.15.0")
     endif()
-    message(STATUS "Using detected target triple: ${LLVM_TARGET_TRIPLE}")
-endif()
-
-# Build mode: BOOTSTRAP (uses .ll files), KERNEL (uses .vibe + _no_vibe.ll files, compiled with bootstrap_compiler),
-# or SELF_HOST (uses .vibe + _no_vibe.ll files, compiled with vibe_kernel)
-if(NOT DEFINED BUILD_MODE)
-    set(BUILD_MODE "BOOTSTRAP" CACHE STRING "Build mode: BOOTSTRAP, KERNEL, or SELF_HOST")
-endif()
-
-message(STATUS "Build mode: ${BUILD_MODE}")
-
-if(BUILD_MODE STREQUAL "BOOTSTRAP")
-    set(USE_VIBE_FILES OFF)
-    set(USE_VIBE_KERNEL OFF)
-elseif(BUILD_MODE STREQUAL "KERNEL")
-    set(USE_VIBE_FILES ON)
-    set(USE_VIBE_KERNEL OFF)
-elseif(BUILD_MODE STREQUAL "SELF_HOST")
-    set(USE_VIBE_FILES ON)
-    set(USE_VIBE_KERNEL ON)
 else()
-    message(FATAL_ERROR "Invalid BUILD_MODE: ${BUILD_MODE}. Must be BOOTSTRAP, KERNEL, or SELF_HOST")
+    set(LLVM_TARGET_TRIPLE "${CMAKE_SYSTEM_PROCESSOR}-unknown-linux-gnu")
 endif()
+message(STATUS "Target triple: ${LLVM_TARGET_TRIPLE}")
 
-# Shared Types - LLVM bitcode module (must be built first)
+# The compiler (vibe_kernel) must already exist in build/bin/ before CMake runs.
+# build.sh ensures this by downloading the seed binary if needed.
+set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
+
+# ============================================================================
+# Compile each kernel module from .vibe source to bitcode
+# ============================================================================
+
+# Lexer
 add_custom_command(
-    OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-    COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/types.ll -o ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/types.ll
-    COMMENT "Assembling types bitcode"
+    OUTPUT ${CMAKE_BINARY_DIR}/lexer.bc
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+        -o ${CMAKE_BINARY_DIR}/lexer.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+    COMMENT "Compiling lexer.vibe"
+)
+add_custom_target(compile_lexer DEPENDS ${CMAKE_BINARY_DIR}/lexer.bc)
+
+# Parser
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/parser.bc
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+        -o ${CMAKE_BINARY_DIR}/parser.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+    COMMENT "Compiling parser.vibe"
+)
+add_custom_target(compile_parser DEPENDS ${CMAKE_BINARY_DIR}/parser.bc)
+
+# FFI
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/ffi.bc
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+        -o ${CMAKE_BINARY_DIR}/ffi.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+    COMMENT "Compiling ffi.vibe"
+)
+add_custom_target(compile_ffi DEPENDS ${CMAKE_BINARY_DIR}/ffi.bc)
+
+# DSL
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/dsl.bc
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+        -o ${CMAKE_BINARY_DIR}/dsl.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+    COMMENT "Compiling dsl.vibe"
+)
+add_custom_target(compile_dsl DEPENDS ${CMAKE_BINARY_DIR}/dsl.bc)
+
+# Codegen (outputs .ll text, then assembled to .bc)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/codegen.ll
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+        -o ${CMAKE_BINARY_DIR}/codegen.ll
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+    COMMENT "Compiling codegen.vibe"
+)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/codegen.bc
+    COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/codegen.ll
+        -o ${CMAKE_BINARY_DIR}/codegen.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/codegen.ll
+    COMMENT "Assembling codegen bitcode"
+)
+add_custom_target(compile_codegen DEPENDS ${CMAKE_BINARY_DIR}/codegen.bc)
+
+# Main (outputs .ll text, then assembled to .bc)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/main.ll
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+        -o ${CMAKE_BINARY_DIR}/main.ll
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+    COMMENT "Compiling main.vibe"
+)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/main.bc
+    COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/main.ll
+        -o ${CMAKE_BINARY_DIR}/main.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/main.ll
+    COMMENT "Assembling main bitcode"
+)
+add_custom_target(compile_main DEPENDS ${CMAKE_BINARY_DIR}/main.bc)
+
+# ============================================================================
+# Link all modules and build the vibe_kernel executable
+# ============================================================================
+
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+    COMMAND ${LLVM_LINK}
+        ${CMAKE_BINARY_DIR}/main.bc
+        ${CMAKE_BINARY_DIR}/lexer.bc
+        ${CMAKE_BINARY_DIR}/parser.bc
+        ${CMAKE_BINARY_DIR}/ffi.bc
+        ${CMAKE_BINARY_DIR}/dsl.bc
+        ${CMAKE_BINARY_DIR}/codegen.bc
+        -o ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+    DEPENDS
+        ${CMAKE_BINARY_DIR}/main.bc
+        ${CMAKE_BINARY_DIR}/lexer.bc
+        ${CMAKE_BINARY_DIR}/parser.bc
+        ${CMAKE_BINARY_DIR}/ffi.bc
+        ${CMAKE_BINARY_DIR}/dsl.bc
+        ${CMAKE_BINARY_DIR}/codegen.bc
+    COMMENT "Linking all kernel modules"
 )
 
-add_custom_target(bootstrap_types DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel.o
+    COMMAND ${LLC} -mtriple=${LLVM_TARGET_TRIPLE} -filetype=obj
+        ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+        -o ${CMAKE_BINARY_DIR}/vibe_kernel.o
+    DEPENDS ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
+    COMMENT "Compiling linked bitcode to object file"
+)
 
-# Bootstrap Lexer - LLVM bitcode module
-if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile lexer.vibe (all lexer functions are now in Vibe)
-    # Note: bootstrap_compiler must exist (build.sh checks this)
-    # Step 1: Compile lexer.vibe to bitcode
-    if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
-                ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
-            COMMENT "Compiling lexer.vibe to bitcode using vibe_kernel"
-        )
-    else()
-        # KERNEL mode: Write IR text, then convert with llvm-as
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
-            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-                ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
-            COMMENT "Compiling lexer.vibe to IR text using bootstrap_compiler"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
-                -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.ll
-            COMMENT "Converting lexer IR text to bitcode using llvm-as"
-        )
-    endif()
-    
-    # Step 2: Create final lexer.bc by linking types with compiled Vibe code
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc
-        COMMENT "Linking lexer with types and Vibe code"
-    )
-    
-    add_custom_target(bootstrap_lexer_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer_vibe_temp.bc)
-    add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
-    add_dependencies(bootstrap_lexer bootstrap_lexer_vibe_temp)
-    # Note: In SELF_HOST mode, vibe_kernel must exist before we can compile .vibe files.
-    # This creates a circular dependency that we handle by requiring vibe_kernel to exist
-    # before configuring CMake (build.sh ensures this by running build_kernel first).
-    # We do NOT add a CMake dependency here to avoid the circular dependency.
-else()
-    # BOOTSTRAP mode: Use .ll files only
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/lexer.ll -o ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/lexer.ll
-        COMMENT "Assembling lexer bitcode (temp)"
-    )
-    
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer_temp.bc
-        COMMENT "Linking lexer with types"
-    )
-    
-    add_custom_target(bootstrap_lexer DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc)
-endif()
-
-# Bootstrap Parser - LLVM bitcode module
-if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile parser.vibe (all parser functions are now in Vibe)
-    # Note: bootstrap_compiler must exist (build.sh checks this)
-    # Step 1: Compile parser.vibe to bitcode
-    if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
-                ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
-            COMMENT "Compiling parser.vibe to bitcode using vibe_kernel"
-        )
-    else()
-        # KERNEL mode: Write IR text, then convert with llvm-as
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
-            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-                ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
-            COMMENT "Compiling parser.vibe to IR text using bootstrap_compiler"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
-                -o ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.ll
-            COMMENT "Converting parser IR text to bitcode using llvm-as"
-        )
-    endif()
-
-    # Step 2: Create final parser.bc by linking types with compiled Vibe code
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc
-        COMMENT "Linking parser with types and Vibe code"
-    )
-
-    add_custom_target(bootstrap_parser_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser_vibe_temp.bc)
-    add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
-    add_dependencies(bootstrap_parser bootstrap_parser_vibe_temp)
-else()
-    # BOOTSTRAP mode: Use .ll files only
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/parser.ll -o ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/parser.ll
-        COMMENT "Assembling parser bitcode (temp)"
-    )
-
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser_temp.bc
-        COMMENT "Linking parser with types"
-    )
-
-    add_custom_target(bootstrap_parser DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_parser.bc)
-endif()
-
-# Bootstrap FFI + DSL - LLVM bitcode modules
-if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile ffi.vibe and dsl.vibe
-    if(USE_VIBE_KERNEL)
-        # SELF_HOST mode: Compile directly to bitcode using vibe_kernel
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
-                ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
-            COMMENT "Compiling ffi.vibe to bitcode using vibe_kernel"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-            COMMAND ${CMAKE_BINARY_DIR}/bin/vibe_kernel
-                ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
-            COMMENT "Compiling dsl.vibe to bitcode using vibe_kernel"
-        )
-    else()
-        # KERNEL mode: Write IR text, then convert with llvm-as
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.ll
-            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-                ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.ll
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
-            COMMENT "Compiling ffi.vibe to IR text using bootstrap_compiler"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.ll
-                -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.ll
-            COMMENT "Converting ffi IR text to bitcode using llvm-as"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.ll
-            COMMAND ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler
-                ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
-                -o ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.ll
-            DEPENDS ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
-            COMMENT "Compiling dsl.vibe to IR text using bootstrap_compiler"
-        )
-        add_custom_command(
-            OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-            COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.ll
-                -o ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-            DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.ll
-            COMMENT "Converting dsl IR text to bitcode using llvm-as"
-        )
-    endif()
-
-    # Link ffi and dsl vibe outputs with types into single ffi module
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc
-        COMMENT "Linking FFI and DSL with types and Vibe code"
-    )
-
-    add_custom_target(bootstrap_ffi_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi_vibe_temp.bc)
-    add_custom_target(bootstrap_dsl_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_dsl_vibe_temp.bc)
-    add_custom_target(bootstrap_ffi DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc)
-    add_dependencies(bootstrap_ffi bootstrap_ffi_vibe_temp bootstrap_dsl_vibe_temp)
-else()
-    # BOOTSTRAP mode: Use ffi.ll + dsl.ll
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/ffi.ll -o ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/ffi.ll
-        COMMENT "Assembling FFI bitcode (temp)"
-    )
-
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/dsl.ll -o ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/dsl.ll
-        COMMENT "Assembling DSL bitcode (temp)"
-    )
-
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi_temp.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_dsl_temp.bc
-        COMMENT "Linking FFI and DSL with types"
-    )
-
-    add_custom_target(bootstrap_ffi DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc)
-endif()
-
-# Bootstrap Code Generator - LLVM bitcode module
-if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile codegen.vibe + codegen_no_vibe.ll
-    if(USE_VIBE_KERNEL)
-        set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
-    else()
-        set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler)
-    endif()
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-        COMMAND ${VIBE_COMPILER}
-            ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-        DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
-        COMMENT "Compiling codegen.vibe to IR text"
-    )
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.ll
-        COMMENT "Converting codegen IR text to bitcode using llvm-as"
-    )
-
-    # Link codegen vibe output with types (all codegen functions now in codegen.vibe)
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc
-        COMMENT "Linking codegen with types and Vibe code"
-    )
-
-    add_custom_target(bootstrap_codegen_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen_vibe_temp.bc)
-    add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
-    add_dependencies(bootstrap_codegen bootstrap_codegen_vibe_temp)
-else()
-    # BOOTSTRAP mode: Use codegen.ll only
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll -o ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/codegen.ll
-        COMMENT "Assembling codegen bitcode (temp)"
-    )
-
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_codegen_temp.bc
-        COMMENT "Linking codegen with types"
-    )
-
-    add_custom_target(bootstrap_codegen DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc)
-endif()
-
-# Link against LLVM C API libraries
-# Map LLVM components to library names
-# Note: We use LLVM's component mapping, but may need to adjust component names
-# based on the actual LLVM installation. Common components:
-# - Core: Core LLVM functionality
-# - BitWriter: For writing bitcode files
-# - IR: IR functionality (may be part of Core in some builds)
-# Base components (architecture-independent)
-# Note: native and nativecodegen are removed as they may cause duplicate library issues
-# Architecture-specific components are added explicitly below
+# LLVM libraries
 llvm_map_components_to_libnames(LLVM_LIBS
     Core
     BitWriter
@@ -489,9 +227,7 @@ llvm_map_components_to_libnames(LLVM_LIBS
     Linker
 )
 
-# Add architecture-specific components based on target triple
 if(LLVM_TARGET_TRIPLE MATCHES "arm64|aarch64")
-    # ARM64-specific components
     llvm_map_components_to_libnames(LLVM_ARCH_LIBS
         AArch64CodeGen
         AArch64Desc
@@ -502,7 +238,6 @@ if(LLVM_TARGET_TRIPLE MATCHES "arm64|aarch64")
     list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
     message(STATUS "Added ARM64-specific LLVM components")
 elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
-    # X86-specific components (usually included in native/nativecodegen, but explicit is better)
     llvm_map_components_to_libnames(LLVM_ARCH_LIBS
         X86CodeGen
         X86Desc
@@ -513,250 +248,49 @@ elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
     message(STATUS "Added X86-specific LLVM components")
 endif()
 
-# Bootstrap Compiler - Main executable
-if(USE_VIBE_FILES)
-    # KERNEL/SELF_HOST mode: Compile main.vibe (provides main + helpers)
-    if(USE_VIBE_KERNEL)
-        set(MAIN_VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
-    else()
-        set(MAIN_VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/bootstrap_compiler)
-    endif()
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
-        COMMAND ${MAIN_VIBE_COMPILER}
-            ${CMAKE_SOURCE_DIR}/kernel/main.vibe
-            -o ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
-        DEPENDS ${CMAKE_SOURCE_DIR}/kernel/main.vibe
-        COMMENT "Compiling main.vibe to IR text"
-    )
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
-            -o ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.ll
-        COMMENT "Converting main IR text to bitcode using llvm-as"
-    )
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_types.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc
-        COMMENT "Linking compiler main (main.vibe provides main + helpers)"
-    )
-    add_custom_target(bootstrap_main_vibe_temp DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_main_vibe_temp.bc)
-else()
-    # BOOTSTRAP mode: Use main.ll only (unchanged)
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-        COMMAND ${LLVM_AS} ${CMAKE_SOURCE_DIR}/bootstrap/main.ll -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-        DEPENDS ${CMAKE_SOURCE_DIR}/bootstrap/main.ll
-        COMMENT "Assembling compiler main bitcode (temp)"
-    )
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        COMMAND ${LLVM_LINK} ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_types.bc ${CMAKE_BINARY_DIR}/bootstrap_compiler_main_temp.bc
-        COMMENT "Linking compiler main with types"
-    )
+add_executable(vibe_kernel ${CMAKE_BINARY_DIR}/vibe_kernel.o)
+set_target_properties(vibe_kernel PROPERTIES LINKER_LANGUAGE C)
+
+if(LLVM_TARGET_TRIPLE MATCHES "arm64")
+    set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "arm64")
+elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64")
+    set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "x86_64")
 endif()
 
-if(USE_VIBE_FILES)
-    # KERNEL mode: Build vibe_kernel
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-            -o ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        COMMENT "Linking Vibe kernel bitcode modules"
-    )
-    
-    # Compile kernel bitcode to object file
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/vibe_kernel.o
-        COMMAND ${LLC} -mtriple=${LLVM_TARGET_TRIPLE} -filetype=obj ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc -o ${CMAKE_BINARY_DIR}/vibe_kernel.o
-        DEPENDS ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
-        COMMENT "Compiling kernel bitcode to object file"
-    )
-    
-    # Create kernel executable
-    add_executable(vibe_kernel ${CMAKE_BINARY_DIR}/vibe_kernel.o)
-    set_target_properties(vibe_kernel PROPERTIES LINKER_LANGUAGE C)
-    
-    # Set architecture for linking (match the target triple)
-    if(LLVM_TARGET_TRIPLE MATCHES "arm64")
-        set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "arm64")
-    elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64")
-        set_target_properties(vibe_kernel PROPERTIES OSX_ARCHITECTURES "x86_64")
-    endif()
-    
-    target_link_libraries(vibe_kernel ${LLVM_LIBS})
-    if(UNIX AND NOT APPLE)
-        target_link_libraries(vibe_kernel dl)
-    endif()
-    if(ZSTD_LIBRARY)
-        target_link_libraries(vibe_kernel ${ZSTD_LIBRARY})
-    endif()
-    add_dependencies(vibe_kernel bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_ffi bootstrap_codegen bootstrap_main_vibe_temp)
-else()
-    # BOOTSTRAP mode: Build bootstrap_compiler
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-        COMMAND ${LLVM_LINK}
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-            -o ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-        DEPENDS
-            ${CMAKE_BINARY_DIR}/bootstrap_compiler_main.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_ffi.bc
-            ${CMAKE_BINARY_DIR}/bootstrap_codegen.bc
-        COMMENT "Linking bootstrap compiler bitcode modules"
-    )
+target_link_libraries(vibe_kernel ${LLVM_LIBS})
+if(UNIX AND NOT APPLE)
+    target_link_libraries(vibe_kernel dl)
+endif()
+if(ZSTD_LIBRARY)
+    target_link_libraries(vibe_kernel ${ZSTD_LIBRARY})
 endif()
 
-# Link against LLVM C API libraries
-# Map LLVM components to library names
-# Note: We use LLVM's component mapping, but may need to adjust component names
-# based on the actual LLVM installation. Common components:
-# - Core: Core LLVM functionality
-# - BitWriter: For writing bitcode files
-# - IR: IR functionality (may be part of Core in some builds)
-# Base components (architecture-independent)
-# Note: native and nativecodegen are removed as they may cause duplicate library issues
-# Architecture-specific components are added explicitly below
-llvm_map_components_to_libnames(LLVM_LIBS
-    Core
-    BitWriter
-    Support
-    Target
-    MC
-    Linker
-)
+add_dependencies(vibe_kernel compile_lexer compile_parser compile_ffi compile_dsl compile_codegen compile_main)
 
-message(STATUS "LLVM_LIBS after base components: ${LLVM_LIBS}")
-
-# Add architecture-specific components based on target triple
-if(LLVM_TARGET_TRIPLE MATCHES "arm64|aarch64")
-    # ARM64-specific components
-    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
-        AArch64CodeGen
-        AArch64Desc
-        AArch64Info
-        AArch64Utils
-        AArch64AsmParser
-    )
-    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
-    message(STATUS "Added ARM64-specific LLVM components")
-    message(STATUS "LLVM_LIBS after ARM64 components: ${LLVM_LIBS}")
-elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64|i386|i686")
-    # X86-specific components (usually included in native/nativecodegen, but explicit is better)
-    llvm_map_components_to_libnames(LLVM_ARCH_LIBS
-        X86CodeGen
-        X86Desc
-        X86Info
-        X86Utils
-    )
-    list(APPEND LLVM_LIBS ${LLVM_ARCH_LIBS})
-    message(STATUS "Added X86-specific LLVM components")
-    message(STATUS "LLVM_LIBS after X86 components: ${LLVM_LIBS}")
-endif()
-
-if(NOT USE_VIBE_FILES)
-    # BOOTSTRAP mode: Compile bootstrap_compiler
-    add_custom_command(
-        OUTPUT ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
-        COMMAND ${LLC} -mtriple=${LLVM_TARGET_TRIPLE} -filetype=obj ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc -o ${CMAKE_BINARY_DIR}/bootstrap_compiler.o
-        DEPENDS ${CMAKE_BINARY_DIR}/bootstrap_compiler_linked.bc
-        COMMENT "Compiling bitcode to object file"
-    )
-    
-    # Create native executable from object file
-    # Note: The bootstrap compiler links against LLVM C API libraries via FFI.
-    # FFI is used to call LLVM C API functions at runtime for bitcode generation.
-    # The executable needs standard C libraries (libc), dynamic library loading
-    # (libdl on Linux), and LLVM C API libraries.
-    add_executable(bootstrap_compiler ${CMAKE_BINARY_DIR}/bootstrap_compiler.o)
-    set_target_properties(bootstrap_compiler PROPERTIES LINKER_LANGUAGE C)
-    
-    # Set architecture for linking (match the target triple)
-    if(LLVM_TARGET_TRIPLE MATCHES "arm64")
-        set_target_properties(bootstrap_compiler PROPERTIES OSX_ARCHITECTURES "arm64")
-    elseif(LLVM_TARGET_TRIPLE MATCHES "x86_64")
-        set_target_properties(bootstrap_compiler PROPERTIES OSX_ARCHITECTURES "x86_64")
-    endif()
-    
-    # Link LLVM libraries
-    target_link_libraries(bootstrap_compiler ${LLVM_LIBS})
-    
-    # Link dynamic library loading (for FFI)
-    if(UNIX AND NOT APPLE)
-        target_link_libraries(bootstrap_compiler dl)
-    elseif(APPLE)
-        # macOS doesn't need separate dl library (dlopen is in libc)
-        # No additional libraries needed
-    endif()
-    if(ZSTD_LIBRARY)
-        target_link_libraries(bootstrap_compiler ${ZSTD_LIBRARY})
-    endif()
-    
-    # Make bootstrap_compiler depend on all bitcode modules
-    add_dependencies(bootstrap_compiler bootstrap_types bootstrap_lexer bootstrap_parser bootstrap_ffi bootstrap_codegen)
-endif()
-
+# ============================================================================
 # Testing
+# ============================================================================
+
 enable_testing()
 
-if(USE_VIBE_FILES)
-    # KERNEL mode: Use vibe_kernel for tests
-    add_custom_target(run_tests
-        COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
-        DEPENDS vibe_kernel
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running Vibe kernel tests"
-    )
-    add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
-else()
-    # BOOTSTRAP mode: Use bootstrap_compiler for tests
-    add_custom_target(run_tests
-        COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
-        DEPENDS bootstrap_compiler
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running bootstrap compiler tests"
-    )
-    add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
-endif()
+add_custom_target(run_tests
+    COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh
+    DEPENDS vibe_kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running tests"
+)
+add_test(NAME hello_world COMMAND ${CMAKE_SOURCE_DIR}/test/run_test.sh)
 
-# Install targets
-if(USE_VIBE_FILES)
-    install(TARGETS vibe_kernel
-        RUNTIME DESTINATION bin
-    )
-else()
-    install(TARGETS bootstrap_compiler
-        RUNTIME DESTINATION bin
-    )
-endif()
+# ============================================================================
+# Install
+# ============================================================================
+
+install(TARGETS vibe_kernel
+    RUNTIME DESTINATION bin
+)
 
 install(FILES
-    ${CMAKE_BINARY_DIR}/bootstrap_lexer.bc
-    ${CMAKE_BINARY_DIR}/bootstrap_parser.bc
+    ${CMAKE_BINARY_DIR}/lexer.bc
+    ${CMAKE_BINARY_DIR}/parser.bc
     DESTINATION lib/vibe
 )
