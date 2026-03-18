@@ -23,13 +23,11 @@ This document records LLVM instructions that could be exposed as DSL primitives 
 
 ## Implementation Pattern
 
-When adding a deferred method, follow the Batch 1 pattern documented in `doc/chats/0027-codegen-migration-batch-1.md`:
+When adding a deferred method:
 
-1. **bootstrap/dsl.ll**: Add LLVM C API declaration (e.g., `declare %LLVMValueRef @LLVMBuildXor(...)`) and wrapper function (e.g., `llvm_build_xor`)
-2. **kernel/dsl.vibe**: Add `llvm:declare-function` and `llvm:define-function` wrapper
-3. **bootstrap/codegen.ll**: Add string constant for primitive name, dispatch check in `codegen_eval_dsl_expr`, and handler function (e.g., `codegen_dsl_xor`)
+1. **kernel/dsl.vibe**: Add `llvm:declare-function` for the LLVM C API function and an `llvm:define-function` wrapper that exposes it as a DSL primitive
+2. **kernel/codegen.vibe**: Add a string constant for the primitive name, a dispatch check in `codegen_eval_dsl_expr`, and a handler function (e.g., `codegen_dsl_xor`)
 
 ## Related
 
 - `doc/chats/0027-codegen-migration-batch-1.md` — Batch 1 migration, added urem/udiv/ptrtoint
-- `AGENTS.md` — Bootstrap/Kernel sync strategy

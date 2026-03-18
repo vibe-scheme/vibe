@@ -1,0 +1,58 @@
+name: Renumber Chat Document
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  renumber:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Renumber placeholder chat files
+        run: |
+          # Find chat files added in this merge that use the 0000- placeholder prefix
+          placeholder_files=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'doc/chats/0000-*.md')
+
+          if [ -z "$placeholder_files" ]; then
+            echo "No placeholder chat files found, nothing to renumber."
+            exit 0
+          fi
+
+          # Find the highest existing chat number (excluding 0000- placeholders)
+          highest=$(ls doc/chats/ | grep -E '^[0-9]{4}-' | grep -v '^0000-' | sort | tail -1 | grep -oE '^[0-9]{4}')
+
+          if [ -z "$highest" ]; then
+            next_num=1
+          else
+            next_num=$((10#$highest + 1))
+          fi
+
+          for file in $placeholder_files; do
+            basename=$(basename "$file")
+            # Strip the 0000- prefix, keep the rest
+            suffix="${basename#0000-}"
+            new_name=$(printf "%04d-%s" "$next_num" "$suffix")
+            echo "Renumbering: $basename -> $new_name"
+            git mv "$file" "doc/chats/$new_name"
+            next_num=$((next_num + 1))
+          done
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "[bot] Renumber chat document"
+            git push
+          fi

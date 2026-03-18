@@ -1,3 +1,7 @@
+> **ARCHIVED** — This document describes work completed during the bootstrap era.
+> The bootstrap compiler has been retired; Vibe is now fully self-hosted.
+> See `vision.md` for current goals.
+
 # FFI-Based LLVM Integration Design
 
 ## Overview

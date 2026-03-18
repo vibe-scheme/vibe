@@ -59,10 +59,6 @@ If the detected triple is not ARM64, `llvm_initialize_native_target` silently sk
 
 3. For text IR output, dynamically format the `target triple = "..."` and `target datalayout = "..."` lines from the runtime-detected values.
 
-#### `bootstrap/codegen.ll` (Sync)
-
-Apply equivalent changes to the bootstrap codegen to maintain behavioral sync per the sync strategy.
-
 #### `CMakeLists.txt`
 
 Link both AArch64 and X86 LLVM libraries unconditionally (or based on a CMake option), so the compiled binary can target either architecture.
@@ -98,16 +94,13 @@ Link both AArch64 and X86 LLVM libraries unconditionally (or based on a CMake op
 
 1. Add optional `--target` flag that propagates to the compiler invocation.
 
-## Key Insight: No Bootstrap Regression Required
+## Key Insight: Self-Hosting Makes This Natural
 
 All changes are to `.vibe` source files. The existing `vibe_kernel` binary (running on arm64) can compile the updated `.vibe` files that add cross-compilation support. This is a natural demonstration of the self-hosting capability: the compiler extends itself.
-
-The bootstrap `.ll` files should be kept in sync per the sync strategy, but they are not required for this work.
 
 ## Dependencies
 
 - LLVM must be built with (or have available) the target backends for all desired architectures. Homebrew LLVM on macOS typically includes both AArch64 and X86.
-- The `types.ll` shared type definitions are architecture-neutral (pointer sizes are `i64` on both arm64 and x86_64), so no changes needed there.
 
 ## Future Considerations
 

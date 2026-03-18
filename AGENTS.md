@@ -14,11 +14,13 @@ This document provides guidance for AI agents contributing to the Vibe language 
 
 2. **Human-Language Descriptions**: All functions should be documented with clear, human-language descriptions explaining what they do and why. This is part of Vibe's philosophy of making code readable and understandable.
 
-3. **`define-bitcode` Primitive**: This is the central primitive that enables the Vibe kernel to be written in Vibe itself. It allows binding LLVM modules to names, enabling core language features (like `lambda`) to be implemented in Vibe.
+3. **Kernel DSL Primitives**: The `llvm:define-function`, `llvm:define-type`, and `llvm:declare-function` forms are the central primitives that enable the Vibe kernel to be written in Vibe itself. They bind LLVM functions, types, and forward declarations to names, enabling the compiler to be built in its own language.
 
-4. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. Prioritize correctness and proper architecture over maintaining broken behavior.
+4. **Docstrings**: When Scheme-level `define` is implemented, the first string literal in a multi-expression body will serve as a documentation string, automatically registered in the binding registry. This follows the Python/Clojure convention and is syntactically valid R7RS.
 
-5. **Parser/Codegen Separation**: The parser phase should handle all syntax normalization (e.g., stripping vertical bars `|` from symbols like `|%Foo|` → `%Foo`), while the codegen phase should only handle semantic resolution (e.g., mapping type names to LLVM types). This separation simplifies both layers and makes the codebase more maintainable.
+5. **Fix at the Source**: Always fix issues at their root cause rather than adding workarounds. Prioritize correctness and proper architecture over maintaining broken behavior.
+
+6. **Parser/Codegen Separation**: The parser phase should handle all syntax normalization (e.g., stripping vertical bars `|` from symbols like `|%Foo|` → `%Foo`), while the codegen phase should only handle semantic resolution (e.g., mapping type names to LLVM types). This separation simplifies both layers and makes the codebase more maintainable.
 
 ### Code Style
 
@@ -43,6 +45,7 @@ vibe/
 ├── doc/               # Documentation
 │   ├── design/        # Design documents and formal plans
 │   ├── chats/         # Recorded development conversations
+│   ├── pages/         # GitHub Pages site (index.html)
 │   └── examples/      # Example programs and tutorials
 ├── test/              # Test files
 └── build/             # Build output (gitignored)
@@ -140,28 +143,24 @@ Each chat document should include:
 
 ## How to Contribute
 
-1. **Understand the Architecture**: Read the design documents in `doc/design/` to understand the overall architecture and goals.
+See `CONTRIBUTING.md` for the full contributor workflow. Key points:
 
-2. **Build and Test**: Run `./build.sh build` to build from source. The seed compiler is downloaded automatically on first build.
-
-3. **Document Your Work**: 
-   - Add comments to code explaining functionality
-   - Update relevant design documents if architecture changes
-   - Create chat documentation for significant conversations
-
-4. **Test Thoroughly**: 
-   - Test each component as you implement it
-   - Test integration between components
-   - Test error conditions
+- Vibe is developed by conversing with AI models. Every PR must include a chat document.
+- Name your chat file `0000-descriptive-name.md` in `doc/chats/`. A GitHub Action renumbers it on merge.
+- One session, one chat document, one PR.
+- Read `doc/design/vision.md` for goals and `doc/design/macro-system.md` for the current roadmap.
 
 ## Documentation Structure
 
 ### Design Documents (`doc/design/`)
 
-Formal plans and architectural decisions. Examples:
-- `bootstrap-plan.md` - Historical bootstrap compiler plan
+Formal plans and architectural decisions:
+- `vision.md` - Mission, goals, and architecture
+- `primitive-forms.md` - Primitive vs. derived form analysis
+- `macro-system.md` - Macro-first strategy and implementation plan
+- `r7rs-compliance.md` - R7RS Small compliance tracker
 - `cross-compilation-plan.md` - Plan for cross-compilation support
-- `ffi-llvm-integration.md` - FFI system design
+- `llvm-dsl-deferred-methods.md` - Unimplemented DSL instructions
 
 ### Chat Documentation (`doc/chats/`)
 
@@ -169,6 +168,10 @@ Recorded development conversations, numbered sequentially:
 - `0001-initial-setup.md`
 - `0002-lexer-implementation.md`
 - etc.
+
+### GitHub Pages (`doc/pages/`)
+
+Public-facing project site served via GitHub Pages. Contains `index.html` with the project introduction, goals, current status, and links to documentation.
 
 ### Examples (`doc/examples/`)
 
@@ -203,14 +206,21 @@ The `llvm_initialize_native_target()` function in `kernel/dsl.vibe` detects the 
 
 ## Key Concepts
 
-### `define-bitcode-*` Primitives
+### Kernel DSL Primitives
 
-These are the core primitives that enable self-hosting. They allow binding LLVM functions, types, and constants to names, enabling core language features to be implemented in Vibe itself. For example:
+The kernel DSL provides the forms that enable self-hosting. The compiler is written using these primitives:
+
+- **`llvm:define-function`** — define an LLVM function with typed parameters and a body of DSL expressions
+- **`llvm:define-type`** — define an LLVM struct type with named fields
+- **`llvm:declare-function`** — forward-declare a function (for cross-module or forward references)
+- **`llvm:define-constant`** — define a global constant (string literals, bytevectors)
+- **`llvm:define-ffi-function`** — declare an external C function for FFI
+
+Example:
 
 ```scheme
-(define-bitcode-function (lambda (formals |i8*|) (body |i8*|)) |void*|
-  ;; LLVM IR code that implements lambda
-  ...)
+(llvm:define-function (add_one (x |i32|)) |i32|
+  (llvm:ret (llvm:add x (llvm:const-int |i32| 1))))
 ```
 
 ### FFI System
@@ -228,32 +238,16 @@ The compiler uses LLVM C API functions (statically linked) for bitcode generatio
 - Writing bitcode files directly
 - Error handling and validation through LLVM's API
 
-### Future: `define-bitcode-ffi-function`
-
-A planned primitive to declare external C functions from Vibe code:
-
-```scheme
-(define-bitcode-ffi-function printf
-  (return-type |i32|)
-  (params (|i8*| format) ...)
-  (linkage external)
-  (vararg #t))
-```
-
-This will replace hardcoded external function declarations in `codegen_init()` and allow user-defined FFI declarations.
-
-### Future: Remove Implicit Main Insertion
-
-The compiler currently has `codegen_main` inject a `main` function when a module has top-level executable expressions. This should be removed in favor of explicit `main` definition.
-
 ## Next Steps
 
-Now that Vibe is self-hosted, priorities are:
-1. Cross-compilation support (see `doc/design/cross-compilation-plan.md`)
-2. Implement `define-bitcode-ffi-function` for user-defined FFI
-3. Implement the macro system
-4. Expand the standard library
-5. Optimize code generation
+Vibe follows a **macro-first** implementation strategy. See `doc/design/macro-system.md` for the full rationale and `doc/design/r7rs-compliance.md` for the detailed tracker.
+
+1. **Macro system (unhygienic)** — `define-syntax` / `syntax-rules` with pattern matching and template substitution
+2. **Kernel rewrite** — use macros to simplify the compiler's own source code
+3. **Macro system (hygienic)** — full R7RS-compliant `syntax-rules`
+4. **Primitive forms** — `define`, `lambda`, `if`, `set!`, `quote` at the Scheme level
+5. **Derived forms and standard library** — everything else, built as macros
+6. **Cross-compilation** — see `doc/design/cross-compilation-plan.md`
 
 ## Questions or Issues
 
@@ -292,6 +286,10 @@ Create a commit message following best practices:
 - **Body**: Detailed explanation of changes, why they were made, and any important notes
 - **Format**: Use present tense, imperative mood (e.g., "Fix string constant generation" not "Fixed string constant generation")
 
-### 3. Update AGENTS.md (if needed)
+### 3. Update GitHub Pages (if needed)
+
+If design documents, implementation status, or architecture changed during the session, update `doc/pages/index.html` to keep the public site in sync. The site should always reflect the current state of the project.
+
+### 4. Update AGENTS.md (if needed)
 
 If new practices, patterns, or conventions were established during the session, document them in AGENTS.md to ensure consistency in future sessions.
