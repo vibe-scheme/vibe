@@ -1,0 +1,10 @@
+; Canary test for unhygienic macros.
+; Fails until expander implements define-syntax/syntax-rules.
+; When macros work: (answer) expands to (llvm:const-int |i32| 42), main returns 42.
+
+(define-syntax answer
+  (syntax-rules ()
+    ((answer) (llvm:const-int |i32| 42))))
+
+(llvm:define-function (main) |i32|
+  (llvm:ret (answer)))

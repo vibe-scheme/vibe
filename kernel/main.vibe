@@ -61,6 +61,7 @@
 (llvm:declare-function (parse_current (parser |%Parser*|)) |%Token*|)
 (llvm:declare-function (codegen_init (module_name |i8*|)) |%CodeGen*|)
 (llvm:declare-function (codegen_define_bitcode (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|)
+(llvm:declare-function (expander_expand_top_level (exprs |%ASTNode*|)) |%ASTNode*|)
 (llvm:declare-function (codegen_main (cg |%CodeGen*|) (exprs |%ASTNode*|)) |i32|)
 (llvm:declare-function (codegen_define_llvm_type (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|)
 (llvm:declare-function (codegen_define_llvm_constant (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|)
@@ -551,8 +552,9 @@
     (llvm:label 'generate_code
       (let* ((codegen (llvm:load codegen_ptr |%CodeGen*|))
              (exprs (llvm:load exprs_list |%ASTNode*|))
+             (expanded (llvm:call expander_expand_top_level exprs))
              (has_output (llvm:icmp 'ugt argc (llvm:const-int |i32| 2))))
-        (llvm:call codegen_main codegen exprs)
+        (llvm:call codegen_main codegen expanded)
         (llvm:br has_output 'write_output 'done)))
     (llvm:label 'write_output
       (let* ((arg2_ptr (llvm:gep |i8*| argv 2))

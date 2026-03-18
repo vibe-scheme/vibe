@@ -1,0 +1,25 @@
+;; expander.vibe - Macro expansion phase (no-op for now)
+;; Inserted between parser and codegen. Will implement define-syntax/syntax-rules.
+;; See doc/design/macro-system.md for architecture.
+
+;; ============================================================================
+;; Type definitions (must match parser/codegen layout)
+;; ============================================================================
+(llvm:define-type ASTNode
+  (type |i32|)
+  (atom_type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (car |i8*|)
+  (cdr |i8*|)
+  (line |i32|)
+  (column |i32|))
+
+;; ============================================================================
+;; expander_expand_top_level
+;; Expand macros in top-level expression list. No-op: returns input unchanged.
+;; Parameters: exprs (ASTNode* list)
+;; Returns: ASTNode* (expanded list, currently same as input)
+;; ============================================================================
+(llvm:define-function (expander_expand_top_level (exprs |%ASTNode*|)) |%ASTNode*|
+  (llvm:ret exprs))

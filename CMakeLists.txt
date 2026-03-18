@@ -148,6 +148,35 @@ add_custom_command(
 )
 add_custom_target(compile_dsl DEPENDS ${CMAKE_BINARY_DIR}/dsl.bc)
 
+# Util (outputs .ll text, then assembled to .bc - same as codegen for consistent symbol generation)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/util.ll
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+        -o ${CMAKE_BINARY_DIR}/util.ll
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+    COMMENT "Compiling util.vibe"
+)
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/util.bc
+    COMMAND ${LLVM_AS} ${CMAKE_BINARY_DIR}/util.ll
+        -o ${CMAKE_BINARY_DIR}/util.bc
+    DEPENDS ${CMAKE_BINARY_DIR}/util.ll
+    COMMENT "Assembling util bitcode"
+)
+add_custom_target(compile_util DEPENDS ${CMAKE_BINARY_DIR}/util.bc)
+
+# Expander
+add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/expander.bc
+    COMMAND ${VIBE_COMPILER}
+        ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+        -o ${CMAKE_BINARY_DIR}/expander.bc
+    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+    COMMENT "Compiling expander.vibe"
+)
+add_custom_target(compile_expander DEPENDS ${CMAKE_BINARY_DIR}/expander.bc)
+
 # Codegen (outputs .ll text, then assembled to .bc)
 add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/codegen.ll
@@ -196,7 +225,9 @@ add_custom_command(
         ${CMAKE_BINARY_DIR}/parser.bc
         ${CMAKE_BINARY_DIR}/ffi.bc
         ${CMAKE_BINARY_DIR}/dsl.bc
+        ${CMAKE_BINARY_DIR}/util.bc
         ${CMAKE_BINARY_DIR}/codegen.bc
+        ${CMAKE_BINARY_DIR}/expander.bc
         -o ${CMAKE_BINARY_DIR}/vibe_kernel_linked.bc
     DEPENDS
         ${CMAKE_BINARY_DIR}/main.bc
@@ -204,7 +235,9 @@ add_custom_command(
         ${CMAKE_BINARY_DIR}/parser.bc
         ${CMAKE_BINARY_DIR}/ffi.bc
         ${CMAKE_BINARY_DIR}/dsl.bc
+        ${CMAKE_BINARY_DIR}/util.bc
         ${CMAKE_BINARY_DIR}/codegen.bc
+        ${CMAKE_BINARY_DIR}/expander.bc
     COMMENT "Linking all kernel modules"
 )
 
@@ -265,7 +298,7 @@ if(ZSTD_LIBRARY)
     target_link_libraries(vibe_kernel ${ZSTD_LIBRARY})
 endif()
 
-add_dependencies(vibe_kernel compile_lexer compile_parser compile_ffi compile_dsl compile_codegen compile_main)
+add_dependencies(vibe_kernel compile_lexer compile_parser compile_ffi compile_dsl compile_util compile_expander compile_codegen compile_main)
 
 # ============================================================================
 # Testing
