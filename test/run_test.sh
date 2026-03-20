@@ -54,7 +54,7 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
-# Test 2: macro_hello (canary for unhygienic macros - fails until macros implemented)
+# Test 2: macro_hello (define-syntax + substitution into llvm:define-function body)
 echo ""
 echo "=== Test: macro_hello.vibe (macro canary) ==="
 echo "Compiling macro_hello.vibe using $COMPILER..."
@@ -62,21 +62,30 @@ if "${COMPILER}" test/macro_hello.vibe -o test/macro_hello.o 2>/dev/null; then
     if [ -f test/macro_hello.o ]; then
         echo "Linking executable..."
         if cc $ARCH_FLAG test/macro_hello.o -o test/macro_hello.exe -lc 2>/dev/null; then
-            OUTPUT=$(./test/macro_hello.exe 2>/dev/null; echo $?)
-            if [ "$OUTPUT" = "42" ]; then
-                echo "PASS: macro_hello (macros working!)"
+            # Exit 42 is success; set -e would abort on nonzero without an if guard.
+            if ./test/macro_hello.exe 2>/dev/null; then
+                MACRO_EXIT=0
+            else
+                MACRO_EXIT=$?
+            fi
+            if [ "$MACRO_EXIT" -eq 42 ]; then
+                echo "PASS: macro_hello"
                 PASS_COUNT=$((PASS_COUNT + 1))
             else
-                echo "PENDING: macro_hello - Macros not yet implemented (exit code: $OUTPUT)"
+                echo "FAIL: macro_hello - Expected exit code 42, got $MACRO_EXIT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
             fi
         else
-            echo "PENDING: macro_hello - Link failed (macros not yet implemented)"
+            echo "FAIL: macro_hello - Link failed"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
         fi
     else
-        echo "PENDING: macro_hello - Object file not generated (macros not yet implemented)"
+        echo "FAIL: macro_hello - Object file not generated"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 else
-    echo "PENDING: macro_hello - Compile failed (macros not yet implemented)"
+    echo "FAIL: macro_hello - Compile failed"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
 echo ""

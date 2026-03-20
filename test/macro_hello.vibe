@@ -1,6 +1,5 @@
-; Canary test for unhygienic macros.
-; Fails until expander implements define-syntax/syntax-rules.
-; When macros work: (answer) expands to (llvm:const-int |i32| 42), main returns 42.
+; Canary for simple substitution macros (define-syntax / syntax-rules).
+; (answer) expands to (llvm:const-int |i32| 42); linked main must exit 42.
 
 (define-syntax answer
   (syntax-rules ()
