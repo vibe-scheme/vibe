@@ -1,9 +1,22 @@
-; Canary for simple substitution macros (define-syntax / syntax-rules).
-; (answer) expands to (llvm:const-int |i32| 42); linked main must exit 42.
+; Canary for macros: zero-arg substitution + linear pattern matching.
+; Linked main must exit 42.
 
 (define-syntax answer
   (syntax-rules ()
     ((answer) (llvm:const-int |i32| 42))))
 
+(define-syntax use
+  (syntax-rules ()
+    ((use x) x)))
+
+(define-syntax add-of
+  (syntax-rules ()
+    ((add-of a b) (llvm:add a b))))
+
+(define-syntax ret
+  (syntax-rules ()
+    ((ret v) (llvm:ret v))))
+
 (llvm:define-function (main) |i32|
-  (llvm:ret (answer)))
+  (ret (add-of (use (llvm:const-int |i32| 0))
+               (use (answer)))))

@@ -38,7 +38,7 @@ Every PR must include:
 ./build.sh build
 ```
 
-On a clean checkout, the build script automatically downloads a seed compiler. Subsequent builds use the just-built `vibe_kernel` to compile itself.
+On a clean checkout, the build script downloads a seed compiler (see [`RELEASING.md`](RELEASING.md)). Set `VIBE_SEED_TAG` to select a different published seed. Subsequent builds use the just-built `vibe_kernel` to compile itself.
 
 **Requirements**: LLVM 21+ (`llvm-as`, `llvm-link`, `llc` must be available)
 

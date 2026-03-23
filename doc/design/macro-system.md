@@ -8,7 +8,7 @@ Vibe is not starting from nothing. It has a working, self-hosted compiler with a
 
 ### Macros need no runtime value representation
 
-Macros are purely compile-time AST-to-AST transformations. They operate on the parser's output (linked lists of `ASTNode` structs) and produce new AST trees that the codegen phase consumes. The infrastructure they require — `codegen_create_cons`, `codegen_create_string_node`, string comparison via `strncmp`, linked-list traversal — already exists in `kernel/codegen.vibe`.
+Macros are purely compile-time AST-to-AST transformations. They operate on the parser's output (linked lists of `ASTNode` structs) and produce new AST trees that the codegen phase consumes. The infrastructure they require — `create_cons`, `create_string_node` (in `kernel/util.vibe`), string comparison via `strncmp`, linked-list traversal — is shared with codegen.
 
 By contrast, implementing `define` and `lambda` at the Scheme level forces immediate decisions about:
 
@@ -47,22 +47,51 @@ The immediate use case is DSL-level convenience macros in the kernel compiler it
 
 Hygiene is also the hardest part of `syntax-rules`. It requires tracking the lexical context of each identifier through expansion — marks, substitutions, or alpha-renaming. Deferring it lets us get immediate practical value from a tractable implementation.
 
-### What Phase 1 supports
+### Phase 1 implementation status (kernel expander)
 
-- **Pattern variables**: `(syntax-rules () ((name pattern ...) template))` — match subforms and bind them to pattern variables for use in the template
-- **Literal matching**: `(syntax-rules (lit1 lit2) ...)` — require certain positions to match specific identifiers
-- **Ellipsis** (`...`): In patterns, match zero or more repetitions of the preceding sub-pattern. In templates, replicate the preceding template element for each match.
-- **Nested patterns**: Match structure at arbitrary depth
-- **Multiple clauses**: Tried in order; the first matching clause wins
+The expander lives in `kernel/expander.vibe` and runs between parse and codegen (`kernel/main.vibe`). **What ships today (v1)** is a **subset** of full Phase 1; the bullets below separate *implemented* from *still planned*.
 
-### What Phase 1 does NOT support
+**Implemented**
 
-- **Hygienic renaming** — deferred to Phase 3
-- **`syntax-case`** or procedural macros — not part of R7RS Small
-- **`let-syntax` / `letrec-syntax`** — local macro bindings, deferred until needed
-- **`syntax-error`** — can be added trivially later
+- Top-level `(define-syntax name (syntax-rules () (clause)))` using the **first clause only** (additional clauses are ignored).
+- Macro environment as an alist of **`(macro-name . (pattern . template))`** (pattern + template AST preserved for matching).
+- **Flat linear patterns**: the pattern is a proper list of the **same length** as the invocation; the first element is the keyword (must match the invocation’s `car`); remaining elements are **pattern variables** represented as **atoms only** (no nested list sub-patterns yet).
+- **Duplicate pattern variable names** in the pattern tail are rejected when registering the macro.
+- **Template substitution**: tree walk on the template; replace atoms that match a binding; then **re-expand** the result so nested macro uses work. No recursive substitution inside substituted subtrees except through that re-expand step.
+- **Match failure** (e.g. wrong arity for a macro name): expansion does **not** apply; the form is treated as a normal list and **car/cdr are expanded** so inner macros still run.
 
-### Example: what Phase 1 enables
+**Not yet implemented** (still on the Phase 1 roadmap before Phase 2)
+
+- **`syntax-rules` literals list** — effectively only `()` is supported today.
+- **Ellipsis** (`...`) in patterns and templates.
+- **Multiple clauses** (try successive clauses).
+- **Nested / non-flat patterns** in the pattern tail.
+- **Configurable fixed-point depth limit** for expansion loops (desirable for safety).
+
+**Still deferred** (unchanged from before)
+
+- **Hygienic renaming** — Phase 3
+- **`syntax-case`** or procedural macros — not R7RS Small
+- **`let-syntax` / `letrec-syntax`**
+- **`syntax-error`**
+
+### Example: macros that work today (linear patterns)
+
+```scheme
+(define-syntax use
+  (syntax-rules ()
+    ((use x) x)))
+
+(define-syntax add-of
+  (syntax-rules ()
+    ((add-of a b) (llvm:add a b))))
+```
+
+More elaborate Phase 1 examples (ellipsis, multiple clauses, `with-field`-style nested structure in the pattern) await the features listed above.
+
+### Example: future Phase 1 (full `syntax-rules`)
+
+When ellipsis, literals, and multiple clauses exist, the following style of kernel macro becomes possible (not valid with the current v1 matcher):
 
 ```scheme
 ;; Abstract the GEP + load pattern for struct field access
@@ -70,24 +99,6 @@ Hygiene is also the hardest part of `syntax-rules`. It requires tracking the lex
   (syntax-rules ()
     ((with-field struct type idx result-type)
      (llvm:load (llvm:gep type struct 0 idx) result-type))))
-
-;; Abstract null-check-and-branch
-(define-syntax if-null
-  (syntax-rules ()
-    ((if-null ptr then-label else-label)
-     (llvm:br (llvm:icmp 'eq ptr (llvm:const-null |i8*|)) then-label else-label))))
-
-;; Abstract the repeated binary operation pattern (~50 lines each currently)
-(define-syntax define-dsl-binop
-  (syntax-rules ()
-    ((define-dsl-binop name llvm-builder)
-     (llvm:define-function (name (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
-       (let* ((first-arg (llvm:load (llvm:gep |%ASTNode| args 0 4) |%ASTNode*|))
-              (rest (llvm:load (llvm:gep |%ASTNode| args 0 5) |%ASTNode*|))
-              (second-arg (llvm:load (llvm:gep |%ASTNode| rest 0 4) |%ASTNode*|))
-              (lhs (llvm:call codegen_eval_dsl_expr cg first-arg))
-              (rhs (llvm:call codegen_eval_dsl_expr cg second-arg)))
-         (llvm:ret (llvm:call llvm-builder lhs rhs "")))))))
 ```
 
 ## Architectural Changes
@@ -104,17 +115,17 @@ The expander is a new phase inserted between the parser and codegen. It receives
 
 The expander module implements:
 
-1. **Macro environment**: A map from keyword names to transformer specs (the parsed `syntax-rules` clauses). Stored as an alist of `(name . transformer)` pairs, using the same cons-cell infrastructure that `codegen.vibe` uses for its binding lists.
+1. **Macro environment**: Alist of **`(macro-name . (pattern . template))`** using the same cons-cell infrastructure as the rest of the kernel.
 
-2. **Top-level `define-syntax` handling**: When the expander encounters a `(define-syntax name (syntax-rules ...))` form, it parses the clauses and registers the transformer in the macro environment. The form is consumed — it does not pass through to codegen.
+2. **Top-level `define-syntax` handling**: Parses a simple `syntax-rules` shape (first clause only for now), validates the pattern (keyword + linear atom variables), and registers the entry. The `define-syntax` form is consumed — it does not reach codegen.
 
-3. **Expansion walk**: For each list form in the AST, the expander checks whether the head (car) is a keyword in the macro environment. If so, it applies the pattern matcher against each clause in order. On the first match, it instantiates the template with the matched bindings and replaces the original form. Expansion is recursive — the result of a macro expansion is itself subject to further expansion.
+3. **Expansion walk**: For each list whose `car` is an atom and a registered macro name, the expander runs **linear pattern match** against the full invocation list. On success, it **substitutes** into the template and **recursively expands** the result. On failure, it expands `car` and `cdr` like an ordinary list.
 
-4. **Pattern matcher**: Walks a `syntax-rules` pattern and an input form in parallel. Literal identifiers must match exactly. Pattern variables bind to the corresponding input sub-form. Ellipsis patterns match zero or more repetitions. Returns either a set of bindings (on match) or failure.
+4. **Pattern matcher (`expander_match_linear_pattern`)**: Requires equal list length, keyword equality on the first element, atom pattern variables in the tail, and no duplicate variable names (enforced at registration).
 
-5. **Template instantiation**: Walks a template, replacing pattern variables with their bound values and replicating ellipsis-marked sub-templates for each repetition. Produces a new AST tree.
+5. **Template substitution (`expander_substitute_template`)**: Copies list structure; replaces bound atoms; does not implement ellipsis replication yet.
 
-6. **Fixed-point expansion**: The expander repeats until no more expansions occur in a pass, or until a configurable depth limit is reached (to detect infinite expansion loops).
+6. **Re-expansion**: One expand pass per successful macro step; nested macros are handled by expanding the substituted tree again. A dedicated depth limit is not yet implemented.
 
 ### Utility extraction: `kernel/util.vibe`
 
@@ -144,13 +155,13 @@ After extraction, `codegen.vibe` retains the functions that are specific to LLVM
 
 ### Integration with `kernel/main.vibe`
 
-`main.vibe` currently drives the pipeline as: parse each top-level form, then pass it to codegen. After this change, the flow becomes: parse each top-level form, pass it to the expander, then pass the expanded form to codegen.
+`codegen_main` parses the input **one top-level expression at a time**. Each parsed form is passed to **`expander_process_one`** together with a pointer to the **macro environment head** (an alist). `define-syntax` updates that alist and returns null (the form is dropped from codegen output); other forms are returned expanded and are queued for codegen as today.
 
-The expander is initialized once per compilation unit (to maintain the macro environment across top-level forms within a file). `define-syntax` forms encountered early in a file are available for expansion of forms later in the same file.
+So the macro environment persists across top-level forms in file order: an early `define-syntax` is visible when expanding later forms in the same compilation.
 
 ## Phase 2: Kernel Rewrite Using Macros
 
-Once Phase 1 is complete and self-hosted, define convenience macros that eliminate the kernel's most repetitive patterns. The goal is to make the kernel readable enough that implementing Scheme-level primitives (Phase 4) is tractable.
+The compiler is already self-hosted with a **v1** expander (linear patterns). Kernel rewrites can begin with macros expressible in that subset; patterns that need ellipsis, multiple clauses, or non-flat structure wait for the remaining Phase 1 work above. The goal is to make the kernel readable enough that implementing Scheme-level primitives (Phase 4) is tractable.
 
 ### Target macros
 

@@ -64,7 +64,7 @@ The Vibe compiler is self-hosted: `vibe_kernel` compiles `.vibe` source files to
 ./build.sh install  # Install
 ```
 
-On a clean checkout with no existing `vibe_kernel` binary, `build.sh` automatically downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.1-seed) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`.
+On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.2-seed) (asset `vibe_kernel_seed`) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`. Override the tag with `VIBE_SEED_TAG` (see `build.sh`). To publish a new seed: `./build.sh release-seed` or the **Release seed compiler** workflow; details in [`RELEASING.md`](RELEASING.md).
 
 **After upgrading LLVM**: Run `./build.sh clean` first so CMake reconfigures and finds the new LLVM paths.
 
@@ -77,7 +77,7 @@ On a clean checkout with no existing `vibe_kernel` binary, `build.sh` automatica
 
 ### Seed Binary
 
-The seed compiler is hosted as a GitHub release asset at `v0.0.1-seed`. It was produced through the original bootstrap chain (LLVM IR → bootstrap compiler → kernel compiler → self-hosted compiler) and verified to compile all kernel modules correctly. The original LLVM IR bootstrap source remains in git history for emergency re-bootstrapping.
+The **default** bootstrap download is **`v0.0.2-seed`**: a self-hosted `vibe_kernel` that includes the macro expander (linear `syntax-rules`). The earlier **`v0.0.1-seed`** came from the original bootstrap chain (LLVM IR → … → self-hosted) and remains on GitHub for older commits (`VIBE_SEED_TAG=v0.0.1-seed`). The original LLVM IR bootstrap source remains in git history for emergency re-bootstrapping.
 
 ### Vibe DSL Conventions
 

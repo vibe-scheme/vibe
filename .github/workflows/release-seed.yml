@@ -1,0 +1,58 @@
+# Build a stripped vibe_kernel_seed and publish a GitHub release (same tag as the asset).
+#
+# Limitation: ./build.sh test must succeed using the default seed in build.sh. If the
+# kernel needs a newer compiler than the published seed (e.g. new kernel features), run
+# ./build.sh release-seed locally on a machine that already has a working vibe_kernel,
+# then bump the default SEED_TAG in build.sh in a follow-up commit.
+name: Release seed compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release and git tag (e.g. v0.0.2-seed)"
+        required: true
+        default: "v0.0.2-seed"
+
+permissions:
+  contents: write
+
+jobs:
+  release-seed:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM
+        run: brew install llvm
+
+      - name: Use Homebrew LLVM on PATH
+        run: echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+
+      - name: Build and test (self-host from default seed)
+        run: ./build.sh test
+
+      - name: Strip seed asset
+        run: |
+          mkdir -p build/release
+          cp build/bin/vibe_kernel build/release/vibe_kernel_seed
+          strip -Sx build/release/vibe_kernel_seed
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ inputs.tag }}"
+          REPO="${{ github.repository }}"
+          ASSET="build/release/vibe_kernel_seed"
+          NOTES_FILE="doc/release-notes/${TAG}.md"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --repo "$REPO" --clobber
+          elif [ -f "$NOTES_FILE" ]; then
+            gh release create "$TAG" "$ASSET" --repo "$REPO" \
+              --title "Seed ${TAG}" --notes-file "$NOTES_FILE"
+          else
+            gh release create "$TAG" "$ASSET" --repo "$REPO" \
+              --title "Seed ${TAG}" --notes "Seed compiler ${TAG}"
+          fi

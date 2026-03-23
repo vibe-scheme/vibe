@@ -134,6 +134,12 @@
     }
 
     .done { color: var(--accent); }
+    .partial { color: #2a6a9e; }
+
+    @media (prefers-color-scheme: dark) {
+      .partial { color: #6eb5e0; }
+    }
+
     .next { color: #b8860b; }
 
     @media (prefers-color-scheme: dark) {
@@ -267,10 +273,10 @@
       <span class="status done">Done</span>
 
       <span class="item">Macro system (unhygienic)</span>
-      <span class="status next">Next</span>
+      <span class="status partial">Partial</span>
 
       <span class="item">Kernel rewrite using macros</span>
-      <span class="status not-started">Planned</span>
+      <span class="status next">Next</span>
 
       <span class="item">Macro system (hygienic)</span>
       <span class="status not-started">Planned</span>
@@ -311,6 +317,10 @@
       <li>
         <a href="https://github.com/vibe-scheme/vibe/blob/main/doc/design/r7rs-compliance.md">R7RS Compliance Tracker</a>
         <span class="desc"> &mdash; section-by-section implementation status</span>
+      </li>
+      <li>
+        <a href="https://github.com/vibe-scheme/vibe/blob/main/RELEASING.md">Seed releases</a>
+        <span class="desc"> &mdash; publishing bootstrap <code>vibe_kernel</code> binaries (<code>./build.sh release-seed</code>)</span>
       </li>
       <li>
         <a href="https://github.com/vibe-scheme/vibe/tree/main/doc/chats">Development Chats</a>
