@@ -42,7 +42,7 @@ vibe/
 │   ├── main.vibe      # Compiler driver (main + helpers)
 │   └── codegen.vibe   # Code generator
 ├── src/               # Future standard library code
-├── doc/               # Documentation
+├── docs/              # Documentation
 │   ├── design/        # Design documents and formal plans
 │   ├── chats/         # Recorded development conversations
 │   ├── pages/         # GitHub Pages site (index.html)
@@ -89,7 +89,7 @@ The **default** bootstrap download is **`v0.0.2-seed`**: a self-hosted `vibe_ker
 
 ## Development Chat Documentation
 
-**IMPORTANT**: All development conversations must be memorialized in the `doc/chats/` directory. Each conversation should be saved as a numbered markdown file (e.g., `0001-initial-setup.md`, `0002-lexer-implementation.md`, etc.). **One session, one chat document** — do not split a single session across multiple chat files.
+**IMPORTANT**: All development conversations must be memorialized in the `docs/chats/` directory. Each conversation should be saved as a numbered markdown file (e.g., `0001-initial-setup.md`, `0002-lexer-implementation.md`, etc.). **One session, one chat document** — do not split a single session across multiple chat files.
 
 ### Chat Documentation Format
 
@@ -146,13 +146,13 @@ Each chat document should include:
 See `CONTRIBUTING.md` for the full contributor workflow. Key points:
 
 - Vibe is developed by conversing with AI models. Every PR must include a chat document.
-- Name your chat file `0000-descriptive-name.md` in `doc/chats/`. A GitHub Action renumbers it on merge.
+- Name your chat file `0000-descriptive-name.md` in `docs/chats/`. A GitHub Action renumbers it on merge.
 - One session, one chat document, one PR.
-- Read `doc/design/vision.md` for goals and `doc/design/macro-system.md` for the current roadmap.
+- Read `docs/design/vision.md` for goals and `docs/design/macro-system.md` for the current roadmap.
 
 ## Documentation Structure
 
-### Design Documents (`doc/design/`)
+### Design Documents (`docs/design/`)
 
 Formal plans and architectural decisions:
 - `vision.md` - Mission, goals, and architecture
@@ -162,18 +162,18 @@ Formal plans and architectural decisions:
 - `cross-compilation-plan.md` - Plan for cross-compilation support
 - `llvm-dsl-deferred-methods.md` - Unimplemented DSL instructions
 
-### Chat Documentation (`doc/chats/`)
+### Chat Documentation (`docs/chats/`)
 
 Recorded development conversations, numbered sequentially:
 - `0001-initial-setup.md`
 - `0002-lexer-implementation.md`
 - etc.
 
-### GitHub Pages (`doc/pages/`)
+### GitHub Pages (`docs/pages/`)
 
 Public-facing project site served via GitHub Pages. Contains `index.html` with the project introduction, goals, current status, and links to documentation.
 
-### Examples (`doc/examples/`)
+### Examples (`docs/examples/`)
 
 Example programs and tutorials demonstrating Vibe features.
 
@@ -188,7 +188,7 @@ Example programs and tutorials demonstrating Vibe features.
 
 ### Target Architecture
 
-The compiler currently hardcodes the target triple `arm64-apple-darwin` in `kernel/codegen.vibe`. See `doc/design/cross-compilation-plan.md` for the plan to support runtime target detection and cross-compilation.
+The compiler currently hardcodes the target triple `arm64-apple-darwin` in `kernel/codegen.vibe`. See `docs/design/cross-compilation-plan.md` for the plan to support runtime target detection and cross-compilation.
 
 **Current Configuration**:
 - **Apple Silicon (arm64)**: `arm64-apple-darwin` with data layout `"e-m:o-i64:64-i128:128-n32:64-S128"`
@@ -202,7 +202,7 @@ The compiler currently hardcodes the target triple `arm64-apple-darwin` in `kern
 
 ### Platform-Aware Target Initialization
 
-The `llvm_initialize_native_target()` function in `kernel/dsl.vibe` detects the target architecture at runtime and initializes the appropriate LLVM target components. Currently only AArch64 is supported; see `doc/design/cross-compilation-plan.md` for X86 support plans.
+The `llvm_initialize_native_target()` function in `kernel/dsl.vibe` detects the target architecture at runtime and initializes the appropriate LLVM target components. Currently only AArch64 is supported; see `docs/design/cross-compilation-plan.md` for X86 support plans.
 
 ## Key Concepts
 
@@ -240,19 +240,19 @@ The compiler uses LLVM C API functions (statically linked) for bitcode generatio
 
 ## Next Steps
 
-Vibe follows a **macro-first** implementation strategy. See `doc/design/macro-system.md` for the full rationale and `doc/design/r7rs-compliance.md` for the detailed tracker.
+Vibe follows a **macro-first** implementation strategy. See `docs/design/macro-system.md` for the full rationale and `docs/design/r7rs-compliance.md` for the detailed tracker.
 
 1. **Macro system (unhygienic)** — `define-syntax` / `syntax-rules` with pattern matching and template substitution
 2. **Kernel rewrite** — use macros to simplify the compiler's own source code
 3. **Macro system (hygienic)** — full R7RS-compliant `syntax-rules`
 4. **Primitive forms** — `define`, `lambda`, `if`, `set!`, `quote` at the Scheme level
 5. **Derived forms and standard library** — everything else, built as macros
-6. **Cross-compilation** — see `doc/design/cross-compilation-plan.md`
+6. **Cross-compilation** — see `docs/design/cross-compilation-plan.md`
 
 ## Questions or Issues
 
 If you encounter issues or have questions:
-1. Check existing documentation in `doc/design/` and `doc/chats/`
+1. Check existing documentation in `docs/design/` and `docs/chats/`
 2. Review the design documents for architectural context
 3. Document any new insights or decisions in the appropriate chat document
 
@@ -262,7 +262,7 @@ At the end of each development session, the following steps should be completed:
 
 ### 1. Memorialize the Chat
 
-Create a new chat document in `doc/chats/` following the naming convention:
+Create a new chat document in `docs/chats/` following the naming convention:
 - Format: `NNNN-descriptive-name.md` where NNNN is the next sequential number
 - Check existing chat files to determine the next number
 - **Review git diff** to ensure comprehensive coverage of ALL work done:
@@ -288,7 +288,7 @@ Create a commit message following best practices:
 
 ### 3. Update GitHub Pages (if needed)
 
-If design documents, implementation status, or architecture changed during the session, update `doc/pages/index.html` to keep the public site in sync. The site should always reflect the current state of the project.
+If design documents, implementation status, or architecture changed during the session, update `docs/pages/index.html` to keep the public site in sync. The site should always reflect the current state of the project.
 
 ### 4. Update AGENTS.md (if needed)
 

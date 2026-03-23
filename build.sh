@@ -80,7 +80,7 @@ strip_seed_binary() {
 release_seed() {
     local tag="${1:-v0.0.2-seed}"
     local repo="${GITHUB_REPOSITORY:-${DEFAULT_GH_REPO}}"
-    local notes_file="${SCRIPT_DIR}/doc/release-notes/${tag}.md"
+    local notes_file="${SCRIPT_DIR}/docs/release-notes/${tag}.md"
     local asset_dir="${BUILD_DIR}/release"
     local asset_path="${asset_dir}/vibe_kernel_seed"
 

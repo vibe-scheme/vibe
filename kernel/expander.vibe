@@ -1,6 +1,6 @@
 ;; expander.vibe - Macro expansion phase
 ;; Implements simple form-substitution macros.
-;; See doc/design/macro-system.md for architecture.
+;; See docs/design/macro-system.md for architecture.
 
 ;; ============================================================================
 ;; Type definitions (must match parser/codegen layout)

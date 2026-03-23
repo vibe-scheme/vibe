@@ -20,7 +20,7 @@ jobs:
       - name: Renumber placeholder chat files
         run: |
           # Find chat files added in this merge that use the 0000- placeholder prefix
-          placeholder_files=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'doc/chats/0000-*.md')
+          placeholder_files=$(git diff --name-only --diff-filter=A HEAD~1 HEAD -- 'docs/chats/0000-*.md')
 
           if [ -z "$placeholder_files" ]; then
             echo "No placeholder chat files found, nothing to renumber."
@@ -28,7 +28,7 @@ jobs:
           fi
 
           # Find the highest existing chat number (excluding 0000- placeholders)
-          highest=$(ls doc/chats/ | grep -E '^[0-9]{4}-' | grep -v '^0000-' | sort | tail -1 | grep -oE '^[0-9]{4}')
+          highest=$(ls docs/chats/ | grep -E '^[0-9]{4}-' | grep -v '^0000-' | sort | tail -1 | grep -oE '^[0-9]{4}')
 
           if [ -z "$highest" ]; then
             next_num=1
@@ -42,7 +42,7 @@ jobs:
             suffix="${basename#0000-}"
             new_name=$(printf "%04d-%s" "$next_num" "$suffix")
             echo "Renumbering: $basename -> $new_name"
-            git mv "$file" "doc/chats/$new_name"
+            git mv "$file" "docs/chats/$new_name"
             next_num=$((next_num + 1))
           done
 

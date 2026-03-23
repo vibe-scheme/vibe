@@ -5029,7 +5029,7 @@
     (llvm:ret-void)))
 
 ;; ============================================================================
-;; Minimal repro for let* + store + br DSL bug (see doc/design/let-star-store-br-bug-resolution-plan.md)
+;; Minimal repro for let* + store + br DSL bug (see docs/design/let-star-store-br-bug-resolution-plan.md)
 ;; When this compiles successfully, the bug is fixed.
 ;; ============================================================================
 (llvm:define-function (test_store_br_bug ()) |void|

@@ -26,7 +26,7 @@ vibe/
 │   ├── util.vibe
 │   └── expander.vibe
 ├── src/              # Future standard library
-├── doc/
+├── docs/
 │   ├── design/       # Design documents
 │   ├── chats/        # Development conversations
 │   ├── pages/        # GitHub Pages site
@@ -96,7 +96,7 @@ export PATH="/usr/lib/llvm-21/bin:$PATH"
 - x86_64: `x86_64-unknown-linux-gnu`
 - ARM64: `aarch64-unknown-linux-gnu`
 
-**Target Initialization**: The compiler detects the target architecture at runtime and initializes the appropriate LLVM target components. See `doc/design/cross-compilation-plan.md` for multi-architecture support plans.
+**Target Initialization**: The compiler detects the target architecture at runtime and initializes the appropriate LLVM target components. See `docs/design/cross-compilation-plan.md` for multi-architecture support plans.
 
 **Cross-Compilation**: Cross-compilation is not currently supported. The compiler will only work on the same architecture/OS it was built on.
 
@@ -157,11 +157,11 @@ Once built, the compiler can be used to compile Vibe source files:
 ## Documentation
 
 - **[AGENTS.md](AGENTS.md)** — Guide for AI agents working on this project
-- **[doc/design/vision.md](doc/design/vision.md)** — Mission, goals, architecture
-- **[doc/design/macro-system.md](doc/design/macro-system.md)** — Macro implementation roadmap
-- **[doc/design/primitive-forms.md](doc/design/primitive-forms.md)** — Primitive vs derived forms
-- **[doc/design/r7rs-compliance.md](doc/design/r7rs-compliance.md)** — R7RS compliance tracker
-- **[doc/README.md](doc/README.md)** — Documentation index
+- **[docs/design/vision.md](docs/design/vision.md)** — Mission, goals, architecture
+- **[docs/design/macro-system.md](docs/design/macro-system.md)** — Macro implementation roadmap
+- **[docs/design/primitive-forms.md](docs/design/primitive-forms.md)** — Primitive vs derived forms
+- **[docs/design/r7rs-compliance.md](docs/design/r7rs-compliance.md)** — R7RS compliance tracker
+- **[docs/README.md](docs/README.md)** — Documentation index
 
 ## Development Status
 
@@ -176,7 +176,7 @@ Once built, the compiler can be used to compile Vibe source files:
 
 ## Known Limitations
 
-1. **Target Triple**: Hardcoded to `arm64-apple-darwin` in `kernel/codegen.vibe`. See `doc/design/cross-compilation-plan.md` for multi-architecture plans.
+1. **Target Triple**: Hardcoded to `arm64-apple-darwin` in `kernel/codegen.vibe`. See `docs/design/cross-compilation-plan.md` for multi-architecture plans.
 
 2. **Platform Support**: Currently configured for macOS. Linux support requires updating the target triple in `kernel/codegen.vibe`.
 

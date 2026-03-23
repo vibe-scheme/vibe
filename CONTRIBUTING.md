@@ -10,7 +10,7 @@ This isn't a stylistic preference; it's central to what Vibe is. The project's g
 
 Every PR must include:
 
-1. **Exactly one new chat document** in `doc/chats/` documenting the conversation that produced the changes.
+1. **Exactly one new chat document** in `docs/chats/` documenting the conversation that produced the changes.
 
 2. **The chat file must use the placeholder prefix `0000-`**, e.g. `0000-my-feature.md`. A GitHub Action will automatically renumber it to the next sequential number when the PR is merged.
 
@@ -28,9 +28,9 @@ Every PR must include:
 ### Understand the project
 
 - Read [`AGENTS.md`](AGENTS.md) for full development guidance and DSL conventions
-- Read [`doc/design/vision.md`](doc/design/vision.md) for Vibe's goals and architecture
-- Read [`doc/design/macro-system.md`](doc/design/macro-system.md) for the current implementation roadmap
-- Browse [`doc/chats/`](doc/chats/) to see how previous sessions were conducted
+- Read [`docs/design/vision.md`](docs/design/vision.md) for Vibe's goals and architecture
+- Read [`docs/design/macro-system.md`](docs/design/macro-system.md) for the current implementation roadmap
+- Browse [`docs/chats/`](docs/chats/) to see how previous sessions were conducted
 
 ### Build from source
 
@@ -53,7 +53,7 @@ On a clean checkout, the build script downloads a seed compiler (see [`RELEASING
 1. Start a conversation with an AI model about the change you want to make.
 2. Work through the implementation together, building and testing as you go.
 3. At the end of the session, have the model create the chat document.
-4. Name it `0000-descriptive-name.md` and place it in `doc/chats/`.
+4. Name it `0000-descriptive-name.md` and place it in `docs/chats/`.
 5. Open a PR. The chat will be renumbered automatically on merge.
 
 ## Code Standards
@@ -68,6 +68,6 @@ On a clean checkout, the build script downloads a seed compiler (see [`RELEASING
 
 If your changes affect the architecture, design decisions, or implementation status:
 
-- Update the relevant design documents in `doc/design/`
-- Update `doc/pages/index.html` if the public site needs to reflect the changes
+- Update the relevant design documents in `docs/design/`
+- Update `docs/pages/index.html` if the public site needs to reflect the changes
 - Update `AGENTS.md` if new conventions or patterns were established

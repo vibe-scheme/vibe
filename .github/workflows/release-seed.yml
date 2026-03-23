@@ -46,7 +46,7 @@ jobs:
           TAG="${{ inputs.tag }}"
           REPO="${{ github.repository }}"
           ASSET="build/release/vibe_kernel_seed"
-          NOTES_FILE="doc/release-notes/${TAG}.md"
+          NOTES_FILE="docs/release-notes/${TAG}.md"
           if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" "$ASSET" --repo "$REPO" --clobber
           elif [ -f "$NOTES_FILE" ]; then

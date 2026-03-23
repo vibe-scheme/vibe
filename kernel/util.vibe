@@ -1,6 +1,6 @@
 ;; util.vibe - AST construction and general utilities
 ;; Extracted from codegen.vibe for use by expander and codegen.
-;; See doc/design/macro-system.md for extraction rationale.
+;; See docs/design/macro-system.md for extraction rationale.
 
 ;; ============================================================================
 ;; Type definitions

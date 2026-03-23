@@ -26,7 +26,7 @@ Requires [GitHub CLI](https://cli.github.com/) (`gh`) logged in with permission 
 This runs `./build.sh test`, copies `build/bin/vibe_kernel` to `build/release/vibe_kernel_seed`, strips it, then:
 
 - If the GitHub release **exists**: uploads/replaces the `vibe_kernel_seed` asset (`--clobber`).
-- Otherwise: `gh release create` with `doc/release-notes/<tag>.md` when that file exists.
+- Otherwise: `gh release create` with `docs/release-notes/<tag>.md` when that file exists.
 
 Override repo: `GITHUB_REPOSITORY=owner/repo ./build.sh release-seed …`
 
