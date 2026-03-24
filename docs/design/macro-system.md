@@ -89,6 +89,14 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
 
 More elaborate Phase 1 examples (ellipsis, multiple clauses, `with-field`-style nested structure in the pattern) await the features listed above.
 
+### Kernel convenience macros (incremental)
+
+The kernel may introduce small `syntax-rules` macros that expand to repeated `llvm:*` shapes (same restrictions as above: linear patterns, atom variables, first clause only). Example in use: **`vibe:ast-null?`** in `kernel/expander.vibe` expands `(vibe:ast-null? p)` to `(llvm:icmp 'eq p (llvm:const-null |%ASTNode*|))`, reducing noise for null `ASTNode*` checks.
+
+**Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode; the macro environment does not carry across files in one build step. R7RS **libraries** and a long-term module story are **deferred** until after the kernel is further along and work emphasizes full R7RS support.
+
+**Possible next step (not implemented yet)**: To share macros across several kernel sources without committing to library semantics, the toolchain might someday treat **multiple files as one logical unit** (e.g. driver takes a list of paths and concatenates sources before parse/expand). See `primitive-forms.md` (macro documentation under `define-syntax`) for the design note.
+
 ### Example: future Phase 1 (full `syntax-rules`)
 
 When ellipsis, literals, and multiple clauses exist, the following style of kernel macro becomes possible (not valid with the current v1 matcher):

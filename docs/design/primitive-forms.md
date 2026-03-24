@@ -88,6 +88,16 @@ The macro system cannot itself be a macro — that would be circular. `define-sy
 
 **Vibe implementation**: `define-syntax` registers a macro in the compile-time macro environment. `syntax-rules` compiles pattern/template pairs into a transformation function that the expander invokes during macro expansion.
 
+**Macro documentation (contrast with `define` docstrings)**:
+
+- **Not inside `syntax-rules`**: Each clause after the literals list is a pattern/template pair. A “documentation clause” is not viable; a string in pattern position would be a real pattern, not prose.
+- **R7RS-safe transformer specs**: The second subform of `define-syntax` may be any `<expression>` whose value is a transformer. A doc string can sit in a sequencing wrapper evaluated once at install time, e.g. `(begin "…" (syntax-rules …))`, where the string’s value is discarded and the last subform yields the transformer. Procedural transformers (`lambda` of syntax) are a separate story (doc as first body expression would run per expansion unless stripped).
+- **Portable `define-vibe-syntax` sketch**: A user-level macro can expand to `(define-syntax name transformer)` and match a doc subform that is **omitted from the template** — syntactically fine R7RS-style code, but the doc is not attached unless something else records it.
+- **Planned Vibe form**: A future **`define-vibe-syntax`** may be handled like other top-level definition forms in the expander: parse **name**, **docstring**, **transformer**; register documentation (same registry story as planned for `define` docstrings) and register the macro; surface syntax stays parallel to `define` without relying on leading comments or `begin` noise. Not implemented yet.
+- **Compile unit today**: Each kernel `.vibe` file is compiled to its own bitcode module (see the `compile_*` rules in `CMakeLists.txt`), so the macro environment is **per file** for a single run of the compiler on that source.
+- **Libraries deferred**: R7RS libraries and related packaging are out of scope until the compiler kernel is farther along and work shifts toward full R7RS support. The text above describes the current constraint and possible evolution, not a settled module design.
+- **Future direction (explore later; not a commitment)**: Sharing macros across kernel files without deciding library semantics might use **multiple paths as one logical compilation unit** — for example, the driver accepting a **list of file names** and **concatenating** their contents in memory before lex/parse/expand, so early `define-syntax` forms are visible to the rest of that unit. This is a **next step to evaluate**, not a current implementation task.
+
 ## Derived Forms Catalog
 
 R7RS Section 7.3 provides macro definitions for all derived forms. The following table summarizes each derived form and what it reduces to:

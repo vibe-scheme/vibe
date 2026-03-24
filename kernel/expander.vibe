@@ -40,6 +40,12 @@
 ;; ============================================================================
 (llvm:define-constant .str.define_syntax |[14 x i8]| #u8(100 101 102 105 110 101 45 115 121 110 116 97 120 0))
 
+;; File-local convenience macro (macro env is per compilation unit; see primitive-forms.md).
+(define-syntax vibe:ast-null?
+  (syntax-rules ()
+    ((vibe:ast-null? ptr)
+     (llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|)))))
+
 ;; ============================================================================
 ;; expander_reverse_list
 ;; ============================================================================
@@ -50,9 +56,8 @@
     (llvm:store exprs current_ptr)
     (llvm:br 'loop)
     (llvm:label 'loop
-      (let* ((current (llvm:load current_ptr |%ASTNode*|))
-             (is_null (llvm:icmp 'eq current (llvm:const-null |%ASTNode*|))))
-        (llvm:br is_null 'done 'cons_one)))
+      (let* ((current (llvm:load current_ptr |%ASTNode*|)))
+        (llvm:br (vibe:ast-null? current) 'done 'cons_one)))
     (llvm:label 'cons_one
       (let* ((current (llvm:load current_ptr |%ASTNode*|))
              (car_ptr (llvm:gep |%ASTNode| current 0 4))
@@ -71,8 +76,7 @@
 ;; expander_is_define_syntax
 ;; ============================================================================
 (llvm:define-function (expander_is_define_syntax (form |%ASTNode*|)) |i32|
-  (let* ((form_null (llvm:icmp 'eq form (llvm:const-null |%ASTNode*|))))
-    (llvm:br form_null 'no 'check_list))
+  (llvm:br (vibe:ast-null? form) 'no 'check_list)
   (llvm:label 'check_list
     (let* ((type_ptr (llvm:gep |%ASTNode| form 0 0))
            (form_type (llvm:load type_ptr |i32|))
@@ -80,9 +84,8 @@
       (llvm:br is_list 'check_car 'no)))
   (llvm:label 'check_car
     (let* ((car_ptr (llvm:gep |%ASTNode| form 0 4))
-           (car_val (llvm:load car_ptr |%ASTNode*|))
-           (car_null (llvm:icmp 'eq car_val (llvm:const-null |%ASTNode*|))))
-      (llvm:br car_null 'no 'check_atom)))
+           (car_val (llvm:load car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? car_val) 'no 'check_atom)))
   (llvm:label 'check_atom
     (let* ((car_ptr (llvm:gep |%ASTNode| form 0 4))
            (car_val (llvm:load car_ptr |%ASTNode*|))
@@ -107,8 +110,7 @@
 ;; expander_is_atom_node / expander_is_list_node
 ;; ============================================================================
 (llvm:define-function (expander_is_atom_node (node |%ASTNode*|)) |i32|
-  (let* ((node_null (llvm:icmp 'eq node (llvm:const-null |%ASTNode*|))))
-    (llvm:br node_null 'no 'check))
+  (llvm:br (vibe:ast-null? node) 'no 'check)
   (llvm:label 'check
     (let* ((type_ptr (llvm:gep |%ASTNode| node 0 0))
            (t (llvm:load type_ptr |i32|))
@@ -120,8 +122,7 @@
     (llvm:ret (llvm:const-int |i32| 0))))
 
 (llvm:define-function (expander_is_list_node (node |%ASTNode*|)) |i32|
-  (let* ((node_null (llvm:icmp 'eq node (llvm:const-null |%ASTNode*|))))
-    (llvm:br node_null 'no 'check))
+  (llvm:br (vibe:ast-null? node) 'no 'check)
   (llvm:label 'check
     (let* ((type_ptr (llvm:gep |%ASTNode| node 0 0))
            (t (llvm:load type_ptr |i32|))
@@ -164,8 +165,7 @@
 ;; expander_sym_in_seen_list
 ;; ============================================================================
 (llvm:define-function (expander_sym_in_seen_list (seen |%ASTNode*|) (sym |%ASTNode*|)) |i32|
-  (let* ((seen_null (llvm:icmp 'eq seen (llvm:const-null |%ASTNode*|))))
-    (llvm:br seen_null 'not_found 'check_car))
+  (llvm:br (vibe:ast-null? seen) 'not_found 'check_car)
   (llvm:label 'check_car
     (let* ((head (llvm:load (llvm:gep |%ASTNode| seen 0 4) |%ASTNode*|))
            (eq (llvm:call expander_atoms_equal head sym))
@@ -184,8 +184,7 @@
 ;; expander_validate_pattern_tail_atoms_rec
 ;; ============================================================================
 (llvm:define-function (expander_validate_pattern_tail_atoms_rec (tail |%ASTNode*|) (seen |%ASTNode*|)) |i32|
-  (let* ((tail_null (llvm:icmp 'eq tail (llvm:const-null |%ASTNode*|))))
-    (llvm:br tail_null 'ok_empty 'check_cons))
+  (llvm:br (vibe:ast-null? tail) 'ok_empty 'check_cons)
   (llvm:label 'ok_empty
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'check_cons
@@ -219,8 +218,7 @@
 ;; expander_validate_macro_pattern
 ;; ============================================================================
 (llvm:define-function (expander_validate_macro_pattern (name |%ASTNode*|) (pattern |%ASTNode*|)) |i32|
-  (let* ((pat_null (llvm:icmp 'eq pattern (llvm:const-null |%ASTNode*|))))
-    (llvm:br pat_null 'bad 'is_list))
+  (llvm:br (vibe:ast-null? pattern) 'bad 'is_list)
   (llvm:label 'is_list
     (let* ((is_list (llvm:call expander_is_list_node pattern))
            (ok_list (llvm:icmp 'eq is_list (llvm:const-int |i32| 1))))
@@ -242,44 +240,38 @@
 ;; Returns (name . (pattern . template)) or null on failure.
 ;; ============================================================================
 (llvm:define-function (expander_parse_simple_macro (form |%ASTNode*|)) |%ASTNode*|
-  (let* ((form_null (llvm:icmp 'eq form (llvm:const-null |%ASTNode*|))))
-    (llvm:br form_null 'fail 'get_cdr))
+  (llvm:br (vibe:ast-null? form) 'fail 'get_cdr)
   (llvm:label 'get_cdr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
-           (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
-           (cdr_null (llvm:icmp 'eq form_cdr (llvm:const-null |%ASTNode*|))))
-      (llvm:br cdr_null 'fail 'get_name)))
+           (form_cdr (llvm:load cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? form_cdr) 'fail 'get_name)))
   (llvm:label 'get_name
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (name_car_ptr (llvm:gep |%ASTNode| form_cdr 0 4))
-           (name (llvm:load name_car_ptr |%ASTNode*|))
-           (name_null (llvm:icmp 'eq name (llvm:const-null |%ASTNode*|))))
-      (llvm:br name_null 'fail 'get_syntax_rules)))
+           (name (llvm:load name_car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? name) 'fail 'get_syntax_rules)))
   ;; form_cdr_cdr is the tail cons whose CAR is (syntax-rules ...), not syntax-rules itself.
   (llvm:label 'get_syntax_rules
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'get_syntax_rules_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'get_syntax_rules_sr)))
   (llvm:label 'get_syntax_rules_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
            (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
            (sr_car_ptr (llvm:gep |%ASTNode| wrapper 0 4))
-           (sr (llvm:load sr_car_ptr |%ASTNode*|))
-           (sr_null (llvm:icmp 'eq sr (llvm:const-null |%ASTNode*|))))
-      (llvm:br sr_null 'fail 'get_clauses)))
+           (sr (llvm:load sr_car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? sr) 'fail 'get_clauses)))
   (llvm:label 'get_clauses
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'get_clauses_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'get_clauses_sr)))
   (llvm:label 'get_clauses_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
@@ -288,16 +280,14 @@
            (sr_car_ptr (llvm:gep |%ASTNode| wrapper 0 4))
            (sr (llvm:load sr_car_ptr |%ASTNode*|))
            (sr_cdr_ptr (llvm:gep |%ASTNode| sr 0 5))
-           (sr_cdr (llvm:load sr_cdr_ptr |%ASTNode*|))
-           (sr_cdr_null (llvm:icmp 'eq sr_cdr (llvm:const-null |%ASTNode*|))))
-      (llvm:br sr_cdr_null 'fail 'get_first_clause)))
+           (sr_cdr (llvm:load sr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? sr_cdr) 'fail 'get_first_clause)))
   (llvm:label 'get_first_clause
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'get_first_clause_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'get_first_clause_sr)))
   (llvm:label 'get_first_clause_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
@@ -308,18 +298,16 @@
            (sr_cdr_ptr (llvm:gep |%ASTNode| sr 0 5))
            (sr_cdr (llvm:load sr_cdr_ptr |%ASTNode*|))
            (clauses_cdr_ptr (llvm:gep |%ASTNode| sr_cdr 0 5))
-           (clauses_cdr (llvm:load clauses_cdr_ptr |%ASTNode*|))
-           (clauses_cdr_null (llvm:icmp 'eq clauses_cdr (llvm:const-null |%ASTNode*|))))
-      (llvm:br clauses_cdr_null 'fail 'extract_template)))
+           (clauses_cdr (llvm:load clauses_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? clauses_cdr) 'fail 'extract_template)))
   (llvm:label 'extract_template
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (name_car_ptr (llvm:gep |%ASTNode| form_cdr 0 4))
            (name (llvm:load name_car_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'extract_template_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'extract_template_sr)))
   (llvm:label 'extract_template_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
@@ -334,18 +322,16 @@
            (clauses_cdr_ptr (llvm:gep |%ASTNode| sr_cdr 0 5))
            (clauses_cdr (llvm:load clauses_cdr_ptr |%ASTNode*|))
            (clause_car_ptr (llvm:gep |%ASTNode| clauses_cdr 0 4))
-           (clause (llvm:load clause_car_ptr |%ASTNode*|))
-           (clause_null (llvm:icmp 'eq clause (llvm:const-null |%ASTNode*|))))
-      (llvm:br clause_null 'fail 'get_template_from_clause)))
+           (clause (llvm:load clause_car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? clause) 'fail 'get_template_from_clause)))
   (llvm:label 'get_template_from_clause
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (name_car_ptr (llvm:gep |%ASTNode| form_cdr 0 4))
            (name (llvm:load name_car_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'get_template_from_clause_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'get_template_from_clause_sr)))
   (llvm:label 'get_template_from_clause_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
@@ -362,18 +348,16 @@
            (clause_car_ptr (llvm:gep |%ASTNode| clauses_cdr 0 4))
            (clause (llvm:load clause_car_ptr |%ASTNode*|))
            (clause_cdr_ptr (llvm:gep |%ASTNode| clause 0 5))
-           (clause_cdr (llvm:load clause_cdr_ptr |%ASTNode*|))
-           (clause_cdr_null (llvm:icmp 'eq clause_cdr (llvm:const-null |%ASTNode*|))))
-      (llvm:br clause_cdr_null 'fail 'store_results)))
+           (clause_cdr (llvm:load clause_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? clause_cdr) 'fail 'store_results)))
   (llvm:label 'store_results
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
            (name_car_ptr (llvm:gep |%ASTNode| form_cdr 0 4))
            (name (llvm:load name_car_ptr |%ASTNode*|))
            (form_cdr_cdr_ptr (llvm:gep |%ASTNode| form_cdr 0 5))
-           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|))
-           (wrap_null (llvm:icmp 'eq wrapper (llvm:const-null |%ASTNode*|))))
-      (llvm:br wrap_null 'fail 'store_results_sr)))
+           (wrapper (llvm:load form_cdr_cdr_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? wrapper) 'fail 'store_results_sr)))
   (llvm:label 'store_results_sr
     (let* ((cdr_ptr (llvm:gep |%ASTNode| form 0 5))
            (form_cdr (llvm:load cdr_ptr |%ASTNode*|))
@@ -429,22 +413,18 @@
 ;; expander_lookup_macro
 ;; ============================================================================
 (llvm:define-function (expander_lookup_macro (env |%ASTNode*|) (name_ast |%ASTNode*|)) |%ASTNode*|
-  (let* ((env_null (llvm:icmp 'eq env (llvm:const-null |%ASTNode*|))))
-    (llvm:br env_null 'not_found 'iter))
+  (llvm:br (vibe:ast-null? env) 'not_found 'iter)
   (llvm:label 'iter
-    (let* ((env_null_inner (llvm:icmp 'eq env (llvm:const-null |%ASTNode*|))))
-      (llvm:br env_null_inner 'not_found 'check_pair)))
+    (llvm:br (vibe:ast-null? env) 'not_found 'check_pair))
   (llvm:label 'check_pair
     (let* ((entry_car_ptr (llvm:gep |%ASTNode| env 0 4))
-           (entry (llvm:load entry_car_ptr |%ASTNode*|))
-           (entry_null (llvm:icmp 'eq entry (llvm:const-null |%ASTNode*|))))
-      (llvm:br entry_null 'next 'compare)))
+           (entry (llvm:load entry_car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? entry) 'next 'compare)))
   (llvm:label 'compare
     (let* ((entry_car_ptr (llvm:gep |%ASTNode| env 0 4))
            (entry (llvm:load entry_car_ptr |%ASTNode*|))
-           (macro_name (llvm:load (llvm:gep |%ASTNode| entry 0 4) |%ASTNode*|))
-           (macro_name_null (llvm:icmp 'eq macro_name (llvm:const-null |%ASTNode*|))))
-      (llvm:br macro_name_null 'next 'get_lens)))
+           (macro_name (llvm:load (llvm:gep |%ASTNode| entry 0 4) |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? macro_name) 'next 'get_lens)))
   (llvm:label 'get_lens
     (let* ((entry_car_ptr (llvm:gep |%ASTNode| env 0 4))
            (entry (llvm:load entry_car_ptr |%ASTNode*|))
@@ -499,8 +479,7 @@
 ;; expander_binding_lookup
 ;; ============================================================================
 (llvm:define-function (expander_binding_lookup (bindings |%ASTNode*|) (sym |%ASTNode*|)) |%ASTNode*|
-  (let* ((b_null (llvm:icmp 'eq bindings (llvm:const-null |%ASTNode*|))))
-    (llvm:br b_null 'miss 'check))
+  (llvm:br (vibe:ast-null? bindings) 'miss 'check)
   (llvm:label 'check
     (let* ((entry (llvm:load (llvm:gep |%ASTNode| bindings 0 4) |%ASTNode*|))
            (ev (llvm:load (llvm:gep |%ASTNode| entry 0 4) |%ASTNode*|))
@@ -522,18 +501,15 @@
 ;; expander_match_linear_rec
 ;; ============================================================================
 (llvm:define-function (expander_match_linear_rec (p |%ASTNode*|) (i |%ASTNode*|) (bindings |%ASTNode*|) (is_first |i32|) (out_final |%ASTNode**|)) |i32|
-  (let* ((p_null (llvm:icmp 'eq p (llvm:const-null |%ASTNode*|))))
-    (llvm:br p_null 'p_null 'p_nonnull))
+  (llvm:br (vibe:ast-null? p) 'p_null 'p_nonnull)
   (llvm:label 'p_null
-    (let* ((i_null (llvm:icmp 'eq i (llvm:const-null |%ASTNode*|))))
-      (llvm:br i_null 'success_terminal 'fail)))
+    (llvm:br (vibe:ast-null? i) 'success_terminal 'fail))
   (llvm:label 'success_terminal
     (let* ((one (llvm:const-int |i32| 1)))
       (llvm:store bindings out_final)
       (llvm:ret one)))
   (llvm:label 'p_nonnull
-    (let* ((i_null2 (llvm:icmp 'eq i (llvm:const-null |%ASTNode*|))))
-      (llvm:br i_null2 'fail 'both_nonnull)))
+    (llvm:br (vibe:ast-null? i) 'fail 'both_nonnull))
   (llvm:label 'both_nonnull
     (let* ((p_list (llvm:call expander_is_list_node p))
            (p_ok (llvm:icmp 'eq p_list (llvm:const-int |i32| 1))))
@@ -585,8 +561,7 @@
 ;; expander_substitute_template
 ;; ============================================================================
 (llvm:define-function (expander_substitute_template (template |%ASTNode*|) (bindings |%ASTNode*|)) |%ASTNode*|
-  (let* ((t_null (llvm:icmp 'eq template (llvm:const-null |%ASTNode*|))))
-    (llvm:br t_null 'ret_null 'dispatch))
+  (llvm:br (vibe:ast-null? template) 'ret_null 'dispatch)
   (llvm:label 'ret_null
     (llvm:ret (llvm:const-null |%ASTNode*|)))
   (llvm:label 'dispatch
@@ -594,9 +569,8 @@
            (atom_yes (llvm:icmp 'eq is_atom (llvm:const-int |i32| 1))))
       (llvm:br atom_yes 'subst_atom 'subst_list)))
   (llvm:label 'subst_atom
-    (let* ((val (llvm:call expander_binding_lookup bindings template))
-           (val_null (llvm:icmp 'eq val (llvm:const-null |%ASTNode*|))))
-      (llvm:br val_null 'atom_keep 'atom_replace)))
+    (let* ((val (llvm:call expander_binding_lookup bindings template)))
+      (llvm:br (vibe:ast-null? val) 'atom_keep 'atom_replace)))
   (llvm:label 'atom_replace
     (let* ((val (llvm:call expander_binding_lookup bindings template)))
       (llvm:ret val)))
@@ -622,10 +596,9 @@
 ;; otherwise expand car and cdr. Re-expands after substitution for nested macros.
 ;; ============================================================================
 (llvm:define-function (expander_expand_expr (expr |%ASTNode*|) (env |%ASTNode*|)) |%ASTNode*|
-  (let* ((expr_null (llvm:icmp 'eq expr (llvm:const-null |%ASTNode*|)))
-         (bindings_slot (llvm:alloca |%ASTNode*|))
+  (let* ((bindings_slot (llvm:alloca |%ASTNode*|))
          (template_slot (llvm:alloca |%ASTNode*|)))
-    (llvm:br expr_null 'ret_null 'not_null)
+    (llvm:br (vibe:ast-null? expr) 'ret_null 'not_null)
     (llvm:label 'ret_null
       (llvm:ret (llvm:const-null |%ASTNode*|)))
     (llvm:label 'not_null
@@ -645,9 +618,8 @@
     (llvm:label 'maybe_macro
       (let* ((ecar_ptr (llvm:gep |%ASTNode| expr 0 4))
              (ecar (llvm:load ecar_ptr |%ASTNode*|))
-             (spec (llvm:call expander_lookup_macro env ecar))
-             (spec_null (llvm:icmp 'eq spec (llvm:const-null |%ASTNode*|))))
-        (llvm:br spec_null 'recurse 'stash_spec)))
+             (spec (llvm:call expander_lookup_macro env ecar)))
+        (llvm:br (vibe:ast-null? spec) 'recurse 'stash_spec)))
     (llvm:label 'stash_spec
       (let* ((ecar_ptr (llvm:gep |%ASTNode| expr 0 4))
              (ecar (llvm:load ecar_ptr |%ASTNode*|))
@@ -691,9 +663,8 @@
     (llvm:store reversed current_ptr)
     (llvm:br 'loop)
     (llvm:label 'loop
-      (let* ((current (llvm:load current_ptr |%ASTNode*|))
-             (is_null (llvm:icmp 'eq current (llvm:const-null |%ASTNode*|))))
-        (llvm:br is_null 'done 'process)))
+      (let* ((current (llvm:load current_ptr |%ASTNode*|)))
+        (llvm:br (vibe:ast-null? current) 'done 'process)))
     (llvm:label 'process
       (let* ((current (llvm:load current_ptr |%ASTNode*|))
              (form (llvm:load (llvm:gep |%ASTNode| current 0 4) |%ASTNode*|))
@@ -703,9 +674,8 @@
         (llvm:store next current_ptr)
         (llvm:br 'check_result)))
     (llvm:label 'check_result
-      (let* ((result (llvm:load result_ptr |%ASTNode*|))
-             (result_null (llvm:icmp 'eq result (llvm:const-null |%ASTNode*|))))
-        (llvm:br result_null 'advance 'cons_output)))
+      (let* ((result (llvm:load result_ptr |%ASTNode*|)))
+        (llvm:br (vibe:ast-null? result) 'advance 'cons_output)))
     (llvm:label 'advance
       (llvm:br 'loop))
     (llvm:label 'cons_output
@@ -726,9 +696,8 @@
   (let* ((is_ds (llvm:call expander_is_define_syntax form)))
     (llvm:br (llvm:icmp 'eq is_ds (llvm:const-int |i32| 1)) 'handle_define_syntax 'expand))
   (llvm:label 'handle_define_syntax
-    (let* ((pair (llvm:call expander_parse_simple_macro form))
-           (pair_null (llvm:icmp 'eq pair (llvm:const-null |%ASTNode*|))))
-      (llvm:br pair_null 'expand 'add_to_env)))
+    (let* ((pair (llvm:call expander_parse_simple_macro form)))
+      (llvm:br (vibe:ast-null? pair) 'expand 'add_to_env)))
   (llvm:label 'add_to_env
     (let* ((entry (llvm:call expander_parse_simple_macro form))
            (env (llvm:load env_ptr |%ASTNode*|))
