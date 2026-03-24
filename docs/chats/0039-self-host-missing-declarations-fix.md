@@ -1,7 +1,7 @@
 # Chat 0039: Fix Self-Host Build — Missing Forward Declarations
 
-**Date**: 2026-03-14
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor Agent)
+**Date**: 2026-03-14  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor Agent)  
 
 ## Overview
 

@@ -1,7 +1,7 @@
 # Chat 0052: Inline top-level macro expansion in the driver
 
-**Date**: 2026-03-20
-**Model**: Composer 2 (Cursor agent)
+**Date**: 2026-03-20  
+**Model**: Composer 2 (Cursor agent)  
 **Context**: Implement the shortest path to a working simple substitution (unhygienic) macro: expand each top-level form in the parse loop before kernel dispatch, and fix `define-syntax` parsing so `syntax-rules` is read from the correct AST shape.
 
 ## Summary

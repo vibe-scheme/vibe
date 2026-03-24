@@ -1,7 +1,7 @@
 # Chat 0026: Runtime Removal, FFI Migration to Vibe, and Source Tree Reorganization
 
-**Date**: 2026-02-08
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-08  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 

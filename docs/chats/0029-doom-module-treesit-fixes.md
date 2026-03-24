@@ -1,7 +1,7 @@
 # Chat 0029: Tree-sitter Grammar, Emacs Modes, and Doom Module
 
-**Date**: 2026-03-03
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-03  
+**Model**: Cursor Composer 1.5  
 
 ## Overview
 

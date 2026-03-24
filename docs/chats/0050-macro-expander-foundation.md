@@ -1,7 +1,7 @@
 # Macro Expander Foundation
 
-**Date**: 2026-03-18
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-18  
+**Model**: Cursor Composer 1.5  
 **Context**: Implemented the Macro Expander Foundation Plan from `.cursor/plans/Macro Expander Foundation-f30385fe.plan.md`
 
 ## Overview

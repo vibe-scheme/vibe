@@ -1,7 +1,7 @@
 # Chat 0023: Codegen Bugfixes and lexer_no_vibe.ll Removal
 
-**Date**: 2026-02-08
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-08  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 

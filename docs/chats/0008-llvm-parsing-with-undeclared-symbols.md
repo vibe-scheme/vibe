@@ -1,7 +1,7 @@
 # Chat 0008: LLVM Parsing with Undeclared Symbols and define-llvm-function DSL Implementation
 
-**Date**: 2025-12-14
-**Model**: Cursor Composer 1
+**Date**: 2025-12-14  
+**Model**: Cursor Composer 1  
 **Context**: Investigating how to resolve the issue where `define-bitcode-function` fails when function bodies reference constants defined by `define-bitcode-constant`. The current workaround hardcodes external declarations for `printf` and `hello_string`, which doesn't scale. Introduced a new `define-llvm-function` form that replaces `define-bitcode-function` (which uses IR string bodies) with a Domain Specific Language (DSL) connected to the LLVM builder API for programmatic instruction building. This change aims to eliminate IR parsing and handle undeclared symbols naturally, leading to cleaner and more maintainable code generation. This is the initial implementation of the DSL concept.
 
 ## Key Insight

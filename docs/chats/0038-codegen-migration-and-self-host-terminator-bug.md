@@ -1,7 +1,7 @@
 # Codegen Migration and Self-Host Terminator Bug
 
-**Date**: 2025-03-12
-**Model**: Cursor Composer
+**Date**: 2025-03-12  
+**Model**: Cursor Composer  
 **Context**: Codegen migration (Phase 1, Tier A, helpers), ICmp predicate fix, balanced parens fix. Self-host build fails with "Basic Block does not have terminator"; investigated differences between `codegen.ll` and `codegen_no_vibe.ll` + `codegen.vibe`.
 
 ## Session Overview

@@ -1,7 +1,7 @@
 # Chat 0040: Codegen Migration Phase 1-3 (Partial)
 
-**Date**: 2026-03-14
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-14  
+**Model**: Cursor Composer 1.5  
 **Context**: Implementing the Codegen Migration Plan (codegen_no_vibe.ll to codegen.vibe)
 
 ## Session Overview

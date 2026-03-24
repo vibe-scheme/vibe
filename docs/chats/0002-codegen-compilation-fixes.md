@@ -1,7 +1,7 @@
 # Chat 0002: Code Generator Compilation Fixes
 
-**Date**: 2025-12-04
-**Model**: Cursor Composer 1
+**Date**: 2025-12-04  
+**Model**: Cursor Composer 1  
 **Context**: Fixing LLVM IR compilation errors in the code generator module (`bootstrap/compiler/codegen.ll`)
 
 ## Overview

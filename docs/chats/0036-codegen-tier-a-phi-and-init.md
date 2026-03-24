@@ -1,7 +1,7 @@
 # Chat 0036: Codegen Tier A Migration, Phi Node Guidance, and Codegen Init
 
-**Date**: 2026-03-12
-**Model**: Cursor Composer
+**Date**: 2026-03-12  
+**Model**: Cursor Composer  
 **Context**: Tier A codegen migration; phi node guidance (correcting chat 0034); codegen_init migration; chat immutability policy.
 
 ## Session Overview

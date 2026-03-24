@@ -1,7 +1,7 @@
 # Chat 0024: Parser Partial Migration to Vibe DSL
 
-**Date**: 2026-02-08
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-08  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 

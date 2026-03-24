@@ -1,7 +1,7 @@
 # Chat 0005: Migrate LLVM IR Generation to C API
 
-**Date**: 2025-12-06
-**Model**: Cursor Composer 1
+**Date**: 2025-12-06  
+**Model**: Cursor Composer 1  
 **Context**: Migrating from text-based LLVM IR generation to direct LLVM C API calls for programmatic bitcode generation
 
 ## Overview

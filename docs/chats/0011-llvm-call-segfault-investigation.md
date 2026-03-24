@@ -1,7 +1,7 @@
 # Chat 0011: LLVM Call Segfault Investigation
 
-**Date**: 2025-12-17
-**Model**: Cursor Composer 1
+**Date**: 2025-12-17  
+**Model**: Cursor Composer 1  
 **Context**: Investigating segfault in `LLVMBuildCall2` when building function calls in DSL codegen
 
 ## Overview

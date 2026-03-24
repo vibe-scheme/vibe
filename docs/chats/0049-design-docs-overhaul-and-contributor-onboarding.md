@@ -1,7 +1,7 @@
 # Chat 0049: Design Docs Overhaul and Contributor Onboarding
 
-**Date**: 2026-03-17
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor Agent)
+**Date**: 2026-03-17  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor Agent)  
 **Context**: Post-self-hosting session establishing Vibe's forward-looking design documentation, contributor workflow, and public-facing site.
 
 ## Overview

@@ -1,7 +1,7 @@
 # Chat 0025: Complete Parser Migration and Sync Strategy
 
-**Date**: 2026-02-08
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-08  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 

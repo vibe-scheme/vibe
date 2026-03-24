@@ -1,7 +1,7 @@
 # Chat 0041: Self-Host Kernel IR Bug and Migration Blocker
 
-**Date**: 2026-03-14
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-14  
+**Model**: Cursor Composer 1.5  
 **Context**: Investigating self-host build failure; adding forward declarations per chat 39; documenting the kernel vs bootstrap codegen divergence bug that blocks further migration.
 
 ## Session Overview

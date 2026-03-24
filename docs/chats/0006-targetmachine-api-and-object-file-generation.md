@@ -1,7 +1,7 @@
 # Chat 0006: TargetMachine API Migration and Direct Object File Generation
 
-**Date**: 2025-12-10
-**Model**: Cursor Composer 1
+**Date**: 2025-12-10  
+**Model**: Cursor Composer 1  
 **Context**: Completing LLVM C API migration by adding TargetMachine API support for direct object file generation, eliminating the need for external `llc` tool
 
 ## Overview

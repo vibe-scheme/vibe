@@ -1,7 +1,7 @@
 # Chat 0010: Parameter Type Collection and Global Lookup Fix
 
-**Date**: 2025-12-16
-**Model**: Cursor Composer 1
+**Date**: 2025-12-16  
+**Model**: Cursor Composer 1  
 **Context**: Continuing work on fixing parameter resolution and function construction. Previously, we fixed parameter name resolution, but discovered that `LLVMCountParams` returned 0, indicating the function wasn't being created with parameters. This session focused on fixing parameter type collection and investigating global constant lookup.
 
 ## Problems Identified

@@ -1,7 +1,7 @@
 # Chat 0022: Lexer Function Migration & llvm:declare-function
 
-**Date**: 2026-02-07
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-07  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 

@@ -1,7 +1,7 @@
 # Chat 0015: llvm:gep Explicit Type Argument and Lexer Number Recognition Fix
 
-**Date**: 2025-12-20
-**Model**: Cursor Composer 1
+**Date**: 2025-12-20  
+**Model**: Cursor Composer 1  
 **Context**: Updating `llvm:gep` DSL to require explicit type argument (matching 1-to-1 LLVM IR translation goal) and fixing lexer to properly recognize numeric literals
 
 ## Overview

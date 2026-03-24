@@ -1,7 +1,7 @@
 # Chat 0033: DSL Deferred Methods Doc and Full Codegen Migration
 
-**Date**: 2026-03-11
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-11  
+**Model**: Cursor Composer 1.5  
 
 ## Overview
 

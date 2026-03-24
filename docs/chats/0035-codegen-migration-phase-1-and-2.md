@@ -1,7 +1,7 @@
 # Chat 0035: Codegen Migration Phase 1 and Phase 2
 
-**Date**: 2026-03-12
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-12  
+**Model**: Cursor Composer 1.5  
 **Context**: Implementing the Codegen Migration Completion Plan to finish migrating functions from `bootstrap/codegen_no_vibe.ll` to `kernel/codegen.vibe` using correct `let*` scoping (labels inside `let*` body).
 
 ## Overview

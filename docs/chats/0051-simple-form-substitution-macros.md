@@ -1,7 +1,7 @@
 # Simple Form-Substitution Macros Implementation
 
-**Date**: 2026-03-18
-**Model**: Cursor Composer 1.5
+**Date**: 2026-03-18  
+**Model**: Cursor Composer 1.5  
 **Context**: Implemented the minimal macro system per the Simple Form-Substitution Macros plan. Build succeeds, self-hosting intact. macro_hello test still fails—documented below for next session.
 
 ## Session Overview

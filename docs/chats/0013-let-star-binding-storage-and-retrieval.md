@@ -1,7 +1,7 @@
 # Chat 0013: let* Binding Storage and Retrieval
 
-**Date**: 2025-12-18
-**Model**: Cursor Composer 1
+**Date**: 2025-12-18  
+**Model**: Cursor Composer 1  
 **Context**: Working on fixing `let*` form's storage/retrieval issue in the Vibe DSL
 
 ## Overview

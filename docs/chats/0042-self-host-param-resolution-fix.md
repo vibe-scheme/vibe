@@ -1,7 +1,7 @@
 # Chat 0042: Self-Host Parameter Resolution Fix
 
-**Date**: 2026-03-14
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-03-14  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Context
 

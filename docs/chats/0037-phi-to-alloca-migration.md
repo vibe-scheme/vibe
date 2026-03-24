@@ -1,7 +1,7 @@
 # Chat 0037: Phi to Alloca Migration
 
-**Date**: 2025-03-12
-**Model**: Cursor Composer
+**Date**: 2025-03-12  
+**Model**: Cursor Composer  
 **Context**: Reverting from phi nodes to alloca/store/load for cross-block values, adopting the Chat 0034 pattern. Rely on future mem2reg optimization pass for performance.
 
 ## Overview

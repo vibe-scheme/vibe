@@ -1,7 +1,7 @@
 # Chat 0027: Codegen Migration Batch 1
 
-**Date**: 2026-02-09
-**Model**: Claude claude-4.6-opus-high-thinking (Cursor)
+**Date**: 2026-02-09  
+**Model**: Claude claude-4.6-opus-high-thinking (Cursor)  
 
 ## Overview
 
