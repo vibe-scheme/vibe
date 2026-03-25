@@ -99,62 +99,123 @@ message(STATUS "Target triple: ${LLVM_TARGET_TRIPLE}")
 # The compiler (vibe_kernel) must already exist in build/bin/ before CMake runs.
 # build.sh ensures this by downloading the seed binary if needed.
 set(VIBE_COMPILER ${CMAKE_BINARY_DIR}/bin/vibe_kernel)
+set(VIBE_CONCAT_SCRIPT ${CMAKE_SOURCE_DIR}/scripts/concat_vibe.sh)
+set(VIBE_KERNEL_TYPES ${CMAKE_SOURCE_DIR}/kernel/types.vibe)
+set(VIBE_KERNEL_MACROS ${CMAKE_SOURCE_DIR}/kernel/macros.vibe)
+set(VIBE_KERNEL_FFI_LIBC ${CMAKE_SOURCE_DIR}/kernel/ffi_libc_darwin.vibe)
+set(VIBE_KERNEL_PREFIX_DEPS
+    ${VIBE_CONCAT_SCRIPT}
+    ${VIBE_KERNEL_TYPES}
+    ${VIBE_KERNEL_MACROS}
+    ${VIBE_KERNEL_FFI_LIBC}
+)
 
 # ============================================================================
 # Compile each kernel module from .vibe source to bitcode
+# Each module is types.vibe + macros.vibe + ffi_libc_darwin.vibe + <module>.vibe
 # ============================================================================
 
 # Lexer
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/lexer.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/lexer.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+    COMMENT "Concatenating lexer.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/lexer.bc
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/lexer.vibe
         -o ${CMAKE_BINARY_DIR}/lexer.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/lexer.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/lexer.vibe
     COMMENT "Compiling lexer.vibe"
 )
 add_custom_target(compile_lexer DEPENDS ${CMAKE_BINARY_DIR}/lexer.bc)
 
 # Parser
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/parser.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/parser.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+    COMMENT "Concatenating parser.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/parser.bc
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/parser.vibe
         -o ${CMAKE_BINARY_DIR}/parser.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/parser.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/parser.vibe
     COMMENT "Compiling parser.vibe"
 )
 add_custom_target(compile_parser DEPENDS ${CMAKE_BINARY_DIR}/parser.bc)
 
 # FFI
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/ffi.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/ffi.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+    COMMENT "Concatenating ffi.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/ffi.bc
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/ffi.vibe
         -o ${CMAKE_BINARY_DIR}/ffi.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/ffi.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/ffi.vibe
     COMMENT "Compiling ffi.vibe"
 )
 add_custom_target(compile_ffi DEPENDS ${CMAKE_BINARY_DIR}/ffi.bc)
 
 # DSL
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/dsl.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/dsl.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+    COMMENT "Concatenating dsl.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/dsl.bc
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/dsl.vibe
         -o ${CMAKE_BINARY_DIR}/dsl.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/dsl.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/dsl.vibe
     COMMENT "Compiling dsl.vibe"
 )
 add_custom_target(compile_dsl DEPENDS ${CMAKE_BINARY_DIR}/dsl.bc)
 
 # Util (outputs .ll text, then assembled to .bc - same as codegen for consistent symbol generation)
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/util.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/util.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+    COMMENT "Concatenating util.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/util.ll
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/util.vibe
         -o ${CMAKE_BINARY_DIR}/util.ll
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/util.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/util.vibe
     COMMENT "Compiling util.vibe"
 )
 add_custom_command(
@@ -168,22 +229,42 @@ add_custom_target(compile_util DEPENDS ${CMAKE_BINARY_DIR}/util.bc)
 
 # Expander
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/expander.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/expander.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+    COMMENT "Concatenating expander.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/expander.bc
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/expander.vibe
         -o ${CMAKE_BINARY_DIR}/expander.bc
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/expander.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/expander.vibe
     COMMENT "Compiling expander.vibe"
 )
 add_custom_target(compile_expander DEPENDS ${CMAKE_BINARY_DIR}/expander.bc)
 
 # Codegen (outputs .ll text, then assembled to .bc)
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/codegen.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/codegen.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+    COMMENT "Concatenating codegen.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/codegen.ll
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/codegen.vibe
         -o ${CMAKE_BINARY_DIR}/codegen.ll
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/codegen.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/codegen.vibe
     COMMENT "Compiling codegen.vibe"
 )
 add_custom_command(
@@ -197,11 +278,21 @@ add_custom_target(compile_codegen DEPENDS ${CMAKE_BINARY_DIR}/codegen.bc)
 
 # Main (outputs .ll text, then assembled to .bc)
 add_custom_command(
+    OUTPUT ${CMAKE_BINARY_DIR}/kernel_concat/main.vibe
+    COMMAND ${VIBE_CONCAT_SCRIPT} ${CMAKE_BINARY_DIR}/kernel_concat/main.vibe
+        ${VIBE_KERNEL_TYPES}
+        ${VIBE_KERNEL_MACROS}
+        ${VIBE_KERNEL_FFI_LIBC}
+        ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+    COMMENT "Concatenating main.vibe"
+)
+add_custom_command(
     OUTPUT ${CMAKE_BINARY_DIR}/main.ll
     COMMAND ${VIBE_COMPILER}
-        ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+        ${CMAKE_BINARY_DIR}/kernel_concat/main.vibe
         -o ${CMAKE_BINARY_DIR}/main.ll
-    DEPENDS ${CMAKE_SOURCE_DIR}/kernel/main.vibe
+    DEPENDS ${VIBE_KERNEL_PREFIX_DEPS} ${CMAKE_BINARY_DIR}/kernel_concat/main.vibe
     COMMENT "Compiling main.vibe"
 )
 add_custom_command(

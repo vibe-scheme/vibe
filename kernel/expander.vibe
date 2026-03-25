@@ -1,26 +1,13 @@
 ;; expander.vibe - Macro expansion phase
 ;; Implements simple form-substitution macros.
 ;; See docs/design/macro-system.md for architecture.
-
-;; ============================================================================
-;; Type definitions (must match parser/codegen layout)
-;; ============================================================================
-(llvm:define-type ASTNode
-  (type |i32|)
-  (atom_type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (car |i8*|)
-  (cdr |i8*|)
-  (line |i32|)
-  (column |i32|))
+;; ASTNode and cross-module declares come from the build-time prefix.
 
 ;; ============================================================================
 ;; Declarations
 ;; ============================================================================
 (llvm:declare-function (create_cons (car |%ASTNode*|) (cdr |%ASTNode*|)) |%ASTNode*|)
 (llvm:declare-function (check_primitive (id |i8*|) (id_len |i64|) (target |i8*|) (target_len |i64|)) |i32|)
-(llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
 (llvm:declare-function (expander_is_atom_node (node |%ASTNode*|)) |i32|)
 (llvm:declare-function (expander_is_list_node (node |%ASTNode*|)) |i32|)
 (llvm:declare-function (expander_atoms_equal (a |%ASTNode*|) (b |%ASTNode*|)) |i32|)
@@ -39,12 +26,6 @@
 ;; String constants
 ;; ============================================================================
 (llvm:define-constant .str.define_syntax |[14 x i8]| #u8(100 101 102 105 110 101 45 115 121 110 116 97 120 0))
-
-;; File-local convenience macro (macro env is per compilation unit; see primitive-forms.md).
-(define-syntax vibe:ast-null?
-  (syntax-rules ()
-    ((vibe:ast-null? ptr)
-     (llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|)))))
 
 ;; ============================================================================
 ;; expander_reverse_list

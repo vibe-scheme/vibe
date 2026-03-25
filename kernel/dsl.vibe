@@ -1,12 +1,7 @@
 ; Bootstrap LLVM DSL for Vibe - LLVM C API wrappers and target initialization
 ; Provides the llvm_* function layer used by the code generator
 ; All LLVM C API functions are statically linked via CMake
-
-; ============================================================================
-; C library functions needed by target initialization
-; ============================================================================
-(llvm:define-ffi-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i64|)) |i32| ("/usr/lib/libSystem.B.dylib" "strncmp") #f)
-(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+; strncmp/free (libc): ffi_libc_darwin.vibe (build prefix).
 
 ; ============================================================================
 ; LLVM C API external declarations (statically linked)
@@ -156,12 +151,12 @@
 ; Returns 1 if ARM64 (arm64 or aarch64), 0 otherwise
 (llvm:define-function (is_arm64_target (triple |i8*|)) |i32|
   (let* ((arm64_str (llvm:gep |[6 x i8]| (llvm:get-global .str.arm64) 0 0))
-         (arm64_cmp (llvm:call strncmp triple arm64_str (llvm:const-int |i64| 5)))
+         (arm64_cmp (llvm:call strncmp triple arm64_str (llvm:const-int |i32| 5)))
          (is_arm64 (llvm:icmp 'eq arm64_cmp (llvm:const-int |i32| 0))))
     (llvm:br is_arm64 'return_arm64 'check_aarch64)
     (llvm:label 'check_aarch64
       (let* ((aarch64_str (llvm:gep |[8 x i8]| (llvm:get-global .str.aarch64) 0 0))
-             (aarch64_cmp (llvm:call strncmp triple aarch64_str (llvm:const-int |i64| 7)))
+             (aarch64_cmp (llvm:call strncmp triple aarch64_str (llvm:const-int |i32| 7)))
              (is_aarch64 (llvm:icmp 'eq aarch64_cmp (llvm:const-int |i32| 0))))
         (llvm:br is_aarch64 'return_arm64 'return_not_arm64)))
     (llvm:label 'return_arm64

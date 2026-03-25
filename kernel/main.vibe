@@ -1,60 +1,16 @@
 ; Bootstrap Compiler Main - Compiler driver in Vibe DSL
 ; All functions including main() defined here
+; Struct types come from the build-time prefix (types.vibe).
 
-; Type definitions (must be before functions that use them)
-(llvm:define-type Token
-  (type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (line |i32|)
-  (column |i32|))
-(llvm:define-type Lexer
-  (source |i8*|)
-  (source_len |i64|)
-  (pos |i64|)
-  (line |i32|)
-  (column |i32|))
-(llvm:define-type ASTNode
-  (type |i32|)
-  (atom_type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (car |i8*|)
-  (cdr |i8*|)
-  (line |i32|)
-  (column |i32|))
-(llvm:define-type Parser
-  (lexer |%Lexer*|)
-  (current |%Token*|))
-(llvm:define-type CodeGen
-  (buffer |i8*|)
-  (buffer_size |i64|)
-  (buffer_pos |i64|)
-  (string_counter |i32|)
-  (label_counter |i32|)
-  (context |i8*|)
-  (module |i8*|)
-  (builder |i8*|)
-  (current_function |i8*|)
-  (param_names |i8*|)
-  (local_values |i8*|)
-  (function_types |i8*|)
-  (constants |i8*|)
-  (types |i8*|)
-  (llvm_functions |i8*|))
-
-; C library declarations (resolved at link time from libc/other modules)
-(llvm:declare-function (malloc (size |i64|)) |i8*|)
-(llvm:declare-function (free (ptr |i8*|)) |void|)
+; C library declarations (malloc/free/strncmp via ffi_libc_darwin.vibe prefix)
 (llvm:declare-function (strlen (s |i8*|)) |i64|)
 (llvm:declare-function (write (fd |i32|) (buf |i8*|) (count |i32|)) |i64|)
 (llvm:declare-function (open (path |i8*|) (flags |i32|) (mode |i32|)) |i32|)
 (llvm:declare-function (read (fd |i32|) (buf |i8*|) (count |i64|)) |i64|)
 (llvm:declare-function (close (fd |i32|)) |i32|)
-(llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
 (llvm:declare-function (strcmp (s1 |i8*|) (s2 |i8*|)) |i32|)
 
-; Lexer/parser/codegen declarations (from linked modules)
+; Lexer/parser/codegen/expander (from linked modules)
 (llvm:declare-function (lex_init (source |i8*|) (len |i64|)) |%Lexer*|)
 (llvm:declare-function (parse_init (lexer |%Lexer*|)) |%Parser*|)
 (llvm:declare-function (parse_expr (parser |%Parser*|)) |%ASTNode*|)

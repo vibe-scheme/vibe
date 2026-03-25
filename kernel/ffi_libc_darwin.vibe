@@ -1,0 +1,14 @@
+; Darwin libc / libSystem via FFI — prepended before every kernel/*.vibe by the build.
+; All symbols resolve through "/usr/lib/libSystem.B.dylib".
+; For non-Darwin targets, plan a sibling file (e.g. ffi_libc_linux.vibe) and CMake OS selection.
+;
+; Do not repeat llvm:define-ffi-function for these names in module bodies (same compile unit).
+
+(llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
+(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
+(llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
+(llvm:define-ffi-function (realloc (ptr |i8*|) (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "realloc") #f)
+; Third argument is size_t; call sites use i32 lengths (zero-extended at the LLVM call).
+(llvm:define-ffi-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32| ("/usr/lib/libSystem.B.dylib" "strncmp") #f)
+(llvm:define-ffi-function (dlopen (path |i8*|) (flags |i32|)) |i8*| ("/usr/lib/libSystem.B.dylib" "dlopen") #f)
+(llvm:define-ffi-function (dlsym (handle |i8*|) (symbol |i8*|)) |i8*| ("/usr/lib/libSystem.B.dylib" "dlsym") #f)

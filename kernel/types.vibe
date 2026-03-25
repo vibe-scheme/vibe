@@ -1,0 +1,57 @@
+; Shared LLVM struct types for the self-hosted kernel.
+; Prepended before every kernel/*.vibe by the build (see scripts/concat_vibe.sh).
+; Order in the build: types.vibe -> macros.vibe -> ffi_libc_darwin.vibe -> <module>.vibe
+
+; Token — produced by the lexer, consumed by the parser
+(llvm:define-type Token
+  (type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; Lexer — character stream with position / line / column
+(llvm:define-type Lexer
+  (source |i8*|)
+  (source_len |i64|)
+  (pos |i64|)
+  (line |i32|)
+  (column |i32|))
+
+; ASTNode — car/cdr as |i8*| (opaque ptr); see parser/codegen comments
+(llvm:define-type ASTNode
+  (type |i32|)
+  (atom_type |i32|)
+  (value |i8*|)
+  (value_len |i64|)
+  (car |i8*|)
+  (cdr |i8*|)
+  (line |i32|)
+  (column |i32|))
+
+(llvm:define-type Parser
+  (lexer |%Lexer*|)
+  (current |%Token*|))
+
+; Return type of parse_normalize_type_atom
+(llvm:define-type NormalizeResult
+  (value |i8*|)
+  (len |i64|))
+
+; Code generator environment (authoritative layout — matches codegen.vibe)
+(llvm:define-type CodeGen
+  (buffer |i8*|)
+  (buffer_len |i64|)
+  (buffer_cap |i64|)
+  (string_counter |i32|)
+  (const_counter |i32|)
+  (context |i8*|)
+  (module |i8*|)
+  (builder |i8*|)
+  (current_function |i8*|)
+  (params |%ASTNode*|)
+  (locals |%ASTNode*|)
+  (function_types |%ASTNode*|)
+  (constants |%ASTNode*|)
+  (types |%ASTNode*|)
+  (llvm_functions |%ASTNode*|))

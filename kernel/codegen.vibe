@@ -1,53 +1,13 @@
 ;; Codegen utilities migrated to Vibe DSL (Batch 1 + Batch 2)
 ;; These functions handle AST node creation, integer parsing, type checking,
 ;; buffer management, string constant collection, and predicate mapping.
+;; Struct types come from the build-time prefix (types.vibe).
 
 ;; ============================================================================
-;; Type definitions
+;; C library: malloc/realloc/memcpy/free/strncmp via ffi_libc_darwin.vibe prefix.
+;; strlen remains a plain declare (link-time libc).
 ;; ============================================================================
-;; Define ASTNode type (matches bootstrap/types.ll)
-;; Note: car and cdr use |i8*| instead of |%ASTNode*| because the codegen
-;; resolves field types before storing the type, so self-referential types
-;; can't be resolved. In LLVM 21 opaque pointer mode, both are just 'ptr'.
-(llvm:define-type ASTNode
-  (type |i32|)
-  (atom_type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (car |i8*|)
-  (cdr |i8*|)
-  (line |i32|)
-  (column |i32|))
-
-;; Define CodeGen type (matches bootstrap/types.ll layout and field indices)
-;; Pointer-like LLVM refs are represented as |i8*| in opaque pointer mode.
-(llvm:define-type CodeGen
-  (buffer |i8*|)
-  (buffer_len |i64|)
-  (buffer_cap |i64|)
-  (string_counter |i32|)
-  (const_counter |i32|)
-  (context |i8*|)
-  (module |i8*|)
-  (builder |i8*|)
-  (current_function |i8*|)
-  (params |%ASTNode*|)
-  (locals |%ASTNode*|)
-  (function_types |%ASTNode*|)
-  (constants |%ASTNode*|)
-  (types |%ASTNode*|)
-  (llvm_functions |%ASTNode*|))
-
-;; ============================================================================
-;; C library function declarations
-;; These are declared as external and resolved at link time from other modules
-;; (lexer.vibe defines malloc/free/memcpy via FFI, dsl.vibe defines strncmp).
-;; ============================================================================
-(llvm:declare-function (malloc (size |i64|)) |i8*|)
-(llvm:declare-function (realloc (ptr |i8*|) (size |i64|)) |i8*|)
-(llvm:declare-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*|)
 (llvm:declare-function (strlen (s |i8*|)) |i64|)
-(llvm:declare-function (free (ptr |i8*|)) |void|)
 
 ;; Forward declare LLVM/DSL functions (defined in dsl.vibe, linked at build time)
 (llvm:declare-function (llvm_ffi_init) |i32|)
@@ -87,9 +47,6 @@
 (llvm:declare-function (int_to_string (value |i32|) (buf |i8*|)) |i64|)
 (llvm:declare-function (create_int_node (value |i32|)) |%ASTNode*|)
 (llvm:declare-function (map_predicate_string (pred_str |i8*|) (pred_len |i64|)) |i32|)
-
-;; Forward declare strncmp -- must match the declaration in codegen_no_vibe.ll (i32 length)
-(llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
 
 ;; Forward declare codegen_append_string_constant (defined below)
 (llvm:declare-function (codegen_append_string_constant (cg |%CodeGen*|) (name |i8*|) (str |i8*|) (len |i64|)) |void|)

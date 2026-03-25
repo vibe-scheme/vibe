@@ -1,32 +1,12 @@
 ; Bootstrap Lexer for Vibe - Partially migrated to Vibe DSL
 ; This file contains type definitions and first function migrated from lexer.ll
-
-; Declare FFI functions
-(llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
-(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
-(llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
+; malloc/free/memcpy FFI: ffi_libc_darwin.vibe (build prefix).
 
 ; Error message string constants
 ; "Unclosed vertical bar symbol\0"
 (llvm:define-constant .str.unclosed_vbar |[29 x i8]| #u8(85 110 99 108 111 115 101 100 32 118 101 114 116 105 99 97 108 32 98 97 114 32 115 121 109 98 111 108 0))
 ; "Invalid bytevector syntax\0"
 (llvm:define-constant .str.invalid_bytevector |[26 x i8]| #u8(73 110 118 97 108 105 100 32 98 121 116 101 118 101 99 116 111 114 32 115 121 110 116 97 120 0))
-
-; Define Token type
-(llvm:define-type Token
-  (type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (line |i32|)
-  (column |i32|))
-
-; Define Lexer type
-(llvm:define-type Lexer
-  (source |i8*|)
-  (source_len |i64|)
-  (pos |i64|)
-  (line |i32|)
-  (column |i32|))
 
 ; Initialize lexer with source string
 (llvm:define-function (lex_init (source |i8*|) (source_len |i64|)) |%Lexer*|

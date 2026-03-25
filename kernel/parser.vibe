@@ -1,10 +1,7 @@
 ; Bootstrap Parser for Vibe - Fully migrated to Vibe DSL
 ; This file contains all parsing functions migrated from parser.ll
+; malloc/free/memcpy FFI: ffi_libc_darwin.vibe (build prefix).
 
-; Declare FFI functions
-(llvm:define-ffi-function (malloc (size |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "malloc") #f)
-(llvm:define-ffi-function (free (ptr |i8*|)) |void| ("/usr/lib/libSystem.B.dylib" "free") #f)
-(llvm:define-ffi-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*| ("/usr/lib/libSystem.B.dylib" "memcpy") #f)
 (llvm:declare-function (strlen (s |i8*|)) |i64|)
 (llvm:declare-function (write (fd |i32|) (buf |i8*|) (count |i32|)) |i64|)
 (llvm:declare-function (exit (status |i32|)) |void|)
@@ -13,48 +10,7 @@
 (llvm:define-constant .str.error_unexpected_eof |[54 x i8]| #u8(101 114 114 111 114 58 32 117 110 101 120 112 101 99 116 101 100 32 101 110 100 32 111 102 32 102 105 108 101 32 40 117 110 99 108 111 115 101 100 32 112 97 114 101 110 116 104 101 115 101 115 41 10 0))
 (llvm:define-constant .str.error_unexpected_rparen |[47 x i8]| #u8(101 114 114 111 114 58 32 117 110 101 120 112 101 99 116 101 100 32 41 32 40 116 111 111 32 109 97 110 121 32 99 108 111 115 105 110 103 32 112 97 114 101 110 115 41 10 0))
 
-; Define Token type
-(llvm:define-type Token
-  (type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (line |i32|)
-  (column |i32|))
-
-; Define Lexer type
-(llvm:define-type Lexer
-  (source |i8*|)
-  (source_len |i64|)
-  (pos |i64|)
-  (line |i32|)
-  (column |i32|))
-
-; Define ASTNode type
-; Note: car and cdr use |i8*| instead of |%ASTNode*| because the codegen
-; resolves field types before storing the type, so self-referential types
-; can't be resolved. In LLVM 21 opaque pointer mode, both are just 'ptr'.
-(llvm:define-type ASTNode
-  (type |i32|)
-  (atom_type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (car |i8*|)
-  (cdr |i8*|)
-  (line |i32|)
-  (column |i32|))
-
-; Define Parser type
-(llvm:define-type Parser
-  (lexer |%Lexer*|)
-  (current |%Token*|))
-
-; Define NormalizeResult type for parse_normalize_type_atom return value
-; Equivalent to anonymous struct { i8*, i64 } used in the bootstrap parser.ll
-(llvm:define-type NormalizeResult
-  (value |i8*|)
-  (len |i64|))
-
-; External declaration: lex_next (from lexer module)
+; lex_next is defined in lexer.bc
 (llvm:declare-function (lex_next (lexer |%Lexer*|)) |%Token*|)
 
 ; Forward declaration: parse_create_atom (defined later in this file)

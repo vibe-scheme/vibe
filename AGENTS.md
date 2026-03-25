@@ -35,12 +35,18 @@ This document provides guidance for AI agents contributing to the Vibe language 
 ```
 vibe/
 ├── kernel/            # Compiler source (Vibe, .vibe files)
+│   ├── types.vibe     # Shared llvm:define-type structs (prepended by build)
+│   ├── macros.vibe    # Shared define-syntax macros (prepended by build)
+│   ├── ffi_libc_darwin.vibe  # Shared libc/libSystem FFI (prepended by build; Darwin)
 │   ├── lexer.vibe     # Lexer
 │   ├── parser.vibe    # Parser
 │   ├── ffi.vibe       # FFI dynamic library functions
 │   ├── dsl.vibe       # LLVM C API wrappers
-│   ├── main.vibe      # Compiler driver (main + helpers)
-│   └── codegen.vibe   # Code generator
+│   ├── util.vibe      # AST helpers
+│   ├── expander.vibe  # Macro expander
+│   ├── codegen.vibe   # Code generator
+│   └── main.vibe      # Compiler driver (main + helpers)
+├── scripts/           # Build helpers (e.g. concat_vibe.sh)
 ├── src/               # Future standard library code
 ├── docs/              # Documentation
 │   ├── design/        # Design documents and formal plans
@@ -70,10 +76,15 @@ On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads 
 
 ### Build Pipeline
 
-1. `vibe_kernel` compiles each `.vibe` file in `kernel/` to LLVM bitcode (`.bc`)
-2. `llvm-link` links all bitcode modules together
-3. `llc` compiles the linked bitcode to a native object file
-4. The system linker produces the `vibe_kernel` executable, linked against LLVM C API libraries
+1. CMake runs `scripts/concat_vibe.sh` to build `build/kernel_concat/<module>.vibe` from `types.vibe` + `macros.vibe` + `ffi_libc_darwin.vibe` + `kernel/<module>.vibe` (same order for every kernel object).
+2. `vibe_kernel` compiles each concatenated file to LLVM bitcode (`.bc`, or `.ll` then `llvm-as` for some modules).
+3. `llvm-link` links all bitcode modules together.
+4. `llc` compiles the linked bitcode to a native object file.
+5. The system linker produces the `vibe_kernel` executable, linked against LLVM C API libraries.
+
+**Hand-compiling a kernel module** (debugging): a lone `vibe_kernel kernel/foo.vibe` does **not** match the repo build. Either concatenate the same prefix files first (in the order above) or compile the generated `build/kernel_concat/foo.vibe` after a configure/build.
+
+**Duplicate bindings in one compile unit**: repeating the same `llvm:declare-function` or `llvm:define-ffi-function` for one name in the build prefix and again in the same `kernel/*.vibe` body produces distinct LLVM symbol suffixes (e.g. `foo.1`) and undefined symbols at link time. Libc symbols provided by `ffi_libc_darwin.vibe` must not be re-declared in module bodies. Keep each extern/FFI binding in exactly one place per concatenated source.
 
 ### Seed Binary
 
@@ -81,7 +92,7 @@ The **default** bootstrap download is **`v0.0.2-seed`**: a self-hosted `vibe_ker
 
 ### Vibe DSL Conventions
 
-**Forward declarations required**: Every function called via `(llvm:call ...)` in a `.vibe` file must be visible at the call site. The compiler resolves calls by searching (1) local bindings, (2) the function list, (3) parameters, (4) constants. If a called function is defined in another module or later in the same file, it must be forward-declared with `(llvm:declare-function ...)` at the top of the file. **Calls to undeclared functions silently return null**, causing dependent `let*` bindings to be dropped without any error message. See chat 0039.
+**Forward declarations required**: Every function called via `(llvm:call ...)` in a `.vibe` file must be visible at the call site. The compiler resolves calls by searching (1) local bindings, (2) the function list, (3) parameters, (4) constants. If a called function is defined in another module or later in the same file, it must be forward-declared with `(llvm:declare-function ...)` at the top of that module file (after the build prefix). **Calls to undeclared functions silently return null**, causing dependent `let*` bindings to be dropped without any error message. See chat 0039.
 
 **Cross-block variable usage**: `let*` introduces lexical scope; `llvm:label` does not. For bindings to be visible in label blocks, put the labels **inside** the `let*` body. If `let*` and `llvm:label` are siblings, the label cannot access the `let*` bindings (out of scope). Correct structure: `(let* ((x (llvm:alloca ...))) (llvm:label 'a ...) (llvm:label 'b ...))` — both labels can use `x`. See `test_cross_block` in `kernel/codegen.vibe` and chat 0034.
 

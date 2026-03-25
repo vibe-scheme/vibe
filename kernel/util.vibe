@@ -1,26 +1,9 @@
 ;; util.vibe - AST construction and general utilities
 ;; Extracted from codegen.vibe for use by expander and codegen.
 ;; See docs/design/macro-system.md for extraction rationale.
+;; ASTNode is defined in the build-time prefix (types.vibe).
 
-;; ============================================================================
-;; Type definitions
-;; ============================================================================
-(llvm:define-type ASTNode
-  (type |i32|)
-  (atom_type |i32|)
-  (value |i8*|)
-  (value_len |i64|)
-  (car |i8*|)
-  (cdr |i8*|)
-  (line |i32|)
-  (column |i32|))
-
-;; ============================================================================
-;; C library declarations
-;; ============================================================================
-(llvm:declare-function (malloc (size |i64|)) |i8*|)
-(llvm:declare-function (memcpy (dest |i8*|) (src |i8*|) (len |i64|)) |i8*|)
-(llvm:declare-function (strncmp (s1 |i8*|) (s2 |i8*|) (n |i32|)) |i32|)
+;; malloc/memcpy/strncmp: ffi_libc_darwin.vibe (build prefix).
 
 ;; ============================================================================
 ;; LLVM API (used by is_array_type)
