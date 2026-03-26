@@ -67,6 +67,9 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
 - **Multiple clauses** (try successive clauses).
 - **Nested / non-flat patterns** in the pattern tail.
 - **Configurable fixed-point depth limit** for expansion loops (desirable for safety).
+- **Top-level macro definitions produced by expansion (“macros defining macros”)**: `expander_process_one` in `kernel/expander.vibe` only runs `handle_define_syntax` when the **parsed** form’s head is already `define-syntax`. If the form is another macro (e.g. `define-vibe-syntax`) and `expander_expand_expr` produces a `(define-syntax …)` tree, that result is returned to the driver and today is **not** re-dispatched through the macro-install path, so the new macro never enters the environment. **Planned**: after expansion, detect the same simple `define-syntax` / `syntax-rules` shape and install it (a general rule, not special-cased to one defining macro). That unblocks preludes that only expand to `define-syntax` and keeps bootstrap compatible with the public seed once implemented.
+
+**Near-term priority** (in addition to **multiple `syntax-rules` clauses** above): implement that top-level install-after-expand behavior, then kernel code can rely on `define-vibe-syntax` (or any macro that expands to `define-syntax`) for documented forms without duplicating `define-syntax` at the prelude.
 
 **Still deferred** (unchanged from before)
 
@@ -91,11 +94,22 @@ More elaborate Phase 1 examples (ellipsis, multiple clauses, `with-field`-style 
 
 ### Kernel convenience macros (incremental)
 
-The kernel may introduce small `syntax-rules` macros that expand to repeated `llvm:*` shapes (same restrictions as above: linear patterns, atom variables, first clause only). Example in use: **`vibe:ast-null?`** in `kernel/expander.vibe` expands `(vibe:ast-null? p)` to `(llvm:icmp 'eq p (llvm:const-null |%ASTNode*|))`, reducing noise for null `ASTNode*` checks.
+The kernel may introduce small `syntax-rules` macros that expand to repeated `llvm:*` shapes (same restrictions as above: linear patterns, atom variables, first clause only). Shared definitions live in **`kernel/macros.vibe`**, which the build prepends to every kernel module (see `scripts/concat_vibe.sh`).
 
-**Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode; the macro environment does not carry across files in one build step. R7RS **libraries** and a long-term module story are **deferred** until after the kernel is further along and work emphasizes full R7RS support.
+**`define-vibe-syntax`** is a small **`define-syntax`** macro in **`kernel/macros.vibe`**: it expands **`(define-vibe-syntax name _doc transformer)`** to **`(define-syntax name transformer)`**, so the doc subform is only syntax (omitted from the output). The kernel prelude’s **`vibe:*`** helpers use plain **`define-syntax`** with **`;; Registry (planned):`** comments so the seed compiler registers them as normal top-level **`define-syntax`** forms; see **`primitive-forms.md`** for the canonical registry strings.
 
-**Possible next step (not implemented yet)**: To share macros across several kernel sources without committing to library semantics, the toolchain might someday treat **multiple files as one logical unit** (e.g. driver takes a list of paths and concatenates sources before parse/expand). See `primitive-forms.md` (macro documentation under `define-syntax`) for the design note.
+| Macro | Expansion shape |
+|-------|-------------------|
+| **`vibe:ast-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|))` |
+| **`vibe:ast-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |%ASTNode*|))` |
+| **`vibe:void-ptr-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |i8*|))` |
+| **`vibe:void-ptr-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |i8*|))` |
+
+**Deferred (good fit for multi-clause `syntax-rules` later)**: macros such as **`vibe:ast-kind-atom?`** / **`vibe:ast-kind-list?`** that expand `(llvm:icmp 'eq type_word (llvm:const-int |i32| 0|1))` once the expander supports multiple clauses with literal discriminants.
+
+**Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode unless the build concatenates a shared prefix; the concatenated kernel objects share `types.vibe`, `macros.vibe`, and platform FFI stubs before the module body. R7RS **libraries** and a long-term module story remain **deferred** until after the kernel is further along and work emphasizes full R7RS support.
+
+**Design note**: `primitive-forms.md` documents `define-syntax` and macro scope under the multi-file unit story.
 
 ### Example: future Phase 1 (full `syntax-rules`)
 

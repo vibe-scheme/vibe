@@ -1,6 +1,33 @@
 ; Shared define-syntax forms for the kernel (build prepends after types.vibe).
+; define-vibe-syntax is a plain macro (define-syntax + optional doc); it expands
+; to define-syntax. Kernel prelude uses define-syntax for the vibe:* helpers so
+; the seed compiler registers them as top-level define-syntax (see macro-system.md).
 
+(define-syntax define-vibe-syntax
+  (syntax-rules ()
+    ((define-vibe-syntax name _doc transformer)
+     (define-syntax name transformer))))
+
+;; Registry (planned): "True when ptr is a null ASTNode pointer (empty list or missing node)."
 (define-syntax vibe:ast-null?
   (syntax-rules ()
     ((vibe:ast-null? ptr)
      (llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|)))))
+
+;; Registry (planned): "True when ptr is a non-null ASTNode pointer."
+(define-syntax vibe:ast-some?
+  (syntax-rules ()
+    ((vibe:ast-some? ptr)
+     (llvm:icmp 'ne ptr (llvm:const-null |%ASTNode*|)))))
+
+;; Registry (planned): "True when ptr is a null opaque pointer (LLVM C API handle as i8*)."
+(define-syntax vibe:void-ptr-null?
+  (syntax-rules ()
+    ((vibe:void-ptr-null? ptr)
+     (llvm:icmp 'eq ptr (llvm:const-null |i8*|)))))
+
+;; Registry (planned): "True when ptr is a non-null opaque pointer (LLVM C API handle as i8*)."
+(define-syntax vibe:void-ptr-some?
+  (syntax-rules ()
+    ((vibe:void-ptr-some? ptr)
+     (llvm:icmp 'ne ptr (llvm:const-null |i8*|)))))

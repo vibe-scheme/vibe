@@ -173,7 +173,7 @@
          (buf_ptr (llvm:alloca |i8*|))
          (i_copy_ptr (llvm:alloca |i64|))
          (basename_ptr_storage (llvm:alloca |i8*|)))
-    (llvm:br (llvm:icmp 'eq filepath (llvm:const-null |i8*|)) 'error 'get_length)
+    (llvm:br (vibe:void-ptr-null? filepath) 'error 'get_length)
     (llvm:label 'get_length
       (let* ((path_len (llvm:call strlen filepath))
              (path_len_zero (llvm:icmp 'eq path_len (llvm:const-int |i64| 0))))
@@ -260,7 +260,7 @@
       (let* ((final_len (llvm:load final_len_ptr |i64|))
              (buf_size (llvm:add final_len (llvm:const-int |i64| 1)))
              (buf (llvm:call malloc buf_size))
-             (buf_null (llvm:icmp 'eq buf (llvm:const-null |i8*|))))
+             (buf_null (vibe:void-ptr-null? buf)))
         (llvm:store buf buf_ptr)
         (llvm:br buf_null 'error 'copy_name)))
     (llvm:label 'copy_name
@@ -317,7 +317,7 @@
              (file_data (llvm:call read_file input_file)))
         (llvm:store input_file input_file_ptr)
         (llvm:store file_data file_data_ptr)
-        (llvm:br (llvm:icmp 'eq file_data (llvm:const-null |i8*|)) 'file_error 'compile)))
+        (llvm:br (vibe:void-ptr-null? file_data) 'file_error 'compile)))
     (llvm:label 'file_error
       (let* ((msg (llvm:gep |[20 x i8]| (llvm:get-global .str.file_error) 0 0)))
         (llvm:call print_error msg)
@@ -332,7 +332,7 @@
         (llvm:store lexer lexer_ptr)
         (llvm:store parser parser_ptr)
         (llvm:store module_name module_name_ptr)
-        (llvm:br (llvm:icmp 'eq module_name (llvm:const-null |i8*|)) 'module_name_error 'store_module_name)))
+        (llvm:br (vibe:void-ptr-null? module_name) 'module_name_error 'store_module_name)))
     (llvm:label 'module_name_error
       (llvm:store (llvm:const-null |i8*|) module_name_to_use_ptr)
       (llvm:br 'init_codegen))
@@ -342,7 +342,7 @@
     (llvm:label 'init_codegen
       (let* ((module_name_to_use (llvm:load module_name_to_use_ptr |i8*|))
              (codegen (llvm:call codegen_init module_name_to_use))
-             (should_free (llvm:icmp 'ne module_name_to_use (llvm:const-null |i8*|))))
+             (should_free (vibe:void-ptr-some? module_name_to_use)))
         (llvm:store codegen codegen_ptr)
         (llvm:br should_free 'free_module_name 'after_free)))
     (llvm:label 'free_module_name
@@ -362,13 +362,13 @@
     (llvm:label 'parse_expr
       (let* ((parser (llvm:load parser_ptr |%Parser*|))
              (ast (llvm:call parse_expr parser))
-             (ast_null (llvm:icmp 'eq ast (llvm:const-null |%ASTNode*|))))
+             (ast_null (vibe:ast-null? ast)))
         (llvm:store ast ast_ptr)
         (llvm:br ast_null 'parse_error 'macro_expand)))
     (llvm:label 'macro_expand
       (let* ((ast_raw (llvm:load ast_ptr |%ASTNode*|))
              (expanded (llvm:call expander_process_one ast_raw macro_env_head))
-             (exp_null (llvm:icmp 'eq expanded (llvm:const-null |%ASTNode*|))))
+             (exp_null (vibe:ast-null? expanded)))
         (llvm:store expanded macro_expand_ptr)
         (llvm:br exp_null 'parse_loop 'macro_expand_done)))
     (llvm:label 'macro_expand_done

@@ -93,7 +93,21 @@ The macro system cannot itself be a macro — that would be circular. `define-sy
 - **Not inside `syntax-rules`**: Each clause after the literals list is a pattern/template pair. A “documentation clause” is not viable; a string in pattern position would be a real pattern, not prose.
 - **R7RS-safe transformer specs**: The second subform of `define-syntax` may be any `<expression>` whose value is a transformer. A doc string can sit in a sequencing wrapper evaluated once at install time, e.g. `(begin "…" (syntax-rules …))`, where the string’s value is discarded and the last subform yields the transformer. Procedural transformers (`lambda` of syntax) are a separate story (doc as first body expression would run per expansion unless stripped).
 - **Portable `define-vibe-syntax` sketch**: A user-level macro can expand to `(define-syntax name transformer)` and match a doc subform that is **omitted from the template** — syntactically fine R7RS-style code, but the doc is not attached unless something else records it.
-- **Planned Vibe form**: A future **`define-vibe-syntax`** may be handled like other top-level definition forms in the expander: parse **name**, **docstring**, **transformer**; register documentation (same registry story as planned for `define` docstrings) and register the macro; surface syntax stays parallel to `define` without relying on leading comments or `begin` noise. Not implemented yet.
+- **Kernel today**: **`kernel/macros.vibe`** defines **`define-vibe-syntax`** as that sketch (a normal macro: it expands to **`define-syntax`**). The shared **`vibe:*`** helpers are written with top-level **`define-syntax`** so the bootstrap/seed compiler installs them directly; each has a preceding **`;; Registry (planned):`** comment with the same text a future registry would record. You can use **`define-vibe-syntax`** in your own prelude once a top-level form that expands to **`define-syntax`** is fully supported end-to-end (see **macro-system.md**); it is not required for the kernel prelude today.
+- **Planned Vibe form**: The expander may eventually treat **`define-vibe-syntax`** (or any macro that expands to **`define-syntax`**) as a first-class definition boundary for documentation; until then, `define-syntax` plus comments is the supported bootstrap path.
+
+**Macro registry (planned) — kernel `vibe:*` entries**
+
+When the binding/doc registry exists, these entries (name → exact documentation text; kept in sync with **`;; Registry (planned):`** lines in **`kernel/macros.vibe`**) should be registered as macro documentation:
+
+| Macro | Docstring (registry text) |
+|-------|---------------------------|
+| `vibe:ast-null?` | `True when ptr is a null ASTNode pointer (empty list or missing node).` |
+| `vibe:ast-some?` | `True when ptr is a non-null ASTNode pointer.` |
+| `vibe:void-ptr-null?` | `True when ptr is a null opaque pointer (LLVM C API handle as i8*).` |
+| `vibe:void-ptr-some?` | `True when ptr is a non-null opaque pointer (LLVM C API handle as i8*).` |
+
+Keep this table in sync with **`kernel/macros.vibe`** when adding or editing documented kernel macros.
 - **Compile unit today**: Each kernel `.vibe` file is compiled to its own bitcode module (see the `compile_*` rules in `CMakeLists.txt`), so the macro environment is **per file** for a single run of the compiler on that source.
 - **Libraries deferred**: R7RS libraries and related packaging are out of scope until the compiler kernel is farther along and work shifts toward full R7RS support. The text above describes the current constraint and possible evolution, not a settled module design.
 - **Future direction (explore later; not a commitment)**: Sharing macros across kernel files without deciding library semantics might use **multiple paths as one logical compilation unit** — for example, the driver accepting a **list of file names** and **concatenating** their contents in memory before lex/parse/expand, so early `define-syntax` forms are visible to the rest of that unit. This is a **next step to evaluate**, not a current implementation task.

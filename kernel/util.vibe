@@ -74,8 +74,7 @@
 ;; Returns: integer value, or 0 on error
 ;; ============================================================================
 (llvm:define-function (parse_int_from_ast (node |%ASTNode*|)) |i32|
-  (let* ((node_null (llvm:icmp 'eq node (llvm:const-null |%ASTNode*|))))
-    (llvm:br node_null 'error 'check_type))
+  (llvm:br (vibe:ast-null? node) 'error 'check_type)
   (llvm:label 'check_type
     (let* ((node_type_ptr (llvm:gep |%ASTNode| node 0 0))
            (node_type (llvm:load node_type_ptr |i32|))
@@ -103,8 +102,7 @@
 ;; Returns: 0 on success, -1 on error
 ;; ============================================================================
 (llvm:define-function (extract_quoted_atom (quote_node |%ASTNode*|) (name_out |i8*|) (len_out |i8*|)) |i32|
-  (let* ((quote_null (llvm:icmp 'eq quote_node (llvm:const-null |%ASTNode*|))))
-    (llvm:br quote_null 'error 'check_quote_type))
+  (llvm:br (vibe:ast-null? quote_node) 'error 'check_quote_type)
   (llvm:label 'check_quote_type
     (let* ((quote_type_ptr (llvm:gep |%ASTNode| quote_node 0 0))
            (quote_type (llvm:load quote_type_ptr |i32|))
@@ -112,9 +110,8 @@
       (llvm:br is_quote 'get_quoted_expr 'error)))
   (llvm:label 'get_quoted_expr
     (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
-           (quoted_expr (llvm:load car_ptr |%ASTNode*|))
-           (quoted_expr_null (llvm:icmp 'eq quoted_expr (llvm:const-null |%ASTNode*|))))
-      (llvm:br quoted_expr_null 'error 'check_atom)))
+           (quoted_expr (llvm:load car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:ast-null? quoted_expr) 'error 'check_atom)))
   (llvm:label 'check_atom
     (let* ((car_ptr (llvm:gep |%ASTNode| quote_node 0 4))
            (quoted_expr (llvm:load car_ptr |%ASTNode*|))
@@ -257,18 +254,18 @@
 ;; Returns: 1 if array, 0 otherwise
 ;; ============================================================================
 (llvm:define-function (is_array_type (type |i8*|)) |i32|
-  (let* ((type_null (llvm:icmp 'eq type (llvm:const-null |i8*|)))
+  (let* ((type_null (vibe:void-ptr-null? type))
          (element_type_ptr (llvm:alloca |i8*|)))
     (llvm:br type_null 'not_array 'get_element_type)
     (llvm:label 'get_element_type
       (let* ((element_type (llvm:call llvm_get_element_type type))
-             (element_null (llvm:icmp 'eq element_type (llvm:const-null |i8*|))))
+             (element_null (vibe:void-ptr-null? element_type)))
         (llvm:store element_type element_type_ptr)
         (llvm:br element_null 'not_array 'check_array_element)))
     (llvm:label 'check_array_element
       (let* ((element_type (llvm:load element_type_ptr |i8*|))
              (array_element_type (llvm:call llvm_get_element_type element_type))
-             (is_array (llvm:icmp 'ne array_element_type (llvm:const-null |i8*|))))
+             (is_array (vibe:void-ptr-some? array_element_type)))
         (llvm:br is_array 'return_array 'not_array)))
     (llvm:label 'return_array
       (llvm:ret (llvm:const-int |i32| 1)))
