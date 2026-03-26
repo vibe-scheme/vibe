@@ -58,7 +58,7 @@ The kernel DSL (`llvm:*` primitives) provides low-level building blocks but does
 |---|---|---|---|
 | `let-syntax` | 4.3.1 | Not Started | |
 | `letrec-syntax` | 4.3.1 | Not Started | |
-| `syntax-rules` | 4.3.2 | Partial | Flat linear patterns only: one clause, empty literals list, keyword + atom variables, no `...`. See `macro-system.md`. |
+| `syntax-rules` | 4.3.2 | Partial | Flat linear patterns; **literals list** and **multiple clauses** supported; no `...` or nested sub-patterns. See `macro-system.md`. |
 | `syntax-error` | 4.3.3 | Not Started | |
 
 ## 5. Program Structure
@@ -319,7 +319,7 @@ Vibe takes a **macro-first** approach rather than the textbook order. Because th
 
 The implementation order is:
 
-1. **Macro system (unhygienic)**: `define-syntax`, `syntax-rules` — **in progress**: linear patterns and template substitution ship in `kernel/expander.vibe`; ellipsis, literals, and multiple clauses remain. Sufficient for early kernel-level macros.
+1. **Macro system (unhygienic)**: `define-syntax`, `syntax-rules` — **in progress**: linear patterns, literals list, multiple clauses, and template substitution ship in `kernel/expander.vibe`; ellipsis and nested patterns remain. Sufficient for early kernel-level macros.
 2. **Kernel rewrite**: Use macros to simplify the compiler's own source code, making subsequent work tractable
 3. **Macro system (hygienic)**: Full R7RS-compliant `syntax-rules` with hygienic renaming
 4. **Primitive forms**: `quote`, `if`, `lambda`, `define`, `set!` — the irreducible core, implemented with macros available for readability

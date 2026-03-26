@@ -53,23 +53,19 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
 
 **Implemented**
 
-- Top-level `(define-syntax name (syntax-rules () (clause)))` using the **first clause only** (additional clauses are ignored).
-- Macro environment as an alist of **`(macro-name . (pattern . template))`** (pattern + template AST preserved for matching).
-- **Flat linear patterns**: the pattern is a proper list of the **same length** as the invocation; the first element is the keyword (must match the invocation’s `car`); remaining elements are **pattern variables** represented as **atoms only** (no nested list sub-patterns yet).
-- **Duplicate pattern variable names** in the pattern tail are rejected when registering the macro.
+- Top-level `(define-syntax name (syntax-rules (literal …) clause …))` with **multiple clauses** (first matching clause wins) and a **literals list** (symbols in that list match as fixed identifiers in the pattern, not as pattern variables).
+- Macro environment as an alist of **`(macro-name . (literals . clauses))`**: `literals` is the literals-list AST (including parser’s `()` node with null car/cdr when empty); `clauses` is a proper list of **`(pattern . template)`** pairs.
+- **Flat linear patterns**: the pattern is a proper list of the **same length** as the invocation; the first element is the keyword (must match the invocation’s `car`); remaining positions are either **literals** (must match the same atom in the invocation) or **pattern variables** (atoms not in the literals list; no nested list sub-patterns yet).
+- **Duplicate pattern variable names** in the pattern tail are rejected when registering the macro (literals may repeat in a pattern and do not count as variables).
 - **Template substitution**: tree walk on the template; replace atoms that match a binding; then **re-expand** the result so nested macro uses work. No recursive substitution inside substituted subtrees except through that re-expand step.
 - **Match failure** (e.g. wrong arity for a macro name): expansion does **not** apply; the form is treated as a normal list and **car/cdr are expanded** so inner macros still run.
+- **Top-level install-after-expand** (`expander_process_one` in `kernel/expander.vibe`): after `expander_expand_expr`, if the expanded form is a simple `(define-syntax …)` / `(syntax-rules …)` shape that `expander_parse_simple_macro` accepts, it is registered in the macro environment and consumed (same as a raw top-level `define-syntax`). So a macro such as **`define-vibe-syntax`** that expands to `define-syntax` installs the inner macro. Invalid `define-syntax` shapes after expansion are still returned to the driver unchanged. See **`test/macro_define_via_expand.vibe`**.
 
 **Not yet implemented** (still on the Phase 1 roadmap before Phase 2)
 
-- **`syntax-rules` literals list** — effectively only `()` is supported today.
 - **Ellipsis** (`...`) in patterns and templates.
-- **Multiple clauses** (try successive clauses).
 - **Nested / non-flat patterns** in the pattern tail.
 - **Configurable fixed-point depth limit** for expansion loops (desirable for safety).
-- **Top-level macro definitions produced by expansion (“macros defining macros”)**: `expander_process_one` in `kernel/expander.vibe` only runs `handle_define_syntax` when the **parsed** form’s head is already `define-syntax`. If the form is another macro (e.g. `define-vibe-syntax`) and `expander_expand_expr` produces a `(define-syntax …)` tree, that result is returned to the driver and today is **not** re-dispatched through the macro-install path, so the new macro never enters the environment. **Planned**: after expansion, detect the same simple `define-syntax` / `syntax-rules` shape and install it (a general rule, not special-cased to one defining macro). That unblocks preludes that only expand to `define-syntax` and keeps bootstrap compatible with the public seed once implemented.
-
-**Near-term priority** (in addition to **multiple `syntax-rules` clauses** above): implement that top-level install-after-expand behavior, then kernel code can rely on `define-vibe-syntax` (or any macro that expands to `define-syntax`) for documented forms without duplicating `define-syntax` at the prelude.
 
 **Still deferred** (unchanged from before)
 
@@ -88,15 +84,21 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
 (define-syntax add-of
   (syntax-rules ()
     ((add-of a b) (llvm:add a b))))
+
+;; Literals + two clauses (see test/macro_literals_clauses.vibe)
+(define-syntax kwlen
+  (syntax-rules (eight sixteen)
+    ((kwlen eight) (llvm:const-int |i32| 8))
+    ((kwlen sixteen) (llvm:const-int |i32| 16))))
 ```
 
-More elaborate Phase 1 examples (ellipsis, multiple clauses, `with-field`-style nested structure in the pattern) await the features listed above.
+More elaborate Phase 1 examples (ellipsis, `with-field`-style nested structure in the pattern) await the features still listed above.
 
 ### Kernel convenience macros (incremental)
 
-The kernel may introduce small `syntax-rules` macros that expand to repeated `llvm:*` shapes (same restrictions as above: linear patterns, atom variables, first clause only). Shared definitions live in **`kernel/macros.vibe`**, which the build prepends to every kernel module (see `scripts/concat_vibe.sh`).
+The kernel may introduce small `syntax-rules` macros that expand to repeated `llvm:*` shapes (same restrictions as above: linear patterns, atom variables, optional literals and multiple clauses). Shared definitions live in **`kernel/macros.vibe`**, which the build prepends to every kernel module (see `scripts/concat_vibe.sh`).
 
-**`define-vibe-syntax`** is a small **`define-syntax`** macro in **`kernel/macros.vibe`**: it expands **`(define-vibe-syntax name _doc transformer)`** to **`(define-syntax name transformer)`**, so the doc subform is only syntax (omitted from the output). The kernel prelude’s **`vibe:*`** helpers use plain **`define-syntax`** with **`;; Registry (planned):`** comments so the seed compiler registers them as normal top-level **`define-syntax`** forms; see **`primitive-forms.md`** for the canonical registry strings.
+**`define-vibe-syntax`** is a small **`define-syntax`** macro in **`kernel/macros.vibe`**: it expands **`(define-vibe-syntax name _doc transformer)`** to **`(define-syntax name transformer)`**, so the doc subform is only syntax (omitted from the output). Install-after-expand (above) ensures that expansion is enough for registration. The **`vibe:*`** helpers there are written with **`define-vibe-syntax`** and a string doc subform (syntax only, not in the expanded `define-syntax`); binding-registry integration for those descriptions remains as in **`primitive-forms.md`** (planned).
 
 | Macro | Expansion shape |
 |-------|-------------------|
@@ -105,15 +107,15 @@ The kernel may introduce small `syntax-rules` macros that expand to repeated `ll
 | **`vibe:void-ptr-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |i8*|))` |
 | **`vibe:void-ptr-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |i8*|))` |
 
-**Deferred (good fit for multi-clause `syntax-rules` later)**: macros such as **`vibe:ast-kind-atom?`** / **`vibe:ast-kind-list?`** that expand `(llvm:icmp 'eq type_word (llvm:const-int |i32| 0|1))` once the expander supports multiple clauses with literal discriminants.
+**Next (now supported by the expander)**: macros such as **`vibe:ast-kind?`** with **`(syntax-rules (atom list) …)`**-style literal discriminants are feasible; see `test/macro_literals_clauses.vibe` for literals + clause ordering.
 
 **Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode unless the build concatenates a shared prefix; the concatenated kernel objects share `types.vibe`, `macros.vibe`, and platform FFI stubs before the module body. R7RS **libraries** and a long-term module story remain **deferred** until after the kernel is further along and work emphasizes full R7RS support.
 
 **Design note**: `primitive-forms.md` documents `define-syntax` and macro scope under the multi-file unit story.
 
-### Example: future Phase 1 (full `syntax-rules`)
+### Example: future Phase 1 (ellipsis / nested patterns)
 
-When ellipsis, literals, and multiple clauses exist, the following style of kernel macro becomes possible (not valid with the current v1 matcher):
+When ellipsis and nested patterns exist, richer kernel macros become possible (still invalid with the current matcher):
 
 ```scheme
 ;; Abstract the GEP + load pattern for struct field access
@@ -137,13 +139,13 @@ The expander is a new phase inserted between the parser and codegen. It receives
 
 The expander module implements:
 
-1. **Macro environment**: Alist of **`(macro-name . (pattern . template))`** using the same cons-cell infrastructure as the rest of the kernel.
+1. **Macro environment**: Alist of **`(macro-name . (literals . clauses))`** using the same cons-cell infrastructure as the rest of the kernel; each clause is **`(pattern . template)`**.
 
-2. **Top-level `define-syntax` handling**: Parses a simple `syntax-rules` shape (first clause only for now), validates the pattern (keyword + linear atom variables), and registers the entry. The `define-syntax` form is consumed — it does not reach codegen.
+2. **Top-level `define-syntax` handling**: Parses **`(syntax-rules (literal …) clause …)`**, validates literals and each clause’s pattern (keyword + linear tail: literals vs. pattern variables), and registers the entry. The `define-syntax` form is consumed — it does not reach codegen.
 
-3. **Expansion walk**: For each list whose `car` is an atom and a registered macro name, the expander runs **linear pattern match** against the full invocation list. On success, it **substitutes** into the template and **recursively expands** the result. On failure, it expands `car` and `cdr` like an ordinary list.
+3. **Expansion walk**: For each list whose `car` is an atom and a registered macro name, the expander tries **each clause in order** with **linear pattern match** (including literal positions) against the full invocation list. On first success, it **substitutes** into that clause’s template and **recursively expands** the result. If no clause matches, it expands `car` and `cdr` like an ordinary list.
 
-4. **Pattern matcher (`expander_match_linear_pattern`)**: Requires equal list length, keyword equality on the first element, atom pattern variables in the tail, and no duplicate variable names (enforced at registration).
+4. **Pattern matcher (`expander_match_linear_pattern`)**: Requires equal list length, keyword equality on the first element, literal atoms in the tail to match the same identifier in the input (no binding), other tail atoms bind as pattern variables, and no duplicate pattern-variable names (enforced at registration).
 
 5. **Template substitution (`expander_substitute_template`)**: Copies list structure; replaces bound atoms; does not implement ellipsis replication yet.
 

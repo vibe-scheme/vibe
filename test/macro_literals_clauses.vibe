@@ -1,0 +1,19 @@
+; Canary: syntax-rules literals list + multiple clauses (try in order).
+; Exit 27 = 8 + 16 + 1 + 2.
+
+(define-syntax kwlen
+  (syntax-rules (eight sixteen)
+    ((kwlen eight) (llvm:const-int |i32| 8))
+    ((kwlen sixteen) (llvm:const-int |i32| 16))))
+
+(define-syntax firstwins
+  (syntax-rules ()
+    ((firstwins x) (llvm:const-int |i32| 1))
+    ((firstwins x y) (llvm:const-int |i32| 2))))
+
+(llvm:define-function (main) |i32|
+  (llvm:ret (llvm:add
+              (llvm:add
+                (llvm:add (kwlen eight) (kwlen sixteen))
+                (firstwins a))
+              (firstwins b c))))

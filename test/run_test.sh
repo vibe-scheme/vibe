@@ -88,6 +88,72 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
+# Test 3: macro_literals_clauses (syntax-rules literals + multiple clauses)
+echo ""
+echo "=== Test: macro_literals_clauses.vibe ==="
+echo "Compiling macro_literals_clauses.vibe using $COMPILER..."
+if "${COMPILER}" test/macro_literals_clauses.vibe -o test/macro_literals_clauses.o 2>/dev/null; then
+    if [ -f test/macro_literals_clauses.o ]; then
+        echo "Linking executable..."
+        if cc $ARCH_FLAG test/macro_literals_clauses.o -o test/macro_literals_clauses.exe -lc 2>/dev/null; then
+            if ./test/macro_literals_clauses.exe 2>/dev/null; then
+                LIT_EXIT=0
+            else
+                LIT_EXIT=$?
+            fi
+            if [ "$LIT_EXIT" -eq 27 ]; then
+                echo "PASS: macro_literals_clauses"
+                PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                echo "FAIL: macro_literals_clauses - Expected exit code 27, got $LIT_EXIT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        else
+            echo "FAIL: macro_literals_clauses - Link failed"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        echo "FAIL: macro_literals_clauses - Object file not generated"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+else
+    echo "FAIL: macro_literals_clauses - Compile failed"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
+# Test 4: macro_define_via_expand (define-syntax after macro expansion at top level)
+echo ""
+echo "=== Test: macro_define_via_expand.vibe ==="
+echo "Compiling macro_define_via_expand.vibe using $COMPILER..."
+if "${COMPILER}" test/macro_define_via_expand.vibe -o test/macro_define_via_expand.o 2>/dev/null; then
+    if [ -f test/macro_define_via_expand.o ]; then
+        echo "Linking executable..."
+        if cc $ARCH_FLAG test/macro_define_via_expand.o -o test/macro_define_via_expand.exe -lc 2>/dev/null; then
+            if ./test/macro_define_via_expand.exe 2>/dev/null; then
+                VIA_EXIT=0
+            else
+                VIA_EXIT=$?
+            fi
+            if [ "$VIA_EXIT" -eq 33 ]; then
+                echo "PASS: macro_define_via_expand"
+                PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                echo "FAIL: macro_define_via_expand - Expected exit code 33, got $VIA_EXIT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        else
+            echo "FAIL: macro_define_via_expand - Link failed"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        echo "FAIL: macro_define_via_expand - Object file not generated"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+else
+    echo "FAIL: macro_define_via_expand - Compile failed"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
 echo ""
 echo "Results: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ $FAIL_COUNT -gt 0 ]; then

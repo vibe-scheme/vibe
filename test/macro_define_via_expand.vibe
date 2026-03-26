@@ -1,0 +1,16 @@
+; Canary: top-level form that expands to define-syntax is registered (install-after-expand).
+; Same shape as kernel prelude define-vibe-syntax, but define-vibe-syntax is installed
+; via plain define-syntax so standalone compile has no prelude.
+; Exit 33.
+
+(define-syntax define-vibe-syntax
+  (syntax-rules ()
+    ((define-vibe-syntax name _doc transformer)
+     (define-syntax name transformer))))
+
+(define-vibe-syntax bar "doc"
+  (syntax-rules ()
+    ((bar) (llvm:const-int |i32| 33))))
+
+(llvm:define-function (main) |i32|
+  (llvm:ret (bar)))

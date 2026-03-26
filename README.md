@@ -120,7 +120,7 @@ The easiest way to build is using the provided build script:
 ./build.sh install
 ```
 
-On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.2-seed) (asset `vibe_kernel_seed`) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`. Older seeds (e.g. [`v0.0.1-seed`](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.1-seed)) are available via `VIBE_SEED_TAG` for historical commits. Maintainer publishing: `./build.sh release-seed` and [`RELEASING.md`](RELEASING.md).
+On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.3-seed) (asset `vibe_kernel_seed`) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`. Older seeds ([`v0.0.2-seed`](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.2-seed), [`v0.0.1-seed`](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.1-seed)) are available via `VIBE_SEED_TAG` for historical commits. Maintainer publishing: `./build.sh release-seed` and [`RELEASING.md`](RELEASING.md).
 
 **Build pipeline**: `vibe_kernel` compiles each `.vibe` file to LLVM bitcode (`.bc`) → `llvm-link` links all modules → `llc` compiles to native object → system linker produces the `vibe_kernel` executable.
 

@@ -276,7 +276,7 @@
       <span class="status partial">Partial</span>
 
       <span class="item">Kernel rewrite using macros</span>
-      <span class="status next">Next</span>
+      <span class="status next">Next (advanced macros first)</span>
 
       <span class="item">Macro system (hygienic)</span>
       <span class="status not-started">Planned</span>
@@ -293,6 +293,13 @@
       <span class="item">Binding registry</span>
       <span class="status not-started">Not started</span>
     </div>
+
+    <p style="margin-top: 28px; font-size: 0.95em; color: var(--muted);">
+      <strong style="color: var(--fg);">Macro expander today:</strong>
+      flat linear <code>syntax-rules</code>, optional <strong>literals</strong> list, <strong>multiple clauses</strong>,
+      and top-level forms that expand to <code>define-syntax</code> (e.g. kernel prelude <code>define-vibe-syntax</code>) register correctly.
+      Ellipsis, nested patterns, and hygiene are still planned.
+    </p>
   </section>
 
   <section>
