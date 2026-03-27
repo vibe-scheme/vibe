@@ -76,15 +76,9 @@
 (llvm:define-function (parse_int_from_ast (node |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? node) 'error 'check_type)
   (llvm:label 'check_type
-    (let* ((node_type_ptr (llvm:gep |%ASTNode| node 0 0))
-           (node_type (llvm:load node_type_ptr |i32|))
-           (is_atom (llvm:icmp 'eq node_type (llvm:const-int |i32| 0))))
-      (llvm:br is_atom 'check_number 'error)))
+    (llvm:br (vibe:node-kind? node atom) 'check_number 'error))
   (llvm:label 'check_number
-    (let* ((atom_type_ptr (llvm:gep |%ASTNode| node 0 1))
-           (atom_type (llvm:load atom_type_ptr |i32|))
-           (is_number (llvm:icmp 'eq atom_type (llvm:const-int |i32| 2))))
-      (llvm:br is_number 'parse_number 'error)))
+    (llvm:br (vibe:atom-type? node number) 'parse_number 'error))
   (llvm:label 'parse_number
     (let* ((value_ptr (llvm:gep |%ASTNode| node 0 2))
            (value_str (llvm:load value_ptr |i8*|))
@@ -254,18 +248,18 @@
 ;; Returns: 1 if array, 0 otherwise
 ;; ============================================================================
 (llvm:define-function (is_array_type (type |i8*|)) |i32|
-  (let* ((type_null (vibe:void-ptr-null? type))
+  (let* ((type_null (vibe:ptr-null? type))
          (element_type_ptr (llvm:alloca |i8*|)))
     (llvm:br type_null 'not_array 'get_element_type)
     (llvm:label 'get_element_type
       (let* ((element_type (llvm:call llvm_get_element_type type))
-             (element_null (vibe:void-ptr-null? element_type)))
+             (element_null (vibe:ptr-null? element_type)))
         (llvm:store element_type element_type_ptr)
         (llvm:br element_null 'not_array 'check_array_element)))
     (llvm:label 'check_array_element
       (let* ((element_type (llvm:load element_type_ptr |i8*|))
              (array_element_type (llvm:call llvm_get_element_type element_type))
-             (is_array (vibe:void-ptr-some? array_element_type)))
+             (is_array (vibe:ptr-some? array_element_type)))
         (llvm:br is_array 'return_array 'not_array)))
     (llvm:label 'return_array
       (llvm:ret (llvm:const-int |i32| 1)))

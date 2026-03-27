@@ -19,6 +19,9 @@
   (column |i32|))
 
 ; ASTNode — car/cdr as |i8*| (opaque ptr); see parser/codegen comments
+; Field type: 0 = atom node, 1 = list (cons) node — see vibe:node-kind? in macros.vibe
+; Field atom_type (atoms only): 2 number, 3 string, 13 bytevector, 999 pointer type ref
+; value + value_len: see vibe:node-empty? in macros.vibe (null or zero-length span)
 (llvm:define-type ASTNode
   (type |i32|)
   (atom_type |i32|)

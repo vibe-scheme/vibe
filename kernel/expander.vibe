@@ -64,21 +64,15 @@
 (llvm:define-function (expander_is_define_syntax (form |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? form) 'no 'check_list)
   (llvm:label 'check_list
-    (let* ((type_ptr (llvm:gep |%ASTNode| form 0 0))
-           (form_type (llvm:load type_ptr |i32|))
-           (is_list (llvm:icmp 'eq form_type (llvm:const-int |i32| 1))))
-      (llvm:br is_list 'check_car 'no)))
+    (llvm:br (vibe:node-kind? form list) 'check_car 'no))
   (llvm:label 'check_car
     (let* ((car_ptr (llvm:gep |%ASTNode| form 0 4))
            (car_val (llvm:load car_ptr |%ASTNode*|)))
       (llvm:br (vibe:ast-null? car_val) 'no 'check_atom)))
   (llvm:label 'check_atom
     (let* ((car_ptr (llvm:gep |%ASTNode| form 0 4))
-           (car_val (llvm:load car_ptr |%ASTNode*|))
-           (car_type_ptr (llvm:gep |%ASTNode| car_val 0 0))
-           (car_type (llvm:load car_type_ptr |i32|))
-           (is_atom (llvm:icmp 'eq car_type (llvm:const-int |i32| 0))))
-      (llvm:br is_atom 'check_name 'no)))
+           (car_val (llvm:load car_ptr |%ASTNode*|)))
+      (llvm:br (vibe:node-kind? car_val atom) 'check_name 'no)))
   (llvm:label 'check_name
     (let* ((car_ptr (llvm:gep |%ASTNode| form 0 4))
            (car_val (llvm:load car_ptr |%ASTNode*|))
@@ -98,10 +92,7 @@
 (llvm:define-function (expander_is_atom_node (node |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? node) 'no 'check)
   (llvm:label 'check
-    (let* ((type_ptr (llvm:gep |%ASTNode| node 0 0))
-           (t (llvm:load type_ptr |i32|))
-           (is_atom (llvm:icmp 'eq t (llvm:const-int |i32| 0))))
-      (llvm:br is_atom 'yes 'no)))
+    (llvm:br (vibe:node-kind? node atom) 'yes 'no))
   (llvm:label 'yes
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'no
@@ -110,10 +101,7 @@
 (llvm:define-function (expander_is_list_node (node |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? node) 'no 'check)
   (llvm:label 'check
-    (let* ((type_ptr (llvm:gep |%ASTNode| node 0 0))
-           (t (llvm:load type_ptr |i32|))
-           (is_list (llvm:icmp 'eq t (llvm:const-int |i32| 1))))
-      (llvm:br is_list 'yes 'no)))
+    (llvm:br (vibe:node-kind? node list) 'yes 'no))
   (llvm:label 'yes
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'no

@@ -473,7 +473,7 @@
 ; Returns 0 on success, non-zero on error
 (llvm:define-function (llvm_parse_ir_in_context (context |i8*|) (ir_text |i8*|) (ir_len |i64|) (module |i8*|)) |i32|
   (let* ((buffer (llvm:call LLVMCreateMemoryBufferWithMemoryRangeCopy ir_text ir_len (llvm:const-null |i8*|)))
-         (buffer_null (vibe:void-ptr-null? buffer)))
+         (buffer_null (vibe:ptr-null? buffer)))
     (llvm:br buffer_null 'error 'parse)
     (llvm:label 'parse
       (let* ((error_msg (llvm:alloca |i8*|)))

@@ -104,8 +104,13 @@ When the binding/doc registry exists, these entries (name → exact documentatio
 |-------|---------------------------|
 | `vibe:ast-null?` | `True when ptr is a null ASTNode pointer (empty list or missing node).` |
 | `vibe:ast-some?` | `True when ptr is a non-null ASTNode pointer.` |
-| `vibe:void-ptr-null?` | `True when ptr is a null opaque pointer (LLVM C API handle as i8*).` |
-| `vibe:void-ptr-some?` | `True when ptr is a non-null opaque pointer (LLVM C API handle as i8*).` |
+| `vibe:ptr-null?` | `True when ptr is a null opaque pointer (LLVM uses i8* for opaque handles).` |
+| `vibe:ptr-some?` | `True when ptr is a non-null opaque pointer (LLVM uses i8* for opaque handles).` |
+| `vibe:len-zero?` | `True when len is zero (i64 lengths: token, lexer source, AST value_len, paths).` |
+| `vibe:ptr-empty?` | `True when ptr is null i8* or len is zero (invalid byte span / C-string).` |
+| `vibe:node-empty?` | `True when AST node's value pointer is null or value_len is zero.` |
+| `vibe:node-kind?` | `True when node's type field matches literal atom (0) or list (1).` |
+| `vibe:atom-type?` | `True when node's atom_type field matches literal number/string/bytevector/pointer.` |
 
 Keep this table in sync with **`kernel/macros.vibe`** when adding or editing documented kernel macros.
 - **Compile unit today**: Each kernel `.vibe` file is compiled to its own bitcode module (see the `compile_*` rules in `CMakeLists.txt`), so the macro environment is **per file** for a single run of the compiler on that source.

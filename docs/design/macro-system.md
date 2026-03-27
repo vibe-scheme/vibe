@@ -104,10 +104,15 @@ The kernel may introduce small `syntax-rules` macros that expand to repeated `ll
 |-------|-------------------|
 | **`vibe:ast-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|))` |
 | **`vibe:ast-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |%ASTNode*|))` |
-| **`vibe:void-ptr-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |i8*|))` |
-| **`vibe:void-ptr-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |i8*|))` |
+| **`vibe:ptr-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |i8*|))` |
+| **`vibe:ptr-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |i8*|))` |
+| **`vibe:len-zero?`** | `(llvm:icmp 'eq len (llvm:const-int |i64| 0))` |
+| **`vibe:ptr-empty?`** | `(llvm:or (vibe:ptr-null? ptr) (vibe:len-zero? len))` |
+| **`vibe:node-empty?`** | **`ptr-empty?`** on **`load`** of **`ASTNode.value`** (field 2) and **`value_len`** (field 3) |
+| **`vibe:node-kind?`** | **`(syntax-rules (atom list) …)`**: load `ASTNode.type` (field 0), `icmp` vs `0` or `1` |
+| **`vibe:atom-type?`** | **`(syntax-rules (number string bytevector pointer) …)`**: load `ASTNode.atom_type` (field 1), `icmp` vs `2`, `3`, `13`, or `999` |
 
-**Next (now supported by the expander)**: macros such as **`vibe:ast-kind?`** with **`(syntax-rules (atom list) …)`**-style literal discriminants are feasible; see `test/macro_literals_clauses.vibe` for literals + clause ordering.
+See `test/macro_literals_clauses.vibe` for literals + clause ordering with **`syntax-rules`**.
 
 **Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode unless the build concatenates a shared prefix; the concatenated kernel objects share `types.vibe`, `macros.vibe`, and platform FFI stubs before the module body. R7RS **libraries** and a long-term module story remain **deferred** until after the kernel is further along and work emphasizes full R7RS support.
 

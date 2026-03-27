@@ -220,10 +220,7 @@
 ;   - Vertical bars are already stripped by lexer, so we don't handle them here
 (llvm:define-function (parse_normalize_type_atom (value |i8*|) (len |i64|)) |%NormalizeResult|
   ; Check for invalid input (null pointer or zero length)
-  (let* ((value_null (vibe:void-ptr-null? value))
-         (len_zero (llvm:icmp 'eq len (llvm:const-int |i64| 0)))
-         (invalid (llvm:or value_null len_zero)))
-    (llvm:br invalid 'return_original 'check_percent))
+  (llvm:br (vibe:ptr-empty? value len) 'return_original 'check_percent)
   (llvm:label 'check_percent
     ; Check if value starts with '%' (named type)
     (let* ((first_char (llvm:load value |i8|))

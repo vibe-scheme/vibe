@@ -20,14 +20,54 @@
     ((vibe:ast-some? ptr)
      (llvm:icmp 'ne ptr (llvm:const-null |%ASTNode*|)))))
 
-(define-vibe-syntax vibe:void-ptr-null?
-  "True when ptr is a null opaque pointer (LLVM C API handle as i8*)."
+(define-vibe-syntax vibe:ptr-null?
+  "True when ptr is a null opaque pointer (LLVM uses i8* for opaque handles)."
   (syntax-rules ()
-    ((vibe:void-ptr-null? ptr)
+    ((vibe:ptr-null? ptr)
      (llvm:icmp 'eq ptr (llvm:const-null |i8*|)))))
 
-(define-vibe-syntax vibe:void-ptr-some?
-  "True when ptr is a non-null opaque pointer (LLVM C API handle as i8*)."
+(define-vibe-syntax vibe:ptr-some?
+  "True when ptr is a non-null opaque pointer (LLVM uses i8* for opaque handles)."
   (syntax-rules ()
-    ((vibe:void-ptr-some? ptr)
+    ((vibe:ptr-some? ptr)
      (llvm:icmp 'ne ptr (llvm:const-null |i8*|)))))
+
+(define-vibe-syntax vibe:len-zero?
+  "True when len is zero (i64 lengths: token, lexer source, AST value_len, paths)."
+  (syntax-rules ()
+    ((vibe:len-zero? len)
+     (llvm:icmp 'eq len (llvm:const-int |i64| 0)))))
+
+(define-vibe-syntax vibe:ptr-empty?
+  "True when ptr is null i8* or len is zero (invalid byte span / C-string)."
+  (syntax-rules ()
+    ((vibe:ptr-empty? ptr len)
+     (llvm:or (vibe:ptr-null? ptr) (vibe:len-zero? len)))))
+
+(define-vibe-syntax vibe:node-empty?
+  "True when AST node's value (field 2) is null or value_len (field 3) is zero."
+  (syntax-rules ()
+    ((vibe:node-empty? node)
+     (vibe:ptr-empty?
+      (llvm:load (llvm:gep |%ASTNode| node 0 2) |i8*|)
+      (llvm:load (llvm:gep |%ASTNode| node 0 3) |i64|)))))
+
+(define-vibe-syntax vibe:node-kind?
+  "True when node's type field matches literal atom (0) or list (1)."
+  (syntax-rules (atom list)
+    ((vibe:node-kind? n atom)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 0) |i32|) (llvm:const-int |i32| 0)))
+    ((vibe:node-kind? n list)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 0) |i32|) (llvm:const-int |i32| 1)))))
+
+(define-vibe-syntax vibe:atom-type?
+  "True when node's atom_type field matches literal number/string/bytevector/pointer."
+  (syntax-rules (number string bytevector pointer)
+    ((vibe:atom-type? n number)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 2)))
+    ((vibe:atom-type? n string)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 3)))
+    ((vibe:atom-type? n bytevector)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 13)))
+    ((vibe:atom-type? n pointer)
+     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 999)))))

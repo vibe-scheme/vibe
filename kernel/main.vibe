@@ -173,12 +173,11 @@
          (buf_ptr (llvm:alloca |i8*|))
          (i_copy_ptr (llvm:alloca |i64|))
          (basename_ptr_storage (llvm:alloca |i8*|)))
-    (llvm:br (vibe:void-ptr-null? filepath) 'error 'get_length)
+    (llvm:br (vibe:ptr-null? filepath) 'error 'get_length)
     (llvm:label 'get_length
-      (let* ((path_len (llvm:call strlen filepath))
-             (path_len_zero (llvm:icmp 'eq path_len (llvm:const-int |i64| 0))))
+      (let* ((path_len (llvm:call strlen filepath)))
         (llvm:store path_len path_len_ptr)
-        (llvm:br path_len_zero 'error 'find_last_slash)))
+        (llvm:br (vibe:len-zero? path_len) 'error 'find_last_slash)))
     (llvm:label 'find_last_slash
       (llvm:store (llvm:const-int |i64| 0) last_slash_pos)
       (llvm:store (llvm:const-int |i64| 0) i_ptr)
@@ -208,11 +207,10 @@
     (llvm:label 'extract_basename
       (let* ((path_len (llvm:load path_len_ptr |i64|))
              (basename_start (llvm:load last_slash_pos |i64|))
-             (basename_len (llvm:sub path_len basename_start))
-             (basename_len_zero (llvm:icmp 'eq basename_len (llvm:const-int |i64| 0))))
+             (basename_len (llvm:sub path_len basename_start)))
         (llvm:store basename_start basename_start_ptr)
         (llvm:store basename_len basename_len_ptr)
-        (llvm:br basename_len_zero 'error 'find_last_dot)))
+        (llvm:br (vibe:len-zero? basename_len) 'error 'find_last_dot)))
     (llvm:label 'find_last_dot
       (llvm:store (llvm:const-int |i64| 0) last_dot_pos)
       (llvm:store (llvm:const-int |i64| 0) j_ptr)
@@ -253,14 +251,13 @@
         (llvm:store basename_len final_len_ptr)
         (llvm:br 'allocate_name)))
     (llvm:label 'allocate_name
-      (let* ((final_len (llvm:load final_len_ptr |i64|))
-             (final_len_zero (llvm:icmp 'eq final_len (llvm:const-int |i64| 0))))
-        (llvm:br final_len_zero 'error 'alloc_buf)))
+      (let* ((final_len (llvm:load final_len_ptr |i64|)))
+        (llvm:br (vibe:len-zero? final_len) 'error 'alloc_buf)))
     (llvm:label 'alloc_buf
       (let* ((final_len (llvm:load final_len_ptr |i64|))
              (buf_size (llvm:add final_len (llvm:const-int |i64| 1)))
              (buf (llvm:call malloc buf_size))
-             (buf_null (vibe:void-ptr-null? buf)))
+             (buf_null (vibe:ptr-null? buf)))
         (llvm:store buf buf_ptr)
         (llvm:br buf_null 'error 'copy_name)))
     (llvm:label 'copy_name
@@ -317,7 +314,7 @@
              (file_data (llvm:call read_file input_file)))
         (llvm:store input_file input_file_ptr)
         (llvm:store file_data file_data_ptr)
-        (llvm:br (vibe:void-ptr-null? file_data) 'file_error 'compile)))
+        (llvm:br (vibe:ptr-null? file_data) 'file_error 'compile)))
     (llvm:label 'file_error
       (let* ((msg (llvm:gep |[20 x i8]| (llvm:get-global .str.file_error) 0 0)))
         (llvm:call print_error msg)
@@ -332,7 +329,7 @@
         (llvm:store lexer lexer_ptr)
         (llvm:store parser parser_ptr)
         (llvm:store module_name module_name_ptr)
-        (llvm:br (vibe:void-ptr-null? module_name) 'module_name_error 'store_module_name)))
+        (llvm:br (vibe:ptr-null? module_name) 'module_name_error 'store_module_name)))
     (llvm:label 'module_name_error
       (llvm:store (llvm:const-null |i8*|) module_name_to_use_ptr)
       (llvm:br 'init_codegen))
@@ -342,7 +339,7 @@
     (llvm:label 'init_codegen
       (let* ((module_name_to_use (llvm:load module_name_to_use_ptr |i8*|))
              (codegen (llvm:call codegen_init module_name_to_use))
-             (should_free (vibe:void-ptr-some? module_name_to_use)))
+             (should_free (vibe:ptr-some? module_name_to_use)))
         (llvm:store codegen codegen_ptr)
         (llvm:br should_free 'free_module_name 'after_free)))
     (llvm:label 'free_module_name
