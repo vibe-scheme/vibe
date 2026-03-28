@@ -4,10 +4,10 @@ Vibe bootstraps from a **seed** `vibe_kernel` binary hosted on GitHub (not in gi
 
 ## Default download tag (`build.sh`)
 
-`build.sh` defaults to **`v0.0.3-seed`** (macro expander with literals, multi-clause, install-after-expand). For commits that match an older kernel, use:
+`build.sh` defaults to **`v0.0.4-seed`** (macro expander with literals, multi-clause, install-after-expand, **nested `syntax-rules` subpatterns**, and **final `...`** / ellipsis). For commits that match an older kernel, use:
 
 ```bash
-export VIBE_SEED_TAG=v0.0.2-seed
+export VIBE_SEED_TAG=v0.0.3-seed
 ./build.sh build
 ```
 
@@ -20,7 +20,7 @@ When preparing a **new** seed tag, keep `build.sh` pointing at the **latest publ
 Requires [GitHub CLI](https://cli.github.com/) (`gh`) logged in with permission to create releases.
 
 ```bash
-./build.sh release-seed v0.0.4-seed   # example next tag
+./build.sh release-seed v0.0.5-seed   # example next tag
 ```
 
 This runs `./build.sh test`, copies `build/bin/vibe_kernel` to `build/release/vibe_kernel_seed`, strips it, then:
@@ -44,7 +44,8 @@ Runs on **macos-14**, installs LLVM via Homebrew, `./build.sh test`, strip, same
 |---------------|------|
 | `v0.0.1-seed` | Original bootstrap chain; use via `VIBE_SEED_TAG` for old trees. |
 | `v0.0.2-seed` | Self-hosted compiler with linear `syntax-rules` only (no literals / multi-clause / install-after-expand). |
-| `v0.0.3-seed` | Default download: expander with literals list, multiple clauses, top-level install-after-expand. |
+| `v0.0.3-seed` | Literals list, multiple clauses, top-level install-after-expand; no nested subpatterns or ellipsis. |
+| `v0.0.4-seed` | Default download: above plus nested patterns and final `...` (ellipsis) matching and template replication. |
 
 ## Platform
 

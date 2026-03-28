@@ -9,7 +9,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${SCRIPT_DIR}/build"
 # Default seed tag (published GitHub release). Override, e.g. export VIBE_SEED_TAG=v0.0.1-seed for old trees
-SEED_TAG="${VIBE_SEED_TAG:-v0.0.3-seed}"
+SEED_TAG="${VIBE_SEED_TAG:-v0.0.4-seed}"
 SEED_URL="https://github.com/vibe-scheme/vibe/releases/download/${SEED_TAG}/vibe_kernel_seed"
 DEFAULT_GH_REPO="vibe-scheme/vibe"
 
@@ -78,7 +78,7 @@ strip_seed_binary() {
 
 # Maintainer: build, test, strip, publish GitHub release + asset vibe_kernel_seed (requires gh CLI, auth)
 release_seed() {
-    local tag="${1:-v0.0.3-seed}"
+    local tag="${1:-v0.0.4-seed}"
     local repo="${GITHUB_REPOSITORY:-${DEFAULT_GH_REPO}}"
     local notes_file="${SCRIPT_DIR}/docs/release-notes/${tag}.md"
     local asset_dir="${BUILD_DIR}/release"
@@ -181,7 +181,7 @@ case "$COMMAND" in
         ;;
 
     release-seed)
-        release_seed "${2:-v0.0.3-seed}"
+        release_seed "${2:-v0.0.4-seed}"
         ;;
     
     *)
@@ -192,10 +192,10 @@ case "$COMMAND" in
         echo "  build         - Build Vibe compiler (self-hosted, default)"
         echo "  test          - Run tests"
         echo "  install       - Install the project"
-        echo "  release-seed  - Test, strip, gh release create/upload (default tag v0.0.3-seed)"
+        echo "  release-seed  - Test, strip, gh release create/upload (default tag v0.0.4-seed)"
         echo ""
         echo "Environment:"
-        echo "  VIBE_SEED_TAG     - Seed release tag for download (default v0.0.3-seed)"
+        echo "  VIBE_SEED_TAG     - Seed release tag for download (default v0.0.4-seed)"
         echo "  GITHUB_REPOSITORY - owner/repo for gh (default vibe-scheme/vibe)"
         exit 1
         ;;

@@ -2114,6 +2114,7 @@
          (still_on_label_ptr (llvm:alloca |i1|))
          (saved_block_null_ptr (llvm:alloca |i1|))
          (saved_block_ptr (llvm:alloca |i8*|))
+         (label_body_for_eval_ptr (llvm:alloca |%ASTNode*|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
              (builder (llvm:load builder_ptr |i8*|))
@@ -2155,16 +2156,52 @@
     (llvm:label 'get_or_create_block_br
       (let* ((block_null (llvm:load block_null_ptr |i1|)))
         (llvm:br block_null 'error 'position_builder)))
+    ;; Label AST is (llvm:label 'name expr…); args cdr is (quote name) . exprs — skip the quote so
+    ;; eval_dsl_body sees only real DSL forms (avoids mis-wiring successor basic blocks).
     (llvm:label 'position_builder
       (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
              (builder (llvm:load builder_ptr |i8*|))
              (block (llvm:load block_ptr |i8*|))
              (saved_block (llvm:call llvm_get_insert_block builder))
              (args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
-             (body (llvm:load args_cdr_ptr |%ASTNode*|)))
+             (body0 (llvm:load args_cdr_ptr |%ASTNode*|))
+             (body0_null (vibe:ast-null? body0)))
         (llvm:store saved_block saved_block_ptr)
+        (llvm:br body0_null 'pb_body_null 'pb_body_nonempty)))
+    (llvm:label 'pb_body_null
+      (llvm:store (llvm:const-null |%ASTNode*|) label_body_for_eval_ptr)
+      (llvm:br 'pb_apply_body))
+    (llvm:label 'pb_body_nonempty
+      (let* ((args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
+             (body0 (llvm:load args_cdr_ptr |%ASTNode*|))
+             (is_list (vibe:node-kind? body0 list)))
+        (llvm:br is_list 'pb_list_head 'pb_take_body0)))
+    (llvm:label 'pb_list_head
+      (let* ((args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
+             (body0 (llvm:load args_cdr_ptr |%ASTNode*|))
+             (car0 (llvm:load (llvm:gep |%ASTNode| body0 0 4) |%ASTNode*|))
+             (ty0_ptr (llvm:gep |%ASTNode| car0 0 0))
+             (ty0 (llvm:load ty0_ptr |i32|))
+             (is_quote (llvm:icmp 'eq ty0 (llvm:const-int |i32| 2))))
+        (llvm:br is_quote 'pb_take_cdr 'pb_take_body0)))
+    (llvm:label 'pb_take_cdr
+      (let* ((args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
+             (body0 (llvm:load args_cdr_ptr |%ASTNode*|))
+             (rest (llvm:load (llvm:gep |%ASTNode| body0 0 5) |%ASTNode*|)))
+        (llvm:store rest label_body_for_eval_ptr)
+        (llvm:br 'pb_apply_body)))
+    (llvm:label 'pb_take_body0
+      (let* ((args_cdr_ptr (llvm:gep |%ASTNode| args 0 5))
+             (body0 (llvm:load args_cdr_ptr |%ASTNode*|)))
+        (llvm:store body0 label_body_for_eval_ptr)
+        (llvm:br 'pb_apply_body)))
+    (llvm:label 'pb_apply_body
+      (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
+             (builder (llvm:load builder_ptr |i8*|))
+             (block (llvm:load block_ptr |i8*|))
+             (bd (llvm:load label_body_for_eval_ptr |%ASTNode*|)))
         (llvm:call llvm_position_builder_at_end builder block)
-        (llvm:call codegen_eval_dsl_body cg body)
+        (llvm:call codegen_eval_dsl_body cg bd)
         (llvm:br 'check_terminator)))
     (llvm:label 'check_terminator
       (let* ((block (llvm:load block_ptr |i8*|))

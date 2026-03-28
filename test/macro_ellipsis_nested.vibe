@@ -1,0 +1,23 @@
+; Canary: nested syntax-rules subpattern (pair-add (a b)) and ellipsis (sum x y ...).
+; Exit code 64 = (4+5) + (10+20+25).
+
+(define-syntax ret
+  (syntax-rules ()
+    ((ret v) (llvm:ret v))))
+
+(define-syntax pair-add-m
+  (syntax-rules ()
+    ((pair-add-m (a b)) (llvm:add a b))))
+
+(define-syntax sum-m
+  (syntax-rules ()
+    ((sum-m) (llvm:const-int |i32| 0))
+    ((sum-m x) x)
+    ((sum-m x y ...) (llvm:add x (sum-m y ...)))))
+
+(llvm:define-function (main) |i32|
+  (ret (llvm:add
+         (pair-add-m ((llvm:const-int |i32| 4) (llvm:const-int |i32| 5)))
+         (sum-m (llvm:const-int |i32| 10)
+                (llvm:const-int |i32| 20)
+                (llvm:const-int |i32| 25)))))

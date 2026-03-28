@@ -10,9 +10,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release and git tag (e.g. v0.0.3-seed)"
+        description: "Release and git tag (e.g. v0.0.4-seed)"
         required: true
-        default: "v0.0.3-seed"
+        default: "v0.0.4-seed"
 
 permissions:
   contents: write

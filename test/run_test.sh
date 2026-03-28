@@ -154,6 +154,39 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
+# Test 5: macro_ellipsis_nested (nested subpatterns + ellipsis in syntax-rules)
+echo ""
+echo "=== Test: macro_ellipsis_nested.vibe ==="
+echo "Compiling macro_ellipsis_nested.vibe using $COMPILER..."
+if "${COMPILER}" test/macro_ellipsis_nested.vibe -o test/macro_ellipsis_nested.o 2>/dev/null; then
+    if [ -f test/macro_ellipsis_nested.o ]; then
+        echo "Linking executable..."
+        if cc $ARCH_FLAG test/macro_ellipsis_nested.o -o test/macro_ellipsis_nested.exe -lc 2>/dev/null; then
+            if ./test/macro_ellipsis_nested.exe 2>/dev/null; then
+                ELL_EXIT=0
+            else
+                ELL_EXIT=$?
+            fi
+            if [ "$ELL_EXIT" -eq 64 ]; then
+                echo "PASS: macro_ellipsis_nested"
+                PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                echo "FAIL: macro_ellipsis_nested - Expected exit code 64, got $ELL_EXIT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        else
+            echo "FAIL: macro_ellipsis_nested - Link failed"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        echo "FAIL: macro_ellipsis_nested - Object file not generated"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+else
+    echo "FAIL: macro_ellipsis_nested - Compile failed"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
 echo ""
 echo "Results: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ $FAIL_COUNT -gt 0 ]; then

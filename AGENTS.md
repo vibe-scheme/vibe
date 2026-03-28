@@ -70,7 +70,7 @@ The Vibe compiler is self-hosted: `vibe_kernel` compiles `.vibe` source files to
 ./build.sh install  # Install
 ```
 
-On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.3-seed) (asset `vibe_kernel_seed`) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`. Override the tag with `VIBE_SEED_TAG` (see `build.sh`). To publish a new seed: `./build.sh release-seed` or the **Release seed compiler** workflow; details in [`RELEASING.md`](RELEASING.md).
+On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads a seed compiler from the [GitHub release](https://github.com/vibe-scheme/vibe/releases/tag/v0.0.4-seed) (asset `vibe_kernel_seed`) and uses it to compile the `.vibe` source. Subsequent builds use the just-built `vibe_kernel`. Override the tag with `VIBE_SEED_TAG` (see `build.sh`). To publish a new seed: `./build.sh release-seed` or the **Release seed compiler** workflow; details in [`RELEASING.md`](RELEASING.md).
 
 **After upgrading LLVM**: Run `./build.sh clean` first so CMake reconfigures and finds the new LLVM paths.
 
@@ -88,7 +88,7 @@ On a clean checkout with no existing `vibe_kernel` binary, `build.sh` downloads 
 
 ### Seed Binary
 
-The **default** bootstrap download is **`v0.0.3-seed`**: a self-hosted `vibe_kernel` whose expander supports linear `syntax-rules` with a literals list, multiple clauses, and top-level install-after-expand (macros that expand to `define-syntax`). Use **`v0.0.2-seed`** for commits that need macros but not those features (`VIBE_SEED_TAG=v0.0.2-seed`); **`v0.0.1-seed`** for the original pre-expander chain (`VIBE_SEED_TAG=v0.0.1-seed`). The original LLVM IR bootstrap source remains in git history for emergency re-bootstrapping.
+The **default** bootstrap download is **`v0.0.4-seed`**: a self-hosted `vibe_kernel` whose expander supports `syntax-rules` with a literals list, multiple clauses, top-level install-after-expand (macros that expand to `define-syntax`), **nested list subpatterns**, and **final `...`** (ellipsis) in patterns and templates. Use **`v0.0.3-seed`** for commits that need v0.0.3 features but not ellipsis or nested patterns (`VIBE_SEED_TAG=v0.0.3-seed`); **`v0.0.2-seed`** for linear `syntax-rules` only (`VIBE_SEED_TAG=v0.0.2-seed`); **`v0.0.1-seed`** for the original pre-expander chain (`VIBE_SEED_TAG=v0.0.1-seed`). The original LLVM IR bootstrap source remains in git history for emergency re-bootstrapping.
 
 ### Vibe DSL Conventions
 

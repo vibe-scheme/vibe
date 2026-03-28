@@ -296,9 +296,11 @@
 
     <p style="margin-top: 28px; font-size: 0.95em; color: var(--muted);">
       <strong style="color: var(--fg);">Macro expander today:</strong>
-      flat linear <code>syntax-rules</code>, optional <strong>literals</strong> list, <strong>multiple clauses</strong>,
-      and top-level forms that expand to <code>define-syntax</code> (e.g. kernel prelude <code>define-vibe-syntax</code>) register correctly.
-      Ellipsis, nested patterns, and hygiene are still planned.
+      <code>syntax-rules</code> with optional <strong>literals</strong>, <strong>multiple clauses</strong>,
+      top-level install-after-expand (e.g. prelude <code>define-vibe-syntax</code>),
+      <strong>nested list subpatterns</strong>, and <strong>final <code>...</code></strong> (ellipsis) in patterns and templates.
+      Bootstrap seeds are versioned on GitHub Releases; the default seed matches the expander capabilities needed for current <code>main</code>.
+      Full hygiene and non-final ellipsis patterns are still planned (see design docs).
     </p>
   </section>
 

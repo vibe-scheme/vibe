@@ -55,17 +55,19 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
 
 - Top-level `(define-syntax name (syntax-rules (literal …) clause …))` with **multiple clauses** (first matching clause wins) and a **literals list** (symbols in that list match as fixed identifiers in the pattern, not as pattern variables).
 - Macro environment as an alist of **`(macro-name . (literals . clauses))`**: `literals` is the literals-list AST (including parser’s `()` node with null car/cdr when empty); `clauses` is a proper list of **`(pattern . template)`** pairs.
-- **Flat linear patterns**: the pattern is a proper list of the **same length** as the invocation; the first element is the keyword (must match the invocation’s `car`); remaining positions are either **literals** (must match the same atom in the invocation) or **pattern variables** (atoms not in the literals list; no nested list sub-patterns yet).
-- **Duplicate pattern variable names** in the pattern tail are rejected when registering the macro (literals may repeat in a pattern and do not count as variables).
-- **Template substitution**: tree walk on the template; replace atoms that match a binding; then **re-expand** the result so nested macro uses work. No recursive substitution inside substituted subtrees except through that re-expand step.
+- **Patterns**: keyword at `car` must match the invocation. **Tail** may mix **literals**, **pattern variables** (atoms not in the literals list), and **nested list sub-patterns** (same rules recursively inside each sublist). **Ellipsis** `...` is supported only as the **final** element of a list pattern (including nested lists): it repeats the preceding subpattern to consume the rest of the invocation tail (greedy from the right for patterns like `(m x y ...)`). Variables matched under `...` bind to a **proper list AST** of the matched subtrees. **`...` is reserved** (not a pattern variable).
+- **Duplicate pattern variable names** anywhere in the pattern are rejected when registering the macro (literals may repeat in a pattern and do not count as variables).
+- **Template substitution**: tree walk on the template; replace atoms that match a binding; **`...` replication** when `...` follows a template subform whose free pattern variables include at least one **ellipsis-bound** variable (R7RS-style “same ellipsis depth”); splice replicated segments into the output list. Then **re-expand** the result so nested macro uses work.
 - **Match failure** (e.g. wrong arity for a macro name): expansion does **not** apply; the form is treated as a normal list and **car/cdr are expanded** so inner macros still run.
 - **Top-level install-after-expand** (`expander_process_one` in `kernel/expander.vibe`): after `expander_expand_expr`, if the expanded form is a simple `(define-syntax …)` / `(syntax-rules …)` shape that `expander_parse_simple_macro` accepts, it is registered in the macro environment and consumed (same as a raw top-level `define-syntax`). So a macro such as **`define-vibe-syntax`** that expands to `define-syntax` installs the inner macro. Invalid `define-syntax` shapes after expansion are still returned to the driver unchanged. See **`test/macro_define_via_expand.vibe`**.
 
-**Not yet implemented** (still on the Phase 1 roadmap before Phase 2)
+**Partial / gaps** (Phase 1)
 
-- **Ellipsis** (`...`) in patterns and templates.
-- **Nested / non-flat patterns** in the pattern tail.
-- **Configurable fixed-point depth limit** for expansion loops (desirable for safety).
+- **Ellipsis in patterns**: only **final** `...` in a list (including nested lists). Patterns such as `(m x ... y)` (“split the middle”) are **not** supported.
+- **Ellipsis in templates**: minimal validation; invalid `...` use may still mis-expand — tighten as tests grow.
+- **Configurable fixed-point depth limit** for expansion loops (desirable for safety) — still open.
+
+**Regression / codegen note**: `codegen_dsl_label` skips a leading **quoted** label name when evaluating the label body list so `(llvm:label 'x expr)` passes only `expr` to `codegen_eval_dsl_body`. Some expander helpers use an **alloca + join** block instead of two successor blocks that only `(llvm:ret (llvm:call …))` to stay valid on older generated compilers before that fix.
 
 **Still deferred** (unchanged from before)
 
@@ -92,7 +94,7 @@ The expander lives in `kernel/expander.vibe` and runs between parse and codegen 
     ((kwlen sixteen) (llvm:const-int |i32| 16))))
 ```
 
-More elaborate Phase 1 examples (ellipsis, `with-field`-style nested structure in the pattern) await the features still listed above.
+Ellipsis + nested subpatterns are covered by **`test/macro_ellipsis_nested.vibe`** (exit **64**). A `with-field`-style macro still depends on how much structure you need in the template; non-final ellipsis remains unsupported.
 
 ### Kernel convenience macros (incremental)
 
