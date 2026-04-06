@@ -299,6 +299,8 @@
       <code>syntax-rules</code> with optional <strong>literals</strong>, <strong>multiple clauses</strong>,
       top-level install-after-expand (e.g. prelude <code>define-vibe-syntax</code>),
       <strong>nested list subpatterns</strong>, and <strong>final <code>...</code></strong> (ellipsis) in patterns and templates.
+      The kernel prepends shared helpers in <code>macros.vibe</code> (AST field access via <code>vibe:ast-ref</code> / <code>vibe:ast-addr</code>,
+      and <code>vibe:ast-list</code> for right-nested <code>create_cons</code> chains matching hand-written codegen).
       Bootstrap seeds are versioned on GitHub Releases; the default seed matches the expander capabilities needed for current <code>main</code>.
       Full hygiene and non-final ellipsis patterns are still planned (see design docs).
     </p>

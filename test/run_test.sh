@@ -187,6 +187,39 @@ else
     FAIL_COUNT=$((FAIL_COUNT + 1))
 fi
 
+# Test 6: macro_ast_ref_shape (literal-keyed clauses like kernel vibe:ast-ref)
+echo ""
+echo "=== Test: macro_ast_ref_shape.vibe ==="
+echo "Compiling macro_ast_ref_shape.vibe using $COMPILER..."
+if "${COMPILER}" test/macro_ast_ref_shape.vibe -o test/macro_ast_ref_shape.o 2>/dev/null; then
+    if [ -f test/macro_ast_ref_shape.o ]; then
+        echo "Linking executable..."
+        if cc $ARCH_FLAG test/macro_ast_ref_shape.o -o test/macro_ast_ref_shape.exe -lc 2>/dev/null; then
+            if ./test/macro_ast_ref_shape.exe 2>/dev/null; then
+                AR_EXIT=0
+            else
+                AR_EXIT=$?
+            fi
+            if [ "$AR_EXIT" -eq 19 ]; then
+                echo "PASS: macro_ast_ref_shape"
+                PASS_COUNT=$((PASS_COUNT + 1))
+            else
+                echo "FAIL: macro_ast_ref_shape - Expected exit code 19, got $AR_EXIT"
+                FAIL_COUNT=$((FAIL_COUNT + 1))
+            fi
+        else
+            echo "FAIL: macro_ast_ref_shape - Link failed"
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+    else
+        echo "FAIL: macro_ast_ref_shape - Object file not generated"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+else
+    echo "FAIL: macro_ast_ref_shape - Compile failed"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+fi
+
 echo ""
 echo "Results: $PASS_COUNT passed, $FAIL_COUNT failed"
 if [ $FAIL_COUNT -gt 0 ]; then

@@ -1,0 +1,16 @@
+; Canary: multi-clause syntax-rules with literal "field" names (same shape as kernel vibe:ast-ref).
+; User programs do not get kernel/macros.vibe; this mirrors the literal-dispatch pattern only.
+; Exit 19 = (10+4) + (0+5).
+
+(define-syntax ret
+  (syntax-rules ()
+    ((ret v) (llvm:ret v))))
+
+(define-syntax fake-ast-ref
+  (syntax-rules (car cdr)
+    ((fake-ast-ref x car) (llvm:add x (llvm:const-int |i32| 4)))
+    ((fake-ast-ref x cdr) (llvm:add x (llvm:const-int |i32| 5)))))
+
+(llvm:define-function (main) |i32|
+  (ret (llvm:add (fake-ast-ref (llvm:const-int |i32| 10) car)
+                 (fake-ast-ref (llvm:const-int |i32| 0) cdr))))

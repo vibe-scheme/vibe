@@ -102,19 +102,29 @@ The kernel may introduce small `syntax-rules` macros that expand to repeated `ll
 
 **`define-vibe-syntax`** is a small **`define-syntax`** macro in **`kernel/macros.vibe`**: it expands **`(define-vibe-syntax name _doc transformer)`** to **`(define-syntax name transformer)`**, so the doc subform is only syntax (omitted from the output). Install-after-expand (above) ensures that expansion is enough for registration. The **`vibe:*`** helpers there are written with **`define-vibe-syntax`** and a string doc subform (syntax only, not in the expanded `define-syntax`); binding-registry integration for those descriptions remains as in **`primitive-forms.md`** (planned).
 
+**AST primitive layering** (coherent access to `ASTNode` in `types.vibe`):
+
+1. **`vibe:ast-ref`** / **`vibe:ast-addr`** — multi-clause `syntax-rules` with literals **`(type atom_type value value_len car cdr line column)`**; single source of truth for GEP indices and load types (car/cdr loaded as `|%ASTNode*|`).
+2. **Pointer / span helpers** — **`vibe:ptr-null?`**, **`vibe:len-zero?`**, **`vibe:ptr-empty?`**.
+3. **Node predicates** — **`vibe:node-kind?`**, **`vibe:atom-type?`**, **`vibe:node-empty?`** expand using **`vibe:ast-ref`** (and **`ptr-empty?`** for node-empty).
+4. **`vibe:ast-list`** — variadic **right-nested** **`create_cons`** (same nesting style as hand-written kernel codegen: **`(a b c)` → `(create_cons a (create_cons b c))`**, not an R7RS proper list ending in null). Clause order: **`()` → null**; **`(x)` → `x`**; two or more arguments recurse with **`create_cons`**. A fuller Scheme **`list`** / parser-aligned empty list can wait until more of Scheme exists.
+
 | Macro | Expansion shape |
 |-------|-------------------|
+| **`vibe:ast-ref`** | **`(syntax-rules (type atom_type …)`** …**`)`**: **`llvm:load`** of **`(llvm:gep |%ASTNode| node 0 idx)`** per literal field name |
+| **`vibe:ast-addr`** | Same literals; **`llvm:gep`** only (for **`llvm:store`**, address-of-field) |
+| **`vibe:ast-list`** | **`()` → null**; **`(x) → x`**; **`(x y …) → (llvm:call create_cons x (vibe:ast-list y …))`** (nested pairs, not null-terminated spine) |
 | **`vibe:ast-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |%ASTNode*|))` |
 | **`vibe:ast-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |%ASTNode*|))` |
 | **`vibe:ptr-null?`** | `(llvm:icmp 'eq ptr (llvm:const-null |i8*|))` |
 | **`vibe:ptr-some?`** | `(llvm:icmp 'ne ptr (llvm:const-null |i8*|))` |
 | **`vibe:len-zero?`** | `(llvm:icmp 'eq len (llvm:const-int |i64| 0))` |
 | **`vibe:ptr-empty?`** | `(llvm:or (vibe:ptr-null? ptr) (vibe:len-zero? len))` |
-| **`vibe:node-empty?`** | **`ptr-empty?`** on **`load`** of **`ASTNode.value`** (field 2) and **`value_len`** (field 3) |
-| **`vibe:node-kind?`** | **`(syntax-rules (atom list) …)`**: load `ASTNode.type` (field 0), `icmp` vs `0` or `1` |
-| **`vibe:atom-type?`** | **`(syntax-rules (number string bytevector pointer) …)`**: load `ASTNode.atom_type` (field 1), `icmp` vs `2`, `3`, `13`, or `999` |
+| **`vibe:node-empty?`** | **`(vibe:ptr-empty? (vibe:ast-ref node value) (vibe:ast-ref node value_len))`** |
+| **`vibe:node-kind?`** | **`(syntax-rules (atom list) …)`**: **`icmp`** on **`(vibe:ast-ref n type)`** vs **`0`** or **`1`** |
+| **`vibe:atom-type?`** | **`(syntax-rules (number string bytevector pointer) …)`**: **`icmp`** on **`(vibe:ast-ref n atom_type)`** vs **`2`**, **`3`**, **`13`**, or **`999`** |
 
-See `test/macro_literals_clauses.vibe` for literals + clause ordering with **`syntax-rules`**.
+See `test/macro_literals_clauses.vibe` for literals + clause ordering with **`syntax-rules`**; `test/macro_ast_ref_shape.vibe` for a user-level canary of literal-keyed field-style clauses.
 
 **Macro scope per compilation**: Each kernel `.vibe` file is compiled separately to bitcode unless the build concatenates a shared prefix; the concatenated kernel objects share `types.vibe`, `macros.vibe`, and platform FFI stubs before the module body. R7RS **libraries** and a long-term module story remain **deferred** until after the kernel is further along and work emphasizes full R7RS support.
 

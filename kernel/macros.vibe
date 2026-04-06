@@ -8,6 +8,63 @@
     ((define-vibe-syntax name _doc transformer)
      (define-syntax name transformer))))
 
+; ASTNode field access — indices and load types match llvm:define-type ASTNode in types.vibe:
+;   0 type       |i32|     list vs atom discriminant
+;   1 atom_type  |i32|     atom subtype (number, string, …)
+;   2 value      |i8*|     payload pointer
+;   3 value_len  |i64|     payload length
+;   4 car        |%ASTNode*|  (struct stores i8*; kernel loads as AST node pointer)
+;   5 cdr        |%ASTNode*|
+;   6 line       |i32|
+;   7 column     |i32|
+
+(define-vibe-syntax vibe:ast-ref
+  "Load one ASTNode field; second subform is a literal field name (see header comment)."
+  (syntax-rules (type atom_type value value_len car cdr line column)
+    ((vibe:ast-ref node type)
+     (llvm:load (llvm:gep |%ASTNode| node 0 0) |i32|))
+    ((vibe:ast-ref node atom_type)
+     (llvm:load (llvm:gep |%ASTNode| node 0 1) |i32|))
+    ((vibe:ast-ref node value)
+     (llvm:load (llvm:gep |%ASTNode| node 0 2) |i8*|))
+    ((vibe:ast-ref node value_len)
+     (llvm:load (llvm:gep |%ASTNode| node 0 3) |i64|))
+    ((vibe:ast-ref node car)
+     (llvm:load (llvm:gep |%ASTNode| node 0 4) |%ASTNode*|))
+    ((vibe:ast-ref node cdr)
+     (llvm:load (llvm:gep |%ASTNode| node 0 5) |%ASTNode*|))
+    ((vibe:ast-ref node line)
+     (llvm:load (llvm:gep |%ASTNode| node 0 6) |i32|))
+    ((vibe:ast-ref node column)
+     (llvm:load (llvm:gep |%ASTNode| node 0 7) |i32|))))
+
+(define-vibe-syntax vibe:ast-addr
+  "Pointer to one ASTNode field (llvm:gep only); for llvm:store and similar."
+  (syntax-rules (type atom_type value value_len car cdr line column)
+    ((vibe:ast-addr node type)
+     (llvm:gep |%ASTNode| node 0 0))
+    ((vibe:ast-addr node atom_type)
+     (llvm:gep |%ASTNode| node 0 1))
+    ((vibe:ast-addr node value)
+     (llvm:gep |%ASTNode| node 0 2))
+    ((vibe:ast-addr node value_len)
+     (llvm:gep |%ASTNode| node 0 3))
+    ((vibe:ast-addr node car)
+     (llvm:gep |%ASTNode| node 0 4))
+    ((vibe:ast-addr node cdr)
+     (llvm:gep |%ASTNode| node 0 5))
+    ((vibe:ast-addr node line)
+     (llvm:gep |%ASTNode| node 0 6))
+    ((vibe:ast-addr node column)
+     (llvm:gep |%ASTNode| node 0 7))))
+
+(define-vibe-syntax vibe:ast-list
+  "Right-nested create_cons chain like kernel codegen (not R7RS list / null tail); () is null."
+  (syntax-rules ()
+    ((vibe:ast-list) (llvm:const-null |%ASTNode*|))
+    ((vibe:ast-list x) x)
+    ((vibe:ast-list x y ...) (llvm:call create_cons x (vibe:ast-list y ...)))))
+
 (define-vibe-syntax vibe:ast-null?
   "True when ptr is a null ASTNode pointer (empty list or missing node)."
   (syntax-rules ()
@@ -48,26 +105,24 @@
   "True when AST node's value (field 2) is null or value_len (field 3) is zero."
   (syntax-rules ()
     ((vibe:node-empty? node)
-     (vibe:ptr-empty?
-      (llvm:load (llvm:gep |%ASTNode| node 0 2) |i8*|)
-      (llvm:load (llvm:gep |%ASTNode| node 0 3) |i64|)))))
+     (vibe:ptr-empty? (vibe:ast-ref node value) (vibe:ast-ref node value_len)))))
 
 (define-vibe-syntax vibe:node-kind?
   "True when node's type field matches literal atom (0) or list (1)."
   (syntax-rules (atom list)
     ((vibe:node-kind? n atom)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 0) |i32|) (llvm:const-int |i32| 0)))
+     (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 0)))
     ((vibe:node-kind? n list)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 0) |i32|) (llvm:const-int |i32| 1)))))
+     (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 1)))))
 
 (define-vibe-syntax vibe:atom-type?
   "True when node's atom_type field matches literal number/string/bytevector/pointer."
   (syntax-rules (number string bytevector pointer)
     ((vibe:atom-type? n number)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 2)))
+     (llvm:icmp 'eq (vibe:ast-ref n atom_type) (llvm:const-int |i32| 2)))
     ((vibe:atom-type? n string)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 3)))
+     (llvm:icmp 'eq (vibe:ast-ref n atom_type) (llvm:const-int |i32| 3)))
     ((vibe:atom-type? n bytevector)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 13)))
+     (llvm:icmp 'eq (vibe:ast-ref n atom_type) (llvm:const-int |i32| 13)))
     ((vibe:atom-type? n pointer)
-     (llvm:icmp 'eq (llvm:load (llvm:gep |%ASTNode| n 0 1) |i32|) (llvm:const-int |i32| 999)))))
+     (llvm:icmp 'eq (vibe:ast-ref n atom_type) (llvm:const-int |i32| 999)))))
