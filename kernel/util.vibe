@@ -46,9 +46,7 @@
            (char_ptr (llvm:gep |i8| str i_val))
            (char (llvm:load char_ptr |i8|))
            (char_int (llvm:zext char |i8| |i32|))
-           (is_ge_0 (llvm:icmp 'uge char_int (llvm:const-int |i32| 48)))
-           (is_le_9 (llvm:icmp 'ule char_int (llvm:const-int |i32| 57)))
-           (is_digit (llvm:and is_ge_0 is_le_9)))
+           (is_digit (vibe:char-digit? char_int)))
       (llvm:br is_digit 'accumulate 'return)))
     (llvm:label 'accumulate
     (let* ((i_val (llvm:load i_ptr |i64|))
@@ -96,17 +94,13 @@
 (llvm:define-function (extract_quoted_atom (quote_node |%ASTNode*|) (name_out |i8*|) (len_out |i8*|)) |i32|
   (llvm:br (vibe:ast-null? quote_node) 'error 'check_quote_type)
   (llvm:label 'check_quote_type
-    (let* ((quote_type (vibe:ast-ref quote_node type))
-           (is_quote (llvm:icmp 'eq quote_type (llvm:const-int |i32| 2))))
-      (llvm:br is_quote 'get_quoted_expr 'error)))
+    (llvm:br (vibe:node-kind? quote_node quote) 'get_quoted_expr 'error))
   (llvm:label 'get_quoted_expr
     (let* ((quoted_expr (vibe:ast-ref quote_node car)))
       (llvm:br (vibe:ast-null? quoted_expr) 'error 'check_atom)))
   (llvm:label 'check_atom
-    (let* ((quoted_expr (vibe:ast-ref quote_node car))
-           (quoted_type (vibe:ast-ref quoted_expr type))
-           (is_atom (llvm:icmp 'eq quoted_type (llvm:const-int |i32| 0))))
-      (llvm:br is_atom 'extract_name 'error)))
+    (let* ((quoted_expr (vibe:ast-ref quote_node car)))
+      (llvm:br (vibe:node-kind? quoted_expr atom) 'extract_name 'error)))
   (llvm:label 'extract_name
     (let* ((quoted_expr (vibe:ast-ref quote_node car))
            (atom_val (vibe:ast-ref quoted_expr value))

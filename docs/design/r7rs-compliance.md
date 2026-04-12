@@ -320,7 +320,7 @@ Vibe takes a **macro-first** approach rather than the textbook order. Because th
 The implementation order is:
 
 1. **Macro system (unhygienic)**: `define-syntax`, `syntax-rules` — **in progress**: literals list, multiple clauses, nested sub-patterns, final `...` + template replication, and linear tails ship in `kernel/expander.vibe` (see `macro-system.md` for gaps). Sufficient for early kernel-level macros.
-2. **Kernel rewrite**: Use macros to simplify the compiler's own source code, making subsequent work tractable
+2. **Kernel rewrite**: Use macros to simplify the compiler's own source code, making subsequent work tractable — **in progress (partial)**: `kernel/macros.vibe` now includes token/char/`i32` helpers and `vibe:node-kind?` with `quote`; lexer, parser, expander, util, and codegen use them for readability. Large repetitive dispatch (e.g. DSL opcodes) still mostly explicit until richer macro patterns are practical.
 3. **Macro system (hygienic)**: Full R7RS-compliant `syntax-rules` with hygienic renaming
 4. **Primitive forms**: `quote`, `if`, `lambda`, `define`, `set!` — the irreducible core, implemented with macros available for readability
 5. **Core derived forms**: `let`, `let*`, `letrec*`, `begin`, `cond`, `and`, `or`, `when`, `unless` — defined as macros over the primitives

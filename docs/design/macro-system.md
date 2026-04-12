@@ -106,7 +106,7 @@ The kernel may introduce small `syntax-rules` macros that expand to repeated `ll
 
 1. **`vibe:ast-ref`** / **`vibe:ast-addr`** — multi-clause `syntax-rules` with literals **`(type atom_type value value_len car cdr line column)`**; single source of truth for GEP indices and load types (car/cdr loaded as `|%ASTNode*|`).
 2. **Pointer / span helpers** — **`vibe:ptr-null?`**, **`vibe:len-zero?`**, **`vibe:ptr-empty?`**.
-3. **Node predicates** — **`vibe:node-kind?`**, **`vibe:atom-type?`**, **`vibe:node-empty?`** expand using **`vibe:ast-ref`** (and **`ptr-empty?`** for node-empty).
+3. **Node predicates** — **`vibe:node-kind?`** (atom, list, or quote wrapper), **`vibe:atom-type?`**, **`vibe:node-empty?`** expand using **`vibe:ast-ref`** (and **`ptr-empty?`** for node-empty).
 4. **`vibe:ast-list`** — variadic **right-nested** **`create_cons`** (same nesting style as hand-written kernel codegen: **`(a b c)` → `(create_cons a (create_cons b c))`**, not an R7RS proper list ending in null). Clause order: **`()` → null**; **`(x)` → `x`**; two or more arguments recurse with **`create_cons`**. A fuller Scheme **`list`** / parser-aligned empty list can wait until more of Scheme exists.
 
 | Macro | Expansion shape |
@@ -121,8 +121,12 @@ The kernel may introduce small `syntax-rules` macros that expand to repeated `ll
 | **`vibe:len-zero?`** | `(llvm:icmp 'eq len (llvm:const-int |i64| 0))` |
 | **`vibe:ptr-empty?`** | `(llvm:or (vibe:ptr-null? ptr) (vibe:len-zero? len))` |
 | **`vibe:node-empty?`** | **`(vibe:ptr-empty? (vibe:ast-ref node value) (vibe:ast-ref node value_len))`** |
-| **`vibe:node-kind?`** | **`(syntax-rules (atom list) …)`**: **`icmp`** on **`(vibe:ast-ref n type)`** vs **`0`** or **`1`** |
+| **`vibe:node-kind?`** | **`(syntax-rules (atom list quote) …)`**: **`icmp`** on **`(vibe:ast-ref n type)`** vs **`0`**, **`1`**, or **`2`** (quote wrapper) |
 | **`vibe:atom-type?`** | **`(syntax-rules (number string bytevector pointer) …)`**: **`icmp`** on **`(vibe:ast-ref n atom_type)`** vs **`2`**, **`3`**, **`13`**, or **`999`** |
+| **`vibe:i32-zero?`**, **`vibe:i32-one?`**, **`vibe:i32-nonzero?`** | **`icmp`** vs **`0`** / **`1`** for C-style **`i32`** flags (predicates, **`strncmp`**, **`lex_is_eof`**) |
+| **`vibe:token-lit`**, **`vibe:token-type?`** | Lexer **`Token.type`** enum (eof … bytevector); **`token-type?`** is **`icmp`** against **`token-lit`** |
+| **`vibe:ast-type-lit`** | Parser **`ASTNode.type`** store values: atom **`0`**, list **`1`**, quote wrapper **`2`** |
+| **`vibe:char-eq?`**, **`vibe:char-digit?`** | Named ASCII code units vs **`i32`**; digit = **`'0'`–`'9'`** range |
 
 See `test/macro_literals_clauses.vibe` for literals + clause ordering with **`syntax-rules`**; `test/macro_ast_ref_shape.vibe` for a user-level canary of literal-keyed field-style clauses.
 

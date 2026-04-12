@@ -44,7 +44,7 @@
 ; getelementptr, and loads the character.
 (llvm:define-function (lex_current_char (lexer |%Lexer*|)) |i8|
   (let* ((is_eof (llvm:call lex_is_eof lexer))
-         (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+         (eof_bool (vibe:i32-nonzero? is_eof)))
     ; Branch instruction comes first (in entry block)
     (llvm:br eof_bool 'eof 'not_eof)
     ; Then define the label blocks
@@ -66,12 +66,12 @@
 ; based on whether it's a newline.
 (llvm:define-function (lex_advance (lexer |%Lexer*|)) |void|
   (let* ((is_eof (llvm:call lex_is_eof lexer))
-         (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+         (eof_bool (vibe:i32-nonzero? is_eof)))
     (llvm:br eof_bool 'done 'advance))
   (llvm:label 'advance
     (let* ((char (llvm:call lex_current_char lexer))
            (char_int (llvm:zext char |i8| |i32|))
-           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10))))
+           (is_newline (vibe:char-eq? char_int newline)))
       (llvm:br is_newline 'newline 'normal)))
   (llvm:label 'newline
     (let* ((line_ptr (llvm:gep |%Lexer| lexer 0 3))
@@ -123,15 +123,15 @@
 ; Uses zero extension to convert boolean result (i1) to i32 return type.
 (llvm:define-function (lex_is_delimiter (char |i8|)) |i32|
   (let* ((char_int (llvm:zext char |i8| |i32|))
-         (is_space (llvm:icmp 'eq char_int (llvm:const-int |i32| 32)))
-         (is_tab (llvm:icmp 'eq char_int (llvm:const-int |i32| 9)))
-         (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
-         (is_cr (llvm:icmp 'eq char_int (llvm:const-int |i32| 13)))
-         (is_lparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 40)))
-         (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41)))
-         (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 39)))
-         (is_semicolon (llvm:icmp 'eq char_int (llvm:const-int |i32| 59)))
-         (is_eof (llvm:icmp 'eq char_int (llvm:const-int |i32| 0)))
+         (is_space (vibe:char-eq? char_int space))
+         (is_tab (vibe:char-eq? char_int tab))
+         (is_newline (vibe:char-eq? char_int newline))
+         (is_cr (vibe:char-eq? char_int cr))
+         (is_lparen (vibe:char-eq? char_int lparen))
+         (is_rparen (vibe:char-eq? char_int rparen))
+         (is_quote (vibe:char-eq? char_int squote))
+         (is_semicolon (vibe:char-eq? char_int semicolon))
+         (is_eof (vibe:char-eq? char_int nul))
          (ws1 (llvm:or is_space is_tab))
          (ws2 (llvm:or is_newline is_cr))
          (ws (llvm:or ws1 ws2))
@@ -152,10 +152,10 @@
   (llvm:label 'loop
     (let* ((char (llvm:call lex_current_char lexer))
            (char_int (llvm:zext char |i8| |i32|))
-           (is_space (llvm:icmp 'eq char_int (llvm:const-int |i32| 32)))
-           (is_tab (llvm:icmp 'eq char_int (llvm:const-int |i32| 9)))
-           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
-           (is_cr (llvm:icmp 'eq char_int (llvm:const-int |i32| 13)))
+           (is_space (vibe:char-eq? char_int space))
+           (is_tab (vibe:char-eq? char_int tab))
+           (is_newline (vibe:char-eq? char_int newline))
+           (is_cr (vibe:char-eq? char_int cr))
            (is_ws1 (llvm:or is_space is_tab))
            (is_ws2 (llvm:or is_newline is_cr))
            (is_ws (llvm:or is_ws1 is_ws2)))
@@ -177,8 +177,8 @@
     (let* ((char (llvm:call lex_current_char lexer))
            (char_int (llvm:zext char |i8| |i32|))
            (is_eof (llvm:call lex_is_eof lexer))
-           (is_newline (llvm:icmp 'eq char_int (llvm:const-int |i32| 10)))
-           (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+           (is_newline (vibe:char-eq? char_int newline))
+           (eof_bool (vibe:i32-nonzero? is_eof))
            (done (llvm:or eof_bool is_newline)))
       (llvm:br done 'exit 'continue)))
   (llvm:label 'continue
@@ -221,7 +221,7 @@
          (col_ptr (llvm:gep |%Lexer| lexer 0 4))
          (col (llvm:load col_ptr |i32|))
          (col_val_ptr (llvm:gep |%Token| error_token_ptr 0 4)))
-    (llvm:store (llvm:const-int |i32| 12) type_ptr)
+    (llvm:store (vibe:token-lit error) type_ptr)
     (llvm:store message val_ptr)
     (llvm:store line line_val_ptr)
     (llvm:store col col_val_ptr)
@@ -240,17 +240,17 @@
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
              (is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+             (eof_bool (vibe:i32-nonzero? is_eof)))
         (llvm:br eof_bool 'error 'check_quote)))
     (llvm:label 'check_quote
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 34))))
+             (is_quote (vibe:char-eq? char_int dquote)))
         (llvm:br is_quote 'done 'check_escape)))
     (llvm:label 'check_escape
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_backslash (llvm:icmp 'eq char_int (llvm:const-int |i32| 92))))
+             (is_backslash (vibe:char-eq? char_int backslash)))
         (llvm:br is_backslash 'escape 'normal_char)))
     (llvm:label 'escape
       (llvm:call lex_advance lexer)
@@ -287,7 +287,7 @@
              (col_ptr (llvm:gep |%Lexer| lexer 0 4))
              (col (llvm:load col_ptr |i32|))
              (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
-        (llvm:store (llvm:const-int |i32| 3) type_ptr)  ; TOKEN_STRING
+        (llvm:store (vibe:token-lit string) type_ptr)
         (llvm:store value val_ptr)
         (llvm:store len len_val_ptr)
         (llvm:store line line_val_ptr)
@@ -311,8 +311,8 @@
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
              (is_eof (llvm:call lex_is_eof lexer))
-             (is_vbar (llvm:icmp 'eq char_int (llvm:const-int |i32| 124)))
-             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+             (is_vbar (vibe:char-eq? char_int vbar))
+             (eof_bool (vibe:i32-nonzero? is_eof))
              (done (llvm:or eof_bool is_vbar)))
         (llvm:br done 'check_closing 'append_char)))
     (llvm:label 'append_char
@@ -326,7 +326,7 @@
         (llvm:br 'loop)))
     (llvm:label 'check_closing
       (let* ((is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool_check (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+             (eof_bool_check (vibe:i32-nonzero? is_eof)))
         (llvm:br eof_bool_check 'error 'done_ok)))
     (llvm:label 'done_ok
       (llvm:call lex_advance lexer)  ; Skip closing |
@@ -344,7 +344,7 @@
              (col_ptr (llvm:gep |%Lexer| lexer 0 4))
              (col (llvm:load col_ptr |i32|))
              (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
-        (llvm:store (llvm:const-int |i32| 1) type_ptr)  ; TOKEN_IDENTIFIER
+        (llvm:store (vibe:token-lit identifier) type_ptr)
         (llvm:store value val_ptr)
         (llvm:store len len_val_ptr)
         (llvm:store line line_val_ptr)
@@ -377,16 +377,14 @@
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
              (is_eof (llvm:call lex_is_eof lexer))
-             (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41)))
-             (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0)))
+             (is_rparen (vibe:char-eq? char_int rparen))
+             (eof_bool (vibe:i32-nonzero? is_eof))
              (done (llvm:or eof_bool is_rparen)))
         (llvm:br done 'check_closing 'read_number)))
     (llvm:label 'read_number
       (let* ((num_start (llvm:call lex_current_char lexer))
              (num_start_int (llvm:zext num_start |i8| |i32|))
-             (is_digit (llvm:icmp 'uge num_start_int (llvm:const-int |i32| 48)))
-             (is_digit2 (llvm:icmp 'ule num_start_int (llvm:const-int |i32| 57)))
-             (is_digit_both (llvm:and is_digit is_digit2)))
+             (is_digit_both (vibe:char-digit? num_start_int)))
         (llvm:br is_digit_both 'read_digits 'error)))
     (llvm:label 'read_digits
       (llvm:store (llvm:const-int |i32| 0) num_val)
@@ -394,9 +392,7 @@
     (llvm:label 'digit_loop
       (let* ((digit_char (llvm:call lex_current_char lexer))
              (digit_int (llvm:zext digit_char |i8| |i32|))
-             (is_digit_check (llvm:icmp 'uge digit_int (llvm:const-int |i32| 48)))
-             (is_digit_check2 (llvm:icmp 'ule digit_int (llvm:const-int |i32| 57)))
-             (is_digit_ok (llvm:and is_digit_check is_digit_check2)))
+             (is_digit_ok (vibe:char-digit? digit_int)))
         (llvm:br is_digit_ok 'accumulate 'store_byte)))
     (llvm:label 'accumulate
       (let* ((digit_char (llvm:call lex_current_char lexer))
@@ -419,7 +415,7 @@
         (llvm:br 'loop)))
     (llvm:label 'check_closing
       (let* ((is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool_check (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+             (eof_bool_check (vibe:i32-nonzero? is_eof)))
         (llvm:br eof_bool_check 'error 'done_ok)))
     (llvm:label 'done_ok
       (llvm:call lex_advance lexer)  ; Skip closing )
@@ -437,7 +433,7 @@
              (col_ptr (llvm:gep |%Lexer| lexer 0 4))
              (col (llvm:load col_ptr |i32|))
              (col_val_ptr (llvm:gep |%Token| token_ptr 0 4)))
-        (llvm:store (llvm:const-int |i32| 13) type_ptr)  ; TOKEN_BYTEVECTOR
+        (llvm:store (vibe:token-lit bytevector) type_ptr)
         (llvm:store value val_ptr)
         (llvm:store len len_val_ptr)
         (llvm:store line line_val_ptr)
@@ -464,10 +460,8 @@
          (first_char_ptr (llvm:gep |i8| source start))
          (first_char (llvm:load first_char_ptr |i8|))
          (first_int (llvm:zext first_char |i8| |i32|))
-         (is_hash (llvm:icmp 'eq first_int (llvm:const-int |i32| 35)))
-         (is_digit_first (llvm:icmp 'uge first_int (llvm:const-int |i32| 48)))
-         (is_digit_first2 (llvm:icmp 'ule first_int (llvm:const-int |i32| 57)))
-         (is_digit_first_both (llvm:and is_digit_first is_digit_first2))
+         (is_hash (vibe:char-eq? first_int hash))
+         (is_digit_first_both (vibe:char-digit? first_int))
          (i_counter (llvm:alloca |i64|))
          (token_type_ptr (llvm:alloca |i32|)))
     (llvm:br is_digit_first_both 'check_all_digits 'check_hash)
@@ -483,9 +477,7 @@
              (char_idx_ptr (llvm:gep |i8| first_char_ptr i_val))
              (char_idx (llvm:load char_idx_ptr |i8|))
              (char_idx_int (llvm:zext char_idx |i8| |i32|))
-             (is_digit_char (llvm:icmp 'uge char_idx_int (llvm:const-int |i32| 48)))
-             (is_digit_char2 (llvm:icmp 'ule char_idx_int (llvm:const-int |i32| 57)))
-             (is_digit_char_both (llvm:and is_digit_char is_digit_char2)))
+             (is_digit_char_both (vibe:char-digit? char_idx_int)))
         (llvm:br is_digit_char_both 'next_char 'not_all_digits)))
     (llvm:label 'next_char
       (let* ((i_val (llvm:load i_counter |i64|))
@@ -493,12 +485,12 @@
         (llvm:store i_new i_counter)
         (llvm:br 'digit_check_loop)))
     (llvm:label 'all_digits
-      (llvm:store (llvm:const-int |i32| 2) token_type_ptr)
+      (llvm:store (vibe:token-lit number) token_type_ptr)
       (llvm:br 'set_token_type))
     (llvm:label 'not_all_digits
       (llvm:br 'check_hash))
     (llvm:label 'check_hash
-      (let* ((token_type (llvm:select is_hash (llvm:const-int |i32| 4) (llvm:const-int |i32| 1))))
+      (let* ((token_type (llvm:select is_hash (vibe:token-lit symbol) (vibe:token-lit identifier))))
         (llvm:store token_type token_type_ptr)
         (llvm:br 'set_token_type)))
     (llvm:label 'set_token_type
@@ -529,18 +521,18 @@
   (let* ((saved_start_pos (llvm:alloca |i64|)))
     (llvm:call lex_skip_whitespace lexer)
     (let* ((is_eof (llvm:call lex_is_eof lexer))
-           (eof_bool (llvm:icmp 'ne is_eof (llvm:const-int |i32| 0))))
+           (eof_bool (vibe:i32-nonzero? is_eof)))
     (llvm:br eof_bool 'eof 'not_eof)
     (llvm:label 'eof
       (let* ((eof_token (llvm:call malloc (llvm:const-int |i64| 32)))
              (eof_token_ptr (llvm:bitcast eof_token |%Token*|))
              (type_ptr_eof (llvm:gep |%Token| eof_token_ptr 0 0)))
-        (llvm:store (llvm:const-int |i32| 0) type_ptr_eof)
+        (llvm:store (vibe:token-lit eof) type_ptr_eof)
         (llvm:ret eof_token_ptr)))
     (llvm:label 'not_eof
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_semicolon (llvm:icmp 'eq char_int (llvm:const-int |i32| 59))))
+             (is_semicolon (vibe:char-eq? char_int semicolon)))
         (llvm:br is_semicolon 'comment 'check_string)))
     (llvm:label 'comment
       (llvm:call lex_skip_comment lexer)
@@ -549,7 +541,7 @@
     (llvm:label 'check_string
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_dquote (llvm:icmp 'eq char_int (llvm:const-int |i32| 34))))
+             (is_dquote (vibe:char-eq? char_int dquote)))
         (llvm:br is_dquote 'string 'check_vertical_bar)))
     (llvm:label 'string
       (let* ((str_token (llvm:call lex_read_string lexer)))
@@ -557,7 +549,7 @@
     (llvm:label 'check_vertical_bar
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_vbar (llvm:icmp 'eq char_int (llvm:const-int |i32| 124))))
+             (is_vbar (vibe:char-eq? char_int vbar)))
         (llvm:br is_vbar 'vertical_bar_symbol 'check_hash)))
     (llvm:label 'vertical_bar_symbol
       (let* ((vbar_token (llvm:call lex_read_vertical_bar_symbol lexer)))
@@ -565,22 +557,22 @@
     (llvm:label 'check_hash
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_hash (llvm:icmp 'eq char_int (llvm:const-int |i32| 35))))
+             (is_hash (vibe:char-eq? char_int hash)))
         (llvm:br is_hash 'check_bytevector 'check_lparen)))
     (llvm:label 'check_bytevector
       (let* ((peek1 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 1)))
              (peek1_int (llvm:zext peek1 |i8| |i32|))
-             (is_u (llvm:icmp 'eq peek1_int (llvm:const-int |i32| 117))))
+             (is_u (vibe:char-eq? peek1_int u)))
         (llvm:br is_u 'check_u8 'identifier)))
     (llvm:label 'check_u8
       (let* ((peek2 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 2)))
              (peek2_int (llvm:zext peek2 |i8| |i32|))
-             (is_8 (llvm:icmp 'eq peek2_int (llvm:const-int |i32| 56))))
+             (is_8 (vibe:char-eq? peek2_int digit_8)))
         (llvm:br is_8 'check_u8_lparen 'identifier)))
     (llvm:label 'check_u8_lparen
       (let* ((peek3 (llvm:call lex_peek_char lexer (llvm:const-int |i64| 3)))
              (peek3_int (llvm:zext peek3 |i8| |i32|))
-             (is_lparen_u8 (llvm:icmp 'eq peek3_int (llvm:const-int |i32| 40))))
+             (is_lparen_u8 (vibe:char-eq? peek3_int lparen)))
         (llvm:br is_lparen_u8 'bytevector 'identifier)))
     (llvm:label 'bytevector
       (let* ((bytevec_token (llvm:call lex_read_bytevector lexer)))
@@ -588,37 +580,37 @@
     (llvm:label 'check_lparen
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_lparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 40))))
+             (is_lparen (vibe:char-eq? char_int lparen)))
         (llvm:br is_lparen 'lparen 'check_rparen)))
     (llvm:label 'lparen
       (let* ((lparen_token (llvm:call malloc (llvm:const-int |i64| 32)))
              (lparen_token_ptr (llvm:bitcast lparen_token |%Token*|))
              (type_ptr_lparen (llvm:gep |%Token| lparen_token_ptr 0 0)))
-        (llvm:store (llvm:const-int |i32| 5) type_ptr_lparen)
+        (llvm:store (vibe:token-lit lparen) type_ptr_lparen)
         (llvm:call lex_advance lexer)
         (llvm:ret lparen_token_ptr)))
     (llvm:label 'check_rparen
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_rparen (llvm:icmp 'eq char_int (llvm:const-int |i32| 41))))
+             (is_rparen (vibe:char-eq? char_int rparen)))
         (llvm:br is_rparen 'rparen 'check_quote_char)))
     (llvm:label 'rparen
       (let* ((rparen_token (llvm:call malloc (llvm:const-int |i64| 32)))
              (rparen_token_ptr (llvm:bitcast rparen_token |%Token*|))
              (type_ptr_rparen (llvm:gep |%Token| rparen_token_ptr 0 0)))
-        (llvm:store (llvm:const-int |i32| 6) type_ptr_rparen)
+        (llvm:store (vibe:token-lit rparen) type_ptr_rparen)
         (llvm:call lex_advance lexer)
         (llvm:ret rparen_token_ptr)))
     (llvm:label 'check_quote_char
       (let* ((char (llvm:call lex_current_char lexer))
              (char_int (llvm:zext char |i8| |i32|))
-             (is_quote (llvm:icmp 'eq char_int (llvm:const-int |i32| 39))))
+             (is_quote (vibe:char-eq? char_int squote)))
         (llvm:br is_quote 'quote 'identifier)))
     (llvm:label 'quote
       (let* ((quote_token (llvm:call malloc (llvm:const-int |i64| 32)))
              (quote_token_ptr (llvm:bitcast quote_token |%Token*|))
              (type_ptr_quote (llvm:gep |%Token| quote_token_ptr 0 0)))
-        (llvm:store (llvm:const-int |i32| 7) type_ptr_quote)
+        (llvm:store (vibe:token-lit quote) type_ptr_quote)
         (llvm:call lex_advance lexer)
         (llvm:ret quote_token_ptr)))
     (llvm:label 'identifier
@@ -629,7 +621,7 @@
     (llvm:label 'read_loop
       (let* ((char_loop (llvm:call lex_current_char lexer))
              (is_delim (llvm:call lex_is_delimiter char_loop))
-             (delim_bool (llvm:icmp 'ne is_delim (llvm:const-int |i32| 0))))
+             (delim_bool (vibe:i32-nonzero? is_delim)))
         (llvm:br delim_bool 'done_id 'continue_id)))
     (llvm:label 'continue_id
       (llvm:call lex_advance lexer)

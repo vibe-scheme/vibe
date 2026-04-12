@@ -1800,10 +1800,8 @@
         (llvm:store first_arg first_arg_ptr)
         (llvm:br first_arg_null 'error 'check_if_quote)))
     (llvm:label 'check_if_quote
-      (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|))
-             (first_arg_type (vibe:ast-ref first_arg type))
-             (is_quote (llvm:icmp 'eq first_arg_type (llvm:const-int |i32| 2))))
-        (llvm:br is_quote 'unconditional_br 'conditional_br)))
+      (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|)))
+        (llvm:br (vibe:node-kind? first_arg quote) 'unconditional_br 'conditional_br)))
     (llvm:label 'unconditional_br
       (let* ((first_arg (llvm:load first_arg_ptr |%ASTNode*|))
              (extract_result (llvm:call extract_quoted_atom first_arg label_name_out label_len_out))
@@ -1963,10 +1961,8 @@
         (llvm:br is_list 'pb_list_head 'pb_take_body0)))
     (llvm:label 'pb_list_head
       (let* ((body0 (vibe:ast-ref args cdr))
-             (car0 (vibe:ast-ref body0 car))
-             (ty0 (vibe:ast-ref car0 type))
-             (is_quote (llvm:icmp 'eq ty0 (llvm:const-int |i32| 2))))
-        (llvm:br is_quote 'pb_take_cdr 'pb_take_body0)))
+             (car0 (vibe:ast-ref body0 car)))
+        (llvm:br (vibe:node-kind? car0 quote) 'pb_take_cdr 'pb_take_body0)))
     (llvm:label 'pb_take_cdr
       (let* ((body0 (vibe:ast-ref args cdr))
              (rest (vibe:ast-ref body0 cdr)))
@@ -5170,9 +5166,7 @@
     (llvm:ret (llvm:const-null |i8*|)))
 
   (llvm:label 'check_type
-    (let* ((expr_type (vibe:ast-ref expr type))
-           (is_quote (llvm:icmp 'eq expr_type (llvm:const-int |i32| 2))))
-      (llvm:br is_quote 'handle_quote 'check_atom)))
+    (llvm:br (vibe:node-kind? expr quote) 'handle_quote 'check_atom))
 
   (llvm:label 'check_atom
     (llvm:br (vibe:node-kind? expr atom) 'handle_atom 'handle_list))

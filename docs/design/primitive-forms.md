@@ -109,8 +109,16 @@ When the binding/doc registry exists, these entries (name → exact documentatio
 | `vibe:len-zero?` | `True when len is zero (i64 lengths: token, lexer source, AST value_len, paths).` |
 | `vibe:ptr-empty?` | `True when ptr is null i8* or len is zero (invalid byte span / C-string).` |
 | `vibe:node-empty?` | `True when AST node's value pointer is null or value_len is zero.` |
-| `vibe:node-kind?` | `True when node's type field matches literal atom (0) or list (1).` |
+| `vibe:node-kind?` | `True when node's type field matches literal atom (0), list (1), or quote wrapper (2).` |
 | `vibe:atom-type?` | `True when node's atom_type field matches literal number/string/bytevector/pointer.` |
+| `vibe:i32-zero?` | `True when x is zero (C-style i32 boolean / strcmp result / parse_check failure).` |
+| `vibe:i32-one?` | `True when x is one (kernel helper predicates that return 0/1).` |
+| `vibe:i32-nonzero?` | `True when x is not zero (e.g. lex_is_eof / lex_is_delimiter truthy return).` |
+| `vibe:token-lit` | `Lexer Token.type constant; names match comments in kernel/lexer.vibe.` |
+| `vibe:token-type?` | `True when token's type field (i32) matches the named token kind.` |
+| `vibe:ast-type-lit` | `ASTNode.type discriminant stored by parser: atom list or quote wrapper.` |
+| `vibe:char-eq?` | `True when extended-ASCII code unit c (i32) equals the named character.` |
+| `vibe:char-digit?` | `True when c (i32 code unit) is ASCII '0'..'9'.` |
 
 Keep this table in sync with **`kernel/macros.vibe`** when adding or editing documented kernel macros.
 - **Compile unit today**: Each kernel `.vibe` file is compiled to its own bitcode module (see the `compile_*` rules in `CMakeLists.txt`), so the macro environment is **per file** for a single run of the compiler on that source.

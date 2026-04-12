@@ -8,8 +8,11 @@
     ((define-vibe-syntax name _doc transformer)
      (define-syntax name transformer))))
 
+; Token type literals (lexer → parser): see vibe:token-lit / vibe:token-type?
+; AST node type field (parser stores): atom=0 list=1 quote wrapper=2 — vibe:ast-type-lit / vibe:node-kind?
+
 ; ASTNode field access — indices and load types match llvm:define-type ASTNode in types.vibe:
-;   0 type       |i32|     list vs atom discriminant
+;   0 type       |i32|     atom / list / quote wrapper — see vibe:node-kind? / vibe:ast-type-lit
 ;   1 atom_type  |i32|     atom subtype (number, string, …)
 ;   2 value      |i8*|     payload pointer
 ;   3 value_len  |i64|     payload length
@@ -107,13 +110,97 @@
     ((vibe:node-empty? node)
      (vibe:ptr-empty? (vibe:ast-ref node value) (vibe:ast-ref node value_len)))))
 
+(define-vibe-syntax vibe:i32-zero?
+  "True when x is zero (C-style i32 boolean / strcmp result / parse_check failure)."
+  (syntax-rules ()
+    ((vibe:i32-zero? x)
+     (llvm:icmp 'eq x (llvm:const-int |i32| 0)))))
+
+(define-vibe-syntax vibe:i32-one?
+  "True when x is one (kernel helper predicates that return 0/1)."
+  (syntax-rules ()
+    ((vibe:i32-one? x)
+     (llvm:icmp 'eq x (llvm:const-int |i32| 1)))))
+
+(define-vibe-syntax vibe:i32-nonzero?
+  "True when x is not zero (e.g. lex_is_eof / lex_is_delimiter truthy return)."
+  (syntax-rules ()
+    ((vibe:i32-nonzero? x)
+     (llvm:icmp 'ne x (llvm:const-int |i32| 0)))))
+
+(define-vibe-syntax vibe:token-lit
+  "Lexer Token.type constant; names match comments in kernel/lexer.vibe."
+  (syntax-rules (eof identifier number string symbol lparen rparen quote dot error bytevector)
+    ((vibe:token-lit eof) (llvm:const-int |i32| 0))
+    ((vibe:token-lit identifier) (llvm:const-int |i32| 1))
+    ((vibe:token-lit number) (llvm:const-int |i32| 2))
+    ((vibe:token-lit string) (llvm:const-int |i32| 3))
+    ((vibe:token-lit symbol) (llvm:const-int |i32| 4))
+    ((vibe:token-lit lparen) (llvm:const-int |i32| 5))
+    ((vibe:token-lit rparen) (llvm:const-int |i32| 6))
+    ((vibe:token-lit quote) (llvm:const-int |i32| 7))
+    ((vibe:token-lit dot) (llvm:const-int |i32| 11))
+    ((vibe:token-lit error) (llvm:const-int |i32| 12))
+    ((vibe:token-lit bytevector) (llvm:const-int |i32| 13))))
+
+(define-vibe-syntax vibe:token-type?
+  "True when token's type field (i32) matches the named token kind."
+  (syntax-rules (eof identifier number string symbol lparen rparen quote dot error bytevector)
+    ((vibe:token-type? t eof) (llvm:icmp 'eq t (vibe:token-lit eof)))
+    ((vibe:token-type? t identifier) (llvm:icmp 'eq t (vibe:token-lit identifier)))
+    ((vibe:token-type? t number) (llvm:icmp 'eq t (vibe:token-lit number)))
+    ((vibe:token-type? t string) (llvm:icmp 'eq t (vibe:token-lit string)))
+    ((vibe:token-type? t symbol) (llvm:icmp 'eq t (vibe:token-lit symbol)))
+    ((vibe:token-type? t lparen) (llvm:icmp 'eq t (vibe:token-lit lparen)))
+    ((vibe:token-type? t rparen) (llvm:icmp 'eq t (vibe:token-lit rparen)))
+    ((vibe:token-type? t quote) (llvm:icmp 'eq t (vibe:token-lit quote)))
+    ((vibe:token-type? t dot) (llvm:icmp 'eq t (vibe:token-lit dot)))
+    ((vibe:token-type? t error) (llvm:icmp 'eq t (vibe:token-lit error)))
+    ((vibe:token-type? t bytevector) (llvm:icmp 'eq t (vibe:token-lit bytevector)))))
+
+(define-vibe-syntax vibe:ast-type-lit
+  "ASTNode.type discriminant stored by parser: atom list or quote wrapper."
+  (syntax-rules (atom list quote)
+    ((vibe:ast-type-lit atom) (llvm:const-int |i32| 0))
+    ((vibe:ast-type-lit list) (llvm:const-int |i32| 1))
+    ((vibe:ast-type-lit quote) (llvm:const-int |i32| 2))))
+
+(define-vibe-syntax vibe:char-eq?
+  "True when extended-ASCII code unit c (i32) equals the named character."
+  (syntax-rules (nul space tab newline cr lparen rparen squote dquote semicolon hash vbar backslash u digit_8 percent)
+    ((vibe:char-eq? c nul) (llvm:icmp 'eq c (llvm:const-int |i32| 0)))
+    ((vibe:char-eq? c tab) (llvm:icmp 'eq c (llvm:const-int |i32| 9)))
+    ((vibe:char-eq? c newline) (llvm:icmp 'eq c (llvm:const-int |i32| 10)))
+    ((vibe:char-eq? c cr) (llvm:icmp 'eq c (llvm:const-int |i32| 13)))
+    ((vibe:char-eq? c space) (llvm:icmp 'eq c (llvm:const-int |i32| 32)))
+    ((vibe:char-eq? c percent) (llvm:icmp 'eq c (llvm:const-int |i32| 37)))
+    ((vibe:char-eq? c lparen) (llvm:icmp 'eq c (llvm:const-int |i32| 40)))
+    ((vibe:char-eq? c rparen) (llvm:icmp 'eq c (llvm:const-int |i32| 41)))
+    ((vibe:char-eq? c squote) (llvm:icmp 'eq c (llvm:const-int |i32| 39)))
+    ((vibe:char-eq? c dquote) (llvm:icmp 'eq c (llvm:const-int |i32| 34)))
+    ((vibe:char-eq? c semicolon) (llvm:icmp 'eq c (llvm:const-int |i32| 59)))
+    ((vibe:char-eq? c hash) (llvm:icmp 'eq c (llvm:const-int |i32| 35)))
+    ((vibe:char-eq? c backslash) (llvm:icmp 'eq c (llvm:const-int |i32| 92)))
+    ((vibe:char-eq? c u) (llvm:icmp 'eq c (llvm:const-int |i32| 117)))
+    ((vibe:char-eq? c digit_8) (llvm:icmp 'eq c (llvm:const-int |i32| 56)))
+    ((vibe:char-eq? c vbar) (llvm:icmp 'eq c (llvm:const-int |i32| 124)))))
+
+(define-vibe-syntax vibe:char-digit?
+  "True when c (i32 code unit) is ASCII '0'..'9'."
+  (syntax-rules ()
+    ((vibe:char-digit? c)
+     (llvm:and (llvm:icmp 'uge c (llvm:const-int |i32| 48))
+               (llvm:icmp 'ule c (llvm:const-int |i32| 57))))))
+
 (define-vibe-syntax vibe:node-kind?
-  "True when node's type field matches literal atom (0) or list (1)."
-  (syntax-rules (atom list)
+  "True when node's type field matches atom (0), list (1), or quote wrapper (2)."
+  (syntax-rules (atom list quote)
     ((vibe:node-kind? n atom)
      (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 0)))
     ((vibe:node-kind? n list)
-     (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 1)))))
+     (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 1)))
+    ((vibe:node-kind? n quote)
+     (llvm:icmp 'eq (vibe:ast-ref n type) (llvm:const-int |i32| 2)))))
 
 (define-vibe-syntax vibe:atom-type?
   "True when node's atom_type field matches literal number/string/bytevector/pointer."
