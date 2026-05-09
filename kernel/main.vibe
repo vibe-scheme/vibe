@@ -250,9 +250,7 @@
       (let* ((basename_len (llvm:load basename_len_ptr |i64|)))
         (llvm:store basename_len final_len_ptr)
         (llvm:br 'allocate_name)))
-    (llvm:label 'allocate_name
-      (let* ((final_len (llvm:load final_len_ptr |i64|)))
-        (llvm:br (vibe:len-zero? final_len) 'error 'alloc_buf)))
+    (vibe:label-branch 'allocate_name (vibe:len-zero? (llvm:load final_len_ptr |i64|)) 'error 'alloc_buf)
     (llvm:label 'alloc_buf
       (let* ((final_len (llvm:load final_len_ptr |i64|))
              (buf_size (llvm:add final_len (llvm:const-int |i64| 1)))

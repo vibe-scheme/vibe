@@ -73,10 +73,8 @@
 ;; ============================================================================
 (llvm:define-function (parse_int_from_ast (node |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? node) 'error 'check_type)
-  (llvm:label 'check_type
-    (llvm:br (vibe:node-kind? node atom) 'check_number 'error))
-  (llvm:label 'check_number
-    (llvm:br (vibe:atom-type? node number) 'parse_number 'error))
+  (vibe:label-branch 'check_type (vibe:node-kind? node atom) 'check_number 'error)
+  (vibe:label-branch 'check_number (vibe:atom-type? node number) 'parse_number 'error)
   (llvm:label 'parse_number
     (let* ((value_str (vibe:ast-ref node value))
            (value_len (vibe:ast-ref node value_len))
@@ -93,14 +91,9 @@
 ;; ============================================================================
 (llvm:define-function (extract_quoted_atom (quote_node |%ASTNode*|) (name_out |i8*|) (len_out |i8*|)) |i32|
   (llvm:br (vibe:ast-null? quote_node) 'error 'check_quote_type)
-  (llvm:label 'check_quote_type
-    (llvm:br (vibe:node-kind? quote_node quote) 'get_quoted_expr 'error))
-  (llvm:label 'get_quoted_expr
-    (let* ((quoted_expr (vibe:ast-ref quote_node car)))
-      (llvm:br (vibe:ast-null? quoted_expr) 'error 'check_atom)))
-  (llvm:label 'check_atom
-    (let* ((quoted_expr (vibe:ast-ref quote_node car)))
-      (llvm:br (vibe:node-kind? quoted_expr atom) 'extract_name 'error)))
+  (vibe:label-branch 'check_quote_type (vibe:node-kind? quote_node quote) 'get_quoted_expr 'error)
+  (vibe:label-branch 'get_quoted_expr (vibe:ast-null? (vibe:ast-ref quote_node car)) 'error 'check_atom)
+  (vibe:label-branch 'check_atom (vibe:node-kind? (vibe:ast-ref quote_node car) atom) 'extract_name 'error)
   (llvm:label 'extract_name
     (let* ((quoted_expr (vibe:ast-ref quote_node car))
            (atom_val (vibe:ast-ref quoted_expr value))

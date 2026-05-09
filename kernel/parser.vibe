@@ -199,9 +199,7 @@
       (llvm:store quoted car_ptr)
       (llvm:store (llvm:const-null |%ASTNode*|) cdr_ptr)
       (llvm:ret quote_node_ptr)))
-  (llvm:label 'check_quasiquote
-    (let* ((is_lparen (vibe:token-type? token_type lparen)))
-      (llvm:br is_lparen 'list 'atom)))
+  (vibe:label-branch 'check_quasiquote (vibe:token-type? token_type lparen) 'list 'atom)
   (llvm:label 'list
     (let* ((list_node (llvm:call parse_list parser)))
       (llvm:ret list_node)))

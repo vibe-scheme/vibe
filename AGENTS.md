@@ -104,20 +104,31 @@ The **default** bootstrap download is **`v0.0.4-seed`**: a self-hosted `vibe_ker
 
 ### Chat Documentation Format
 
-Each chat document should include:
-- Date, model used, and context of the conversation
-  - **Model tracking**: Always record which AI model was used for the session (e.g., `**Model**: Cursor Composer 1`, `**Model**: Claude claude-4.6-opus-high-thinking`). This helps track which model contributed to which parts of the codebase.
-- **Complete session overview**: Document ALL work done in the session, not just the final topic investigated. Review git diff to ensure comprehensive coverage of:
+Match the format already established by `docs/chats/0001-…` through the most recent committed chat. The standard shape:
+
+1. **Title line**: `# Chat NNNN: Descriptive title` — same number as the filename, colon (not dash) separator, capitalized human-readable title.
+2. **Metadata block**: three bold-prefixed lines, each ending with two trailing spaces (Markdown line break) so they render as a tight stanza:
+
+   ```markdown
+   **Date**: YYYY-MM-DD  
+   **Model**: <model name>  
+   **Context**: <one short paragraph framing why this session happened and what it set out to do>
+   ```
+
+   - **Date**: ISO 8601, verified per the next subsection.
+   - **Model**: free-form identifier matching how the model is named in this environment (e.g., `Cursor Composer 2`, `Claude claude-4.6-opus-high-thinking`, `Claude Code (claude-opus-4-7[1m])`). This helps track which model contributed to which parts of the codebase.
+   - **Context**: 1–3 sentences. Frame the session against prior work (link earlier chats by number when relevant) and state the goal — not a summary of what was done; that belongs in the body.
+3. **Body**: a top-level `## Session overview` (or `## Summary`) heading, then subsections (`###`) and tables as needed.
+4. **Complete session coverage**: Document ALL work done in the session, not just the final topic investigated. Review `git diff --stat` and walk each file's diff to ensure comprehensive coverage of:
   - Bug fixes
   - Feature implementations (including migrated functions and methods)
   - Code cleanup
   - Security fixes
   - Architectural discoveries
   - Refactoring work
-- Key decisions made
-- Implementation details discussed
-- Any important notes or considerations
-- Links to related design documents or code
+5. Decisions made, implementation details discussed, links to related design documents.
+
+When in doubt about a formatting choice, open the two or three most recent committed chats and follow their lead — established convention beats inventing a new shape.
 
 **Note**: Sessions often involve multiple related fixes and investigations. The chat documentation should reflect the full breadth of work accomplished, even if topics seem unrelated. This provides better historical context and helps future developers understand the evolution of the codebase.
 
