@@ -43,8 +43,7 @@
 ; Otherwise, loads source pointer and position, computes character address via 
 ; getelementptr, and loads the character.
 (llvm:define-function (lex_current_char (lexer |%Lexer*|)) |i8|
-  (let* ((is_eof (llvm:call lex_is_eof lexer))
-         (eof_bool (vibe:i32-nonzero? is_eof)))
+  (let* ((eof_bool (vibe:lex-eof? lexer)))
     ; Branch instruction comes first (in entry block)
     (llvm:br eof_bool 'eof 'not_eof)
     ; Then define the label blocks
@@ -65,12 +64,10 @@
 ; already at EOF. Uses lex_current_char to get current character, then branches 
 ; based on whether it's a newline.
 (llvm:define-function (lex_advance (lexer |%Lexer*|)) |void|
-  (let* ((is_eof (llvm:call lex_is_eof lexer))
-         (eof_bool (vibe:i32-nonzero? is_eof)))
+  (let* ((eof_bool (vibe:lex-eof? lexer)))
     (llvm:br eof_bool 'done 'advance))
   (llvm:label 'advance
-    (let* ((char (llvm:call lex_current_char lexer))
-           (char_int (llvm:zext char |i8| |i32|))
+    (let* ((char_int (vibe:lex-char lexer))
            (is_newline (vibe:char-eq? char_int newline)))
       (llvm:br is_newline 'newline 'normal)))
   (llvm:label 'newline
@@ -150,8 +147,7 @@
 (llvm:define-function (lex_skip_whitespace (lexer |%Lexer*|)) |void|
   (llvm:br 'loop)
   (llvm:label 'loop
-    (let* ((char (llvm:call lex_current_char lexer))
-           (char_int (llvm:zext char |i8| |i32|))
+    (let* ((char_int (vibe:lex-char lexer))
            (is_space (vibe:char-eq? char_int space))
            (is_tab (vibe:char-eq? char_int tab))
            (is_newline (vibe:char-eq? char_int newline))
@@ -174,11 +170,9 @@
 (llvm:define-function (lex_skip_comment (lexer |%Lexer*|)) |void|
   (llvm:br 'loop)
   (llvm:label 'loop
-    (let* ((char (llvm:call lex_current_char lexer))
-           (char_int (llvm:zext char |i8| |i32|))
-           (is_eof (llvm:call lex_is_eof lexer))
+    (let* ((char_int (vibe:lex-char lexer))
+           (eof_bool (vibe:lex-eof? lexer))
            (is_newline (vibe:char-eq? char_int newline))
-           (eof_bool (vibe:i32-nonzero? is_eof))
            (done (llvm:or eof_bool is_newline)))
       (llvm:br done 'exit 'continue)))
   (llvm:label 'continue
@@ -237,19 +231,15 @@
     (llvm:call lex_advance lexer)  ; Skip opening quote
     (llvm:br 'loop)
     (llvm:label 'loop
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
-             (is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool (vibe:i32-nonzero? is_eof)))
+      (let* ((char_int (vibe:lex-char lexer))
+             (eof_bool (vibe:lex-eof? lexer)))
         (llvm:br eof_bool 'error 'check_quote)))
     (llvm:label 'check_quote
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_quote (vibe:char-eq? char_int dquote)))
         (llvm:br is_quote 'done 'check_escape)))
     (llvm:label 'check_escape
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_backslash (vibe:char-eq? char_int backslash)))
         (llvm:br is_backslash 'escape 'normal_char)))
     (llvm:label 'escape
@@ -308,11 +298,9 @@
     (llvm:store (llvm:const-int |i64| 0) buffer_pos)
     (llvm:br 'loop)
     (llvm:label 'loop
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
-             (is_eof (llvm:call lex_is_eof lexer))
+      (let* ((char_int (vibe:lex-char lexer))
+             (eof_bool (vibe:lex-eof? lexer))
              (is_vbar (vibe:char-eq? char_int vbar))
-             (eof_bool (vibe:i32-nonzero? is_eof))
              (done (llvm:or eof_bool is_vbar)))
         (llvm:br done 'check_closing 'append_char)))
     (llvm:label 'append_char
@@ -324,10 +312,7 @@
         (llvm:store new_pos buffer_pos)
         (llvm:call lex_advance lexer)
         (llvm:br 'loop)))
-    (llvm:label 'check_closing
-      (let* ((is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool_check (vibe:i32-nonzero? is_eof)))
-        (llvm:br eof_bool_check 'error 'done_ok)))
+    (vibe:label-branch 'check_closing (vibe:lex-eof? lexer) 'error 'done_ok)
     (llvm:label 'done_ok
       (llvm:call lex_advance lexer)  ; Skip closing |
       (let* ((token (llvm:call malloc (llvm:const-int |i64| 32)))
@@ -374,29 +359,24 @@
     (llvm:br 'loop)
     (llvm:label 'loop
       (llvm:call lex_skip_whitespace lexer)
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
-             (is_eof (llvm:call lex_is_eof lexer))
+      (let* ((char_int (vibe:lex-char lexer))
+             (eof_bool (vibe:lex-eof? lexer))
              (is_rparen (vibe:char-eq? char_int rparen))
-             (eof_bool (vibe:i32-nonzero? is_eof))
              (done (llvm:or eof_bool is_rparen)))
         (llvm:br done 'check_closing 'read_number)))
     (llvm:label 'read_number
-      (let* ((num_start (llvm:call lex_current_char lexer))
-             (num_start_int (llvm:zext num_start |i8| |i32|))
+      (let* ((num_start_int (vibe:lex-char lexer))
              (is_digit_both (vibe:char-digit? num_start_int)))
         (llvm:br is_digit_both 'read_digits 'error)))
     (llvm:label 'read_digits
       (llvm:store (llvm:const-int |i32| 0) num_val)
       (llvm:br 'digit_loop))
     (llvm:label 'digit_loop
-      (let* ((digit_char (llvm:call lex_current_char lexer))
-             (digit_int (llvm:zext digit_char |i8| |i32|))
+      (let* ((digit_int (vibe:lex-char lexer))
              (is_digit_ok (vibe:char-digit? digit_int)))
         (llvm:br is_digit_ok 'accumulate 'store_byte)))
     (llvm:label 'accumulate
-      (let* ((digit_char (llvm:call lex_current_char lexer))
-             (digit_int (llvm:zext digit_char |i8| |i32|))
+      (let* ((digit_int (vibe:lex-char lexer))
              (current_val (llvm:load num_val |i32|))
              (new_val (llvm:mul current_val (llvm:const-int |i32| 10)))
              (digit_val (llvm:sub digit_int (llvm:const-int |i32| 48)))
@@ -413,10 +393,7 @@
         (llvm:store byte_val_trunc byte_ptr)
         (llvm:store new_pos buffer_pos)
         (llvm:br 'loop)))
-    (llvm:label 'check_closing
-      (let* ((is_eof (llvm:call lex_is_eof lexer))
-             (eof_bool_check (vibe:i32-nonzero? is_eof)))
-        (llvm:br eof_bool_check 'error 'done_ok)))
+    (vibe:label-branch 'check_closing (vibe:lex-eof? lexer) 'error 'done_ok)
     (llvm:label 'done_ok
       (llvm:call lex_advance lexer)  ; Skip closing )
       (let* ((token (llvm:call malloc (llvm:const-int |i64| 32)))
@@ -520,8 +497,7 @@
 (llvm:define-function (lex_next (lexer |%Lexer*|)) |%Token*|
   (let* ((saved_start_pos (llvm:alloca |i64|)))
     (llvm:call lex_skip_whitespace lexer)
-    (let* ((is_eof (llvm:call lex_is_eof lexer))
-           (eof_bool (vibe:i32-nonzero? is_eof)))
+    (let* ((eof_bool (vibe:lex-eof? lexer)))
     (llvm:br eof_bool 'eof 'not_eof)
     (llvm:label 'eof
       (let* ((eof_token (llvm:call malloc (llvm:const-int |i64| 32)))
@@ -530,8 +506,7 @@
         (llvm:store (vibe:token-lit eof) type_ptr_eof)
         (llvm:ret eof_token_ptr)))
     (llvm:label 'not_eof
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_semicolon (vibe:char-eq? char_int semicolon)))
         (llvm:br is_semicolon 'comment 'check_string)))
     (llvm:label 'comment
@@ -539,24 +514,21 @@
       (let* ((next_token (llvm:call lex_next lexer)))
         (llvm:ret next_token)))
     (llvm:label 'check_string
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_dquote (vibe:char-eq? char_int dquote)))
         (llvm:br is_dquote 'string 'check_vertical_bar)))
     (llvm:label 'string
       (let* ((str_token (llvm:call lex_read_string lexer)))
         (llvm:ret str_token)))
     (llvm:label 'check_vertical_bar
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_vbar (vibe:char-eq? char_int vbar)))
         (llvm:br is_vbar 'vertical_bar_symbol 'check_hash)))
     (llvm:label 'vertical_bar_symbol
       (let* ((vbar_token (llvm:call lex_read_vertical_bar_symbol lexer)))
         (llvm:ret vbar_token)))
     (llvm:label 'check_hash
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_hash (vibe:char-eq? char_int hash)))
         (llvm:br is_hash 'check_bytevector 'check_lparen)))
     (llvm:label 'check_bytevector
@@ -578,8 +550,7 @@
       (let* ((bytevec_token (llvm:call lex_read_bytevector lexer)))
         (llvm:ret bytevec_token)))
     (llvm:label 'check_lparen
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_lparen (vibe:char-eq? char_int lparen)))
         (llvm:br is_lparen 'lparen 'check_rparen)))
     (llvm:label 'lparen
@@ -590,8 +561,7 @@
         (llvm:call lex_advance lexer)
         (llvm:ret lparen_token_ptr)))
     (llvm:label 'check_rparen
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_rparen (vibe:char-eq? char_int rparen)))
         (llvm:br is_rparen 'rparen 'check_quote_char)))
     (llvm:label 'rparen
@@ -602,8 +572,7 @@
         (llvm:call lex_advance lexer)
         (llvm:ret rparen_token_ptr)))
     (llvm:label 'check_quote_char
-      (let* ((char (llvm:call lex_current_char lexer))
-             (char_int (llvm:zext char |i8| |i32|))
+      (let* ((char_int (vibe:lex-char lexer))
              (is_quote (vibe:char-eq? char_int squote)))
         (llvm:br is_quote 'quote 'identifier)))
     (llvm:label 'quote

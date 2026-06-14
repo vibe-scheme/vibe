@@ -84,8 +84,7 @@
 ; Otherwise, creates a cons cell (AST_LIST node), parses the car via parse_expr,
 ; recursively parses the cdr, and returns the cons cell.
 (llvm:define-function (parse_list_tail (parser |%Parser*|)) |%ASTNode*|
-  (let* ((is_rparen (llvm:call parse_check parser (vibe:token-lit rparen)))
-         (rparen_bool (vibe:i32-nonzero? is_rparen)))
+  (let* ((rparen_bool (vibe:parse-check? parser (vibe:token-lit rparen))))
     (llvm:br rparen_bool 'empty 'has_elements))
   (llvm:label 'empty
     (llvm:call parse_advance parser)
@@ -119,8 +118,7 @@
            (list_node_ptr (llvm:bitcast list_node |%ASTNode*|))
            (node_type_ptr (vibe:ast-addr list_node_ptr type)))
       (llvm:store (vibe:ast-type-lit list) node_type_ptr)
-      (let* ((is_rparen (llvm:call parse_check parser (vibe:token-lit rparen)))
-             (rparen_bool (vibe:i32-nonzero? is_rparen)))
+      (let* ((rparen_bool (vibe:parse-check? parser (vibe:token-lit rparen))))
         (llvm:br rparen_bool 'empty_list 'parse_elements))))
   (llvm:label 'empty_list
     (llvm:call parse_advance parser)
@@ -133,8 +131,7 @@
     (let* ((first (llvm:call parse_expr parser))
            (car_ptr_elements (vibe:ast-addr list_node_ptr car)))
       (llvm:store first car_ptr_elements)
-      (let* ((is_dot (llvm:call parse_check parser (vibe:token-lit dot)))
-             (dot_bool (vibe:i32-nonzero? is_dot)))
+      (let* ((dot_bool (vibe:parse-check? parser (vibe:token-lit dot))))
         (llvm:br dot_bool 'dot_notation 'parse_rest))))
   (llvm:label 'dot_notation
     (llvm:call parse_advance parser)

@@ -188,21 +188,12 @@
 ;; Empty string constant for llvm_build_* name parameter (must be defined before Tier A functions)
 (llvm:define-constant .str.empty |[1 x i8]| #u8(0))
 
-;; ============================================================================
-;; Codegen DSL handler templates: collapse the boilerplate shared by Tier-A
-;; handlers. These macros are codegen-specific — they assume `cg` is in scope
-;; and expand to calls into codegen_eval_dsl_expr / codegen_resolve_type_string.
-;; Kept here (not in macros.vibe) because macros.vibe is reserved for generally
-;; applicable macros usable anywhere in the system. Block helpers introduce
-;; internal temp bindings (evald_val, evald_null, resolved_node, resolved,
-;; resolved_null) in their own let* scopes — caller expressions must not
-;; depend on those names. Labels ('check_args / 'eval_lhs / 'build / etc.) are
-;; local to each generated function, so multiple uses do not collide.
-;; ============================================================================
-
 (define-vibe-syntax vibe:eval-and-store
-  "Codegen-handler block: emit label; eval arg-node-expr through codegen_eval_dsl_expr;
-   store result into store-ptr; branch on null. Assumes `cg` is in scope at use site."
+  "Codegen-handler block: emit LABEL; eval ARG-NODE-EXPR through codegen_eval_dsl_expr;
+   store result into STORE-PTR; branch on null to FAIL-LABEL or OK-LABEL. Assumes `cg`
+   is in scope at the use site (codegen handler functions). Internal temps `evald_val`
+   and `evald_null` are bound in the macro's let* scope — caller subforms must not
+   reference those names."
   (syntax-rules ()
     ((vibe:eval-and-store label arg-node-expr store-ptr fail-label ok-label)
      (llvm:label label
@@ -212,8 +203,11 @@
          (llvm:br evald_null fail-label ok-label))))))
 
 (define-vibe-syntax vibe:resolve-type-and-store
-  "Codegen-handler block: emit label; resolve type-node-expr's value+value_len as an
-   LLVM type via codegen_resolve_type_string; store result; branch on null. Assumes `cg`."
+  "Codegen-handler block: emit LABEL; resolve TYPE-NODE-EXPR's value+value_len as an
+   LLVM type via codegen_resolve_type_string; store result into STORE-PTR; branch on
+   null to FAIL-LABEL or OK-LABEL. Assumes `cg` is in scope. Internal temps
+   `resolved_node`, `resolved`, and `resolved_null` are bound in the macro's let*
+   scope — caller subforms must not reference those names."
   (syntax-rules ()
     ((vibe:resolve-type-and-store label type-node-expr store-ptr fail-label ok-label)
      (llvm:label label
@@ -227,7 +221,11 @@
 
 (define-vibe-syntax vibe:define-binop
   "Define a codegen_dsl_X handler for a 2-input LLVM builder. Use as
-   (vibe:define-binop codegen_dsl_add llvm_build_add) to handle (llvm:add lhs rhs)."
+   (vibe:define-binop codegen_dsl_add llvm_build_add) to handle (llvm:add lhs rhs).
+   Generates a complete llvm:define-function with internal labels 'check_args,
+   'eval_lhs, 'eval_rhs, 'build, 'do_ret, 'error and locals lhs_ptr, rhs_ptr,
+   result_ptr, builder, lhs, rhs — local to the generated function, so multiple
+   invocations of this macro never collide."
   (syntax-rules ()
     ((vibe:define-binop name builder_fn)
      (llvm:define-function (name (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
@@ -252,7 +250,10 @@
 
 (define-vibe-syntax vibe:define-cast2
   "Define a codegen_dsl_X handler for a 2-arg cast (value, target-type). Use as
-   (vibe:define-cast2 codegen_dsl_bitcast llvm_build_bitcast)."
+   (vibe:define-cast2 codegen_dsl_bitcast llvm_build_bitcast). Generates a complete
+   llvm:define-function with internal labels 'check_args, 'eval_value, 'resolve_type,
+   'build, 'do_ret, 'error and locals value_ptr, target_type_ptr, result_ptr, builder,
+   value, target_type — local to the generated function."
   (syntax-rules ()
     ((vibe:define-cast2 name builder_fn)
      (llvm:define-function (name (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
@@ -278,7 +279,10 @@
 (define-vibe-syntax vibe:define-cast3
   "Define a codegen_dsl_X handler for a 3-arg cast (value src-type target-type);
    src-type is parsed but ignored at runtime (LLVM only needs dest type). Use as
-   (vibe:define-cast3 codegen_dsl_trunc llvm_build_trunc)."
+   (vibe:define-cast3 codegen_dsl_trunc llvm_build_trunc). Generates a complete
+   llvm:define-function with internal labels 'check_args, 'eval_value, 'skip_src,
+   'resolve_type, 'build, 'do_ret, 'error and locals value_ptr, target_type_ptr,
+   result_ptr, builder, value, target_type — local to the generated function."
   (syntax-rules ()
     ((vibe:define-cast3 name builder_fn)
      (llvm:define-function (name (cg |%CodeGen*|) (args |%ASTNode*|)) |i8*|
@@ -355,13 +359,13 @@
     (let* ((expr (vibe:ast-ref exprs car))
            (args (vibe:ast-ref expr cdr)))
       (llvm:call codegen_collect_string_constants_from_args cg args)
-      (llvm:br 'next_expr))
-    (llvm:label 'next_expr
-      (let* ((next (vibe:ast-ref exprs cdr)))
-        (llvm:call codegen_collect_string_constants cg next)
-        (llvm:br 'done))
-      (llvm:label 'done
-        (llvm:ret-void)))))
+      (llvm:br 'next_expr)))
+  (llvm:label 'next_expr
+    (let* ((next (vibe:ast-ref exprs cdr)))
+      (llvm:call codegen_collect_string_constants cg next)
+      (llvm:br 'done)))
+  (llvm:label 'done
+    (llvm:ret-void)))
 
 ;; ============================================================================
 ;; 12. codegen_collect_string_constants_from_args
@@ -378,13 +382,13 @@
            (str_val (vibe:ast-ref arg_node value))
            (str_len (vibe:ast-ref arg_node value_len)))
       (llvm:call codegen_define_string_constant_only cg str_val str_len)
-      (llvm:br 'next_arg))
-    (llvm:label 'next_arg
-      (let* ((next (vibe:ast-ref args cdr)))
-        (llvm:call codegen_collect_string_constants_from_args cg next)
-        (llvm:br 'done))
-      (llvm:label 'done
-        (llvm:ret-void)))))
+      (llvm:br 'next_arg)))
+  (llvm:label 'next_arg
+    (let* ((next (vibe:ast-ref args cdr)))
+      (llvm:call codegen_collect_string_constants_from_args cg next)
+      (llvm:br 'done)))
+  (llvm:label 'done
+    (llvm:ret-void)))
 
 ;; ============================================================================
 ;; 13. codegen_format_string_name
@@ -962,14 +966,14 @@
          (named_struct_type_ptr (llvm:alloca |i8*|))
          (types_array_ptr (llvm:alloca |i8*|)))
     (let* ((cdr (vibe:ast-ref node cdr))
-             (type_name_node (vibe:ast-ref cdr car))
-             (type_name (vibe:ast-ref type_name_node value))
-             (type_name_len (vibe:ast-ref type_name_node value_len))
-             (fields_list (vibe:ast-ref cdr cdr))
-             (context_ptr (llvm:gep |%CodeGen| cg 0 5))
-             (context (llvm:load context_ptr |i8*|))
-             (context_null (vibe:ptr-null? context)))
-        (llvm:br context_null 'error 'collect_fields))
+           (type_name_node (vibe:ast-ref cdr car))
+           (type_name (vibe:ast-ref type_name_node value))
+           (type_name_len (vibe:ast-ref type_name_node value_len))
+           (fields_list (vibe:ast-ref cdr cdr))
+           (context_ptr (llvm:gep |%CodeGen| cg 0 5))
+           (context (llvm:load context_ptr |i8*|))
+           (context_null (vibe:ptr-null? context)))
+      (llvm:br context_null 'error 'collect_fields))
     (llvm:label 'collect_fields
       (let* ((cdr (vibe:ast-ref node cdr))
              (fields_list (vibe:ast-ref cdr cdr))
@@ -1040,16 +1044,16 @@
          (const_str_value_ptr (llvm:alloca |i8*|))
          (global_const_ptr (llvm:alloca |i8*|)))
     (let* ((cdr (vibe:ast-ref node cdr))
-             (name_node (vibe:ast-ref cdr car))
-             (name (vibe:ast-ref name_node value))
-             (name_len (vibe:ast-ref name_node value_len))
-             (cdr_cdr (vibe:ast-ref cdr cdr))
-             (type_node (vibe:ast-ref cdr_cdr car))
-             (type (vibe:ast-ref type_node value))
-             (type_len (vibe:ast-ref type_node value_len))
-             (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr))
-             (value_node (vibe:ast-ref cdr_cdr_cdr car)))
-        (llvm:br (vibe:node-kind? value_node atom) 'check_bytevector 'not_bytevector))
+           (name_node (vibe:ast-ref cdr car))
+           (name (vibe:ast-ref name_node value))
+           (name_len (vibe:ast-ref name_node value_len))
+           (cdr_cdr (vibe:ast-ref cdr cdr))
+           (type_node (vibe:ast-ref cdr_cdr car))
+           (type (vibe:ast-ref type_node value))
+           (type_len (vibe:ast-ref type_node value_len))
+           (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr))
+           (value_node (vibe:ast-ref cdr_cdr_cdr car)))
+      (llvm:br (vibe:node-kind? value_node atom) 'check_bytevector 'not_bytevector))
     (llvm:label 'check_bytevector
       (let* ((cdr (vibe:ast-ref node cdr))
              (cdr_cdr (vibe:ast-ref cdr cdr))
@@ -1288,9 +1292,9 @@
          (value_ptr (llvm:alloca |i64|))
          (sign_extend_ptr (llvm:alloca |i32|)))
     (let* ((context_ptr (llvm:gep |%CodeGen| cg 0 5))
-             (context (llvm:load context_ptr |i8*|))
-             (context_null (vibe:ptr-null? context)))
-        (llvm:br context_null 'error 'get_type_const))
+           (context (llvm:load context_ptr |i8*|))
+           (context_null (vibe:ptr-null? context)))
+      (llvm:br context_null 'error 'get_type_const))
     (vibe:label-branch 'get_type_const (vibe:ast-null? args) 'error 'get_type_node)
     (llvm:label 'get_type_node
       (let* ((type_node (vibe:ast-ref args car))
@@ -1341,9 +1345,9 @@
          (ptr_ptr (llvm:alloca |i8*|))
          (ptr_null_ptr (llvm:alloca |i1|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_value))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_value))
     (vibe:label-branch 'get_value (vibe:ast-null? args) 'error 'eval_value)
     (llvm:label 'eval_value
       (let* ((value_node (vibe:ast-ref args car))
@@ -1382,9 +1386,9 @@
          (type_node_ptr (llvm:alloca |%ASTNode*|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_ptr))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_ptr))
     (vibe:label-branch 'get_ptr (vibe:ast-null? args) 'error 'eval_ptr)
     (llvm:label 'eval_ptr
       (let* ((ptr_node (vibe:ast-ref args car))
@@ -1429,9 +1433,9 @@
          (index_count_ptr (llvm:alloca |i32|))
          (gep_result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_args))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_args))
     (vibe:label-branch 'get_args (vibe:ast-null? args) 'error 'get_type)
     (llvm:label 'get_type
       (let* ((type_node (vibe:ast-ref args car))
@@ -1504,7 +1508,7 @@
          (i_ptr (llvm:alloca |i32|))
          (current_eval_ptr (llvm:alloca |%ASTNode*|)))
     (let* ((list_null (vibe:ast-null? list)))
-        (llvm:br list_null 'return_zero 'count_loop))
+      (llvm:br list_null 'return_zero 'count_loop))
     (llvm:label 'return_zero
       (llvm:ret (llvm:const-int |i32| 0)))
     (llvm:label 'count_loop
@@ -1566,9 +1570,9 @@
          (alloca_type_null_ptr (llvm:alloca |i1|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_type))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_type))
     (vibe:label-branch 'get_type (vibe:ast-null? args) 'error 'extract_type)
     (llvm:label 'extract_type
       (let* ((type_node (vibe:ast-ref args car))
@@ -1619,9 +1623,9 @@
          (cond_ptr (llvm:alloca |i8*|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_func))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_func))
     (llvm:label 'get_func
       (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
              (func (llvm:load func_ptr |i8*|))
@@ -1729,9 +1733,9 @@
          (label_body_for_eval_ptr (llvm:alloca |%ASTNode*|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_func))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_func))
     (llvm:label 'get_func
       (let* ((func_ptr (llvm:gep |%CodeGen| cg 0 8))
              (func (llvm:load func_ptr |i8*|))
@@ -1864,9 +1868,9 @@
          (incoming_bb_null_ptr (llvm:alloca |i1|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'get_phi_type))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'get_phi_type))
     (vibe:label-branch 'get_phi_type (vibe:ast-null? args) 'error 'extract_phi_type)
     (llvm:label 'extract_phi_type
       (let* ((type_node (vibe:ast-ref args car))
@@ -1969,9 +1973,9 @@
          (else_val_ptr (llvm:alloca |i8*|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|))
-             (builder_null (vibe:ptr-null? builder)))
-        (llvm:br builder_null 'error 'eval_cond))
+           (builder (llvm:load builder_ptr |i8*|))
+           (builder_null (vibe:ptr-null? builder)))
+      (llvm:br builder_null 'error 'eval_cond))
     (llvm:label 'eval_cond
       (let* ((cond_node (vibe:ast-ref args car))
              (cond (llvm:call codegen_eval_dsl_expr cg cond_node))
@@ -2182,20 +2186,20 @@
 ;; Parameters: cg, name, params (AST list), body (IR string), body_len
 (llvm:define-function (codegen_append_function_def (cg |%CodeGen*|) (name |i8*|) (params |%ASTNode*|) (body |i8*|) (body_len |i64|)) |void|
   (let* ((name_len (llvm:call strlen name))
-           (define_void (llvm:gep |[12 x i8]| (llvm:get-global .str.define_void) 0 0))
-           (at_sign (llvm:gep |[2 x i8]| (llvm:get-global .str.at_sign) 0 0))
-           (lparen (llvm:gep |[2 x i8]| (llvm:get-global .str.lparen) 0 0))
-           (rparen_brace (llvm:gep |[4 x i8]| (llvm:get-global .str.rparen_brace) 0 0))
-           (close_brace (llvm:gep |[2 x i8]| (llvm:get-global .str.close_brace) 0 0)))
-      (llvm:call codegen_append cg define_void (llvm:const-int |i64| 11))
-      (llvm:call codegen_append cg at_sign (llvm:const-int |i64| 1))
-      (llvm:call codegen_append cg name name_len)
-      (llvm:call codegen_append cg lparen (llvm:const-int |i64| 1))
-      (llvm:call codegen_append_params cg params)
-      (llvm:call codegen_append cg rparen_brace (llvm:const-int |i64| 3))
-      (llvm:call codegen_append cg body body_len)
-      (llvm:call codegen_append cg close_brace (llvm:const-int |i64| 1))
-      (llvm:ret-void)))
+         (define_void (llvm:gep |[12 x i8]| (llvm:get-global .str.define_void) 0 0))
+         (at_sign (llvm:gep |[2 x i8]| (llvm:get-global .str.at_sign) 0 0))
+         (lparen (llvm:gep |[2 x i8]| (llvm:get-global .str.lparen) 0 0))
+         (rparen_brace (llvm:gep |[4 x i8]| (llvm:get-global .str.rparen_brace) 0 0))
+         (close_brace (llvm:gep |[2 x i8]| (llvm:get-global .str.close_brace) 0 0)))
+    (llvm:call codegen_append cg define_void (llvm:const-int |i64| 11))
+    (llvm:call codegen_append cg at_sign (llvm:const-int |i64| 1))
+    (llvm:call codegen_append cg name name_len)
+    (llvm:call codegen_append cg lparen (llvm:const-int |i64| 1))
+    (llvm:call codegen_append_params cg params)
+    (llvm:call codegen_append cg rparen_brace (llvm:const-int |i64| 3))
+    (llvm:call codegen_append cg body body_len)
+    (llvm:call codegen_append cg close_brace (llvm:const-int |i64| 1))
+    (llvm:ret-void)))
 
 ;; codegen_eval_dsl_body: Evaluate list of DSL expressions (no debug logging in kernel)
 ;; Parameters: cg, body (AST list of expressions)
@@ -2226,7 +2230,7 @@
 ;; Returns: 0 on success, -1 on error
 (llvm:define-function (codegen_define_bitcode (cg |%CodeGen*|) (node |%ASTNode*|)) |i32|
   (let* ((car (vibe:ast-ref node car)))
-      (llvm:br (vibe:node-kind? car atom) 'check_name 'error))
+    (llvm:br (vibe:node-kind? car atom) 'check_name 'error))
   (llvm:label 'check_name
     (let* ((cdr (vibe:ast-ref node cdr))
            (sig_list (vibe:ast-ref cdr car))
@@ -2254,63 +2258,63 @@
          (str_rparen_brace (llvm:gep |[4 x i8]| (llvm:get-global .str.rparen_brace) 0 0))
          (str_newline_close_brace (llvm:gep |[4 x i8]| (llvm:get-global .str.newline_close_brace) 0 0)))
     (let* ((cdr (vibe:ast-ref node cdr))
-             (sig_list (vibe:ast-ref cdr car))
-             (func_name_node (vibe:ast-ref sig_list car))
-             (func_name (vibe:ast-ref func_name_node value))
-             (func_name_len (vibe:ast-ref func_name_node value_len))
-             (params_list (vibe:ast-ref sig_list cdr))
-             (cdr_cdr (vibe:ast-ref cdr cdr))
-             (return_type_node (vibe:ast-ref cdr_cdr car))
-             (return_type (vibe:ast-ref return_type_node value))
-             (return_type_len (vibe:ast-ref return_type_node value_len))
-             (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr))
-             (ir_body_node (vibe:ast-ref cdr_cdr_cdr car))
-             (ir_body (vibe:ast-ref ir_body_node value))
-             (ir_body_len (vibe:ast-ref ir_body_node value_len))
-             (estimated_sig_size (llvm:add (llvm:const-int |i64| 100) func_name_len))
-             (estimated_sig_size2 (llvm:add estimated_sig_size return_type_len))
-             (func_def_size (llvm:add estimated_sig_size2 ir_body_len))
-             (func_def_size2 (llvm:add func_def_size (llvm:const-int |i64| 20)))
-             (func_def_buf (llvm:call malloc func_def_size2)))
-        (llvm:store func_def_buf func_def_buf_ptr)
-        (llvm:store (llvm:const-int |i64| 0) pos_ptr)
-        (let* ((pos_val1 (llvm:load pos_ptr |i64|))
-               (dest1 (llvm:gep |i8| func_def_buf pos_val1)))
-          (llvm:call memcpy dest1 str_define (llvm:const-int |i64| 7))
-          (llvm:store (llvm:add pos_val1 (llvm:const-int |i64| 7)) pos_ptr))
-        (let* ((pos_val3 (llvm:load pos_ptr |i64|))
-               (dest2 (llvm:gep |i8| func_def_buf pos_val3)))
-          (llvm:call memcpy dest2 return_type return_type_len)
-          (llvm:store (llvm:add pos_val3 return_type_len) pos_ptr))
-        (let* ((pos_val5 (llvm:load pos_ptr |i64|))
-               (dest3 (llvm:gep |i8| func_def_buf pos_val5)))
-          (llvm:call memcpy dest3 str_space_at (llvm:const-int |i64| 2))
-          (llvm:store (llvm:add pos_val5 (llvm:const-int |i64| 2)) pos_ptr))
-        (let* ((pos_val7 (llvm:load pos_ptr |i64|))
-               (dest4 (llvm:gep |i8| func_def_buf pos_val7)))
-          (llvm:call memcpy dest4 func_name func_name_len)
-          (llvm:store (llvm:add pos_val7 func_name_len) pos_ptr))
-        (let* ((pos_val9 (llvm:load pos_ptr |i64|))
-               (dest5 (llvm:gep |i8| func_def_buf pos_val9)))
-          (llvm:call memcpy dest5 str_lparen (llvm:const-int |i64| 1))
-          (llvm:store (llvm:add pos_val9 (llvm:const-int |i64| 1)) pos_ptr))
-        (llvm:call codegen_write_typed_params_to_buffer func_def_buf pos_ptr params_list)
-        (let* ((pos_val11 (llvm:load pos_ptr |i64|))
-               (dest6 (llvm:gep |i8| func_def_buf pos_val11)))
-          (llvm:call memcpy dest6 str_rparen_brace (llvm:const-int |i64| 3))
-          (llvm:store (llvm:add pos_val11 (llvm:const-int |i64| 3)) pos_ptr))
-        (let* ((pos_val13 (llvm:load pos_ptr |i64|))
-               (dest7 (llvm:gep |i8| func_def_buf pos_val13)))
-          (llvm:call memcpy dest7 ir_body ir_body_len)
-          (llvm:store (llvm:add pos_val13 ir_body_len) pos_ptr))
-        (let* ((pos_val15 (llvm:load pos_ptr |i64|))
-               (dest8 (llvm:gep |i8| func_def_buf pos_val15)))
-          (llvm:call memcpy dest8 str_newline_close_brace (llvm:const-int |i64| 3))
-          (llvm:store (llvm:add pos_val15 (llvm:const-int |i64| 3)) pos_ptr))
-        (let* ((pos_val17 (llvm:load pos_ptr |i64|))
-               (null_ptr (llvm:gep |i8| func_def_buf pos_val17)))
-          (llvm:store (llvm:const-int |i8| 0) null_ptr)
-          (llvm:br 'do_parse)))
+           (sig_list (vibe:ast-ref cdr car))
+           (func_name_node (vibe:ast-ref sig_list car))
+           (func_name (vibe:ast-ref func_name_node value))
+           (func_name_len (vibe:ast-ref func_name_node value_len))
+           (params_list (vibe:ast-ref sig_list cdr))
+           (cdr_cdr (vibe:ast-ref cdr cdr))
+           (return_type_node (vibe:ast-ref cdr_cdr car))
+           (return_type (vibe:ast-ref return_type_node value))
+           (return_type_len (vibe:ast-ref return_type_node value_len))
+           (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr))
+           (ir_body_node (vibe:ast-ref cdr_cdr_cdr car))
+           (ir_body (vibe:ast-ref ir_body_node value))
+           (ir_body_len (vibe:ast-ref ir_body_node value_len))
+           (estimated_sig_size (llvm:add (llvm:const-int |i64| 100) func_name_len))
+           (estimated_sig_size2 (llvm:add estimated_sig_size return_type_len))
+           (func_def_size (llvm:add estimated_sig_size2 ir_body_len))
+           (func_def_size2 (llvm:add func_def_size (llvm:const-int |i64| 20)))
+           (func_def_buf (llvm:call malloc func_def_size2)))
+      (llvm:store func_def_buf func_def_buf_ptr)
+      (llvm:store (llvm:const-int |i64| 0) pos_ptr)
+      (let* ((pos_val1 (llvm:load pos_ptr |i64|))
+             (dest1 (llvm:gep |i8| func_def_buf pos_val1)))
+        (llvm:call memcpy dest1 str_define (llvm:const-int |i64| 7))
+        (llvm:store (llvm:add pos_val1 (llvm:const-int |i64| 7)) pos_ptr))
+      (let* ((pos_val3 (llvm:load pos_ptr |i64|))
+             (dest2 (llvm:gep |i8| func_def_buf pos_val3)))
+        (llvm:call memcpy dest2 return_type return_type_len)
+        (llvm:store (llvm:add pos_val3 return_type_len) pos_ptr))
+      (let* ((pos_val5 (llvm:load pos_ptr |i64|))
+             (dest3 (llvm:gep |i8| func_def_buf pos_val5)))
+        (llvm:call memcpy dest3 str_space_at (llvm:const-int |i64| 2))
+        (llvm:store (llvm:add pos_val5 (llvm:const-int |i64| 2)) pos_ptr))
+      (let* ((pos_val7 (llvm:load pos_ptr |i64|))
+             (dest4 (llvm:gep |i8| func_def_buf pos_val7)))
+        (llvm:call memcpy dest4 func_name func_name_len)
+        (llvm:store (llvm:add pos_val7 func_name_len) pos_ptr))
+      (let* ((pos_val9 (llvm:load pos_ptr |i64|))
+             (dest5 (llvm:gep |i8| func_def_buf pos_val9)))
+        (llvm:call memcpy dest5 str_lparen (llvm:const-int |i64| 1))
+        (llvm:store (llvm:add pos_val9 (llvm:const-int |i64| 1)) pos_ptr))
+      (llvm:call codegen_write_typed_params_to_buffer func_def_buf pos_ptr params_list)
+      (let* ((pos_val11 (llvm:load pos_ptr |i64|))
+             (dest6 (llvm:gep |i8| func_def_buf pos_val11)))
+        (llvm:call memcpy dest6 str_rparen_brace (llvm:const-int |i64| 3))
+        (llvm:store (llvm:add pos_val11 (llvm:const-int |i64| 3)) pos_ptr))
+      (let* ((pos_val13 (llvm:load pos_ptr |i64|))
+             (dest7 (llvm:gep |i8| func_def_buf pos_val13)))
+        (llvm:call memcpy dest7 ir_body ir_body_len)
+        (llvm:store (llvm:add pos_val13 ir_body_len) pos_ptr))
+      (let* ((pos_val15 (llvm:load pos_ptr |i64|))
+             (dest8 (llvm:gep |i8| func_def_buf pos_val15)))
+        (llvm:call memcpy dest8 str_newline_close_brace (llvm:const-int |i64| 3))
+        (llvm:store (llvm:add pos_val15 (llvm:const-int |i64| 3)) pos_ptr))
+      (let* ((pos_val17 (llvm:load pos_ptr |i64|))
+             (null_ptr (llvm:gep |i8| func_def_buf pos_val17)))
+        (llvm:store (llvm:const-int |i8| 0) null_ptr)
+        (llvm:br 'do_parse)))
     (llvm:label 'do_parse
       (let* ((func_def_buf (llvm:load func_def_buf_ptr |i8*|))
              (pos_val17 (llvm:load pos_ptr |i64|))
@@ -2400,23 +2404,23 @@
          (param_count_ptr (llvm:alloca |i32|))
          (func_ptr (llvm:alloca |i8*|)))
     (let* ((cdr (vibe:ast-ref node cdr))
-             (sig_list (vibe:ast-ref cdr car))
-             (func_name_node (vibe:ast-ref sig_list car))
-             (func_name (vibe:ast-ref func_name_node value))
-             (func_name_len (vibe:ast-ref func_name_node value_len))
-             (params_list (vibe:ast-ref sig_list cdr))
-             (cdr_cdr (vibe:ast-ref cdr cdr))
-             (return_type_node (vibe:ast-ref cdr_cdr car))
-             (return_type (vibe:ast-ref return_type_node value))
-             (return_type_len (vibe:ast-ref return_type_node value_len))
-             (context_ptr (llvm:gep |%CodeGen| cg 0 5))
-             (context (llvm:load context_ptr |i8*|))
-             (module_ptr (llvm:gep |%CodeGen| cg 0 6))
-             (module (llvm:load module_ptr |i8*|))
-             (context_null (vibe:ptr-null? context))
-             (module_null (vibe:ptr-null? module))
-             (any_null (llvm:or context_null module_null)))
-        (llvm:br any_null 'decl_error 'resolve_return_type_decl))
+           (sig_list (vibe:ast-ref cdr car))
+           (func_name_node (vibe:ast-ref sig_list car))
+           (func_name (vibe:ast-ref func_name_node value))
+           (func_name_len (vibe:ast-ref func_name_node value_len))
+           (params_list (vibe:ast-ref sig_list cdr))
+           (cdr_cdr (vibe:ast-ref cdr cdr))
+           (return_type_node (vibe:ast-ref cdr_cdr car))
+           (return_type (vibe:ast-ref return_type_node value))
+           (return_type_len (vibe:ast-ref return_type_node value_len))
+           (context_ptr (llvm:gep |%CodeGen| cg 0 5))
+           (context (llvm:load context_ptr |i8*|))
+           (module_ptr (llvm:gep |%CodeGen| cg 0 6))
+           (module (llvm:load module_ptr |i8*|))
+           (context_null (vibe:ptr-null? context))
+           (module_null (vibe:ptr-null? module))
+           (any_null (llvm:or context_null module_null)))
+      (llvm:br any_null 'decl_error 'resolve_return_type_decl))
     (llvm:label 'resolve_return_type_decl
       (let* ((cdr (vibe:ast-ref node cdr))
              (cdr_cdr (vibe:ast-ref cdr cdr))
@@ -2619,7 +2623,7 @@
 ;; codegen_write_bitcode: Write module bitcode to file using LLVM API (Phase 3)
 (llvm:define-function (codegen_write_bitcode (cg |%CodeGen*|) (filename |i8*|)) |i32|
   (let* ((cg_null (llvm:icmp 'eq cg (llvm:const-null |%CodeGen*|))))
-      (llvm:br cg_null 'error 'get_module))
+    (llvm:br cg_null 'error 'get_module))
   (llvm:label 'get_module
     (let* ((module_ptr (llvm:gep |%CodeGen| cg 0 6))
            (module (llvm:load module_ptr |i8*|)))
@@ -2641,8 +2645,8 @@
   (let* ((value_ptr (llvm:alloca |i8*|))
          (ret_result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? builder) 'error 'get_value))
+           (builder (llvm:load builder_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? builder) 'error 'get_value))
     (vibe:label-branch 'get_value (vibe:ast-null? args) 'error 'eval_value)
     (llvm:label 'eval_value
       (let* ((value_node (vibe:ast-ref args car))
@@ -2666,8 +2670,8 @@
          (name_buf_ptr (llvm:alloca |i8*|))
          (global_ptr (llvm:alloca |i8*|)))
     (let* ((module_ptr (llvm:gep |%CodeGen| cg 0 6))
-             (module (llvm:load module_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? module) 'error 'get_name_global))
+           (module (llvm:load module_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? module) 'error 'get_name_global))
     (vibe:label-branch 'get_name_global (vibe:ast-null? args) 'error 'get_name_node)
     (llvm:label 'get_name_node
       (let* ((name_node (vibe:ast-ref args car))
@@ -2704,8 +2708,8 @@
   (let* ((index_ptr (llvm:alloca |i32|))
          (param_ptr (llvm:alloca |i8*|)))
     (let* ((current_function_ptr (llvm:gep |%CodeGen| cg 0 8))
-             (current_function (llvm:load current_function_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? current_function) 'error 'get_index))
+           (current_function (llvm:load current_function_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? current_function) 'error 'get_index))
     (vibe:label-branch 'get_index (vibe:ast-null? args) 'error 'get_index_node)
     (llvm:label 'get_index_node
       (let* ((index_node (vibe:ast-ref args car))
@@ -2727,8 +2731,8 @@
          (func_ptr (llvm:alloca |i8*|))
          (func_type_ptr (llvm:alloca |i8*|)))
     (let* ((module_ptr (llvm:gep |%CodeGen| cg 0 6))
-             (module (llvm:load module_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? module) 'error 'check_args))
+           (module (llvm:load module_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? module) 'error 'check_args))
     (llvm:label 'check_args
       (let* ((name_node2 (vibe:ast-ref args car))
              (name_node_null2 (vibe:ast-null? name_node2)))
@@ -2785,9 +2789,9 @@
          (pair_ptr (llvm:alloca |%ASTNode*|))
          (value_ptr (llvm:alloca |i8*|)))
     (let* ((local_values_ptr (llvm:gep |%CodeGen| cg 0 10))
-             (local_values (llvm:load local_values_ptr |%ASTNode*|)))
-        (llvm:store local_values current_cons_ptr)
-        (llvm:br (vibe:ast-null? local_values) 'not_found 'search_loop))
+           (local_values (llvm:load local_values_ptr |%ASTNode*|)))
+      (llvm:store local_values current_cons_ptr)
+      (llvm:br (vibe:ast-null? local_values) 'not_found 'search_loop))
     (vibe:label-branch 'search_loop (vibe:ast-null? (llvm:load current_cons_ptr |%ASTNode*|)) 'not_found 'get_pair)
     (llvm:label 'get_pair
       (let* ((cons_val (llvm:load current_cons_ptr |%ASTNode*|))
@@ -3149,9 +3153,9 @@
          (stored_func_value_ptr (llvm:alloca |i8*|))
          (values_match_ptr (llvm:alloca |i1|)))
     (let* ((llvm_functions_ptr (llvm:gep |%CodeGen| cg 0 14))
-             (functions (llvm:load llvm_functions_ptr |%ASTNode*|)))
-        (llvm:store functions current_ptr)
-        (llvm:br (vibe:ast-null? functions) 'not_found 'iterate))
+           (functions (llvm:load llvm_functions_ptr |%ASTNode*|)))
+      (llvm:store functions current_ptr)
+      (llvm:br (vibe:ast-null? functions) 'not_found 'iterate))
     (vibe:label-branch 'iterate (vibe:ast-null? (llvm:load current_ptr |%ASTNode*|)) 'not_found 'check_pair)
     (llvm:label 'check_pair
       (let* ((current (llvm:load current_ptr |%ASTNode*|))
@@ -3201,8 +3205,8 @@
          (index_ptr (llvm:alloca |i32|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? builder) 'error 'eval_agg))
+           (builder (llvm:load builder_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? builder) 'error 'eval_agg))
     (llvm:label 'eval_agg
       (let* ((agg_node (vibe:ast-ref args car))
              (agg (llvm:call codegen_eval_dsl_expr cg agg_node)))
@@ -3239,8 +3243,8 @@
          (index_ptr (llvm:alloca |i32|))
          (result_ptr (llvm:alloca |i8*|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? builder) 'error 'eval_agg))
+           (builder (llvm:load builder_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? builder) 'error 'eval_agg))
     (llvm:label 'eval_agg
       (let* ((agg_node (vibe:ast-ref args car))
              (agg (llvm:call codegen_eval_dsl_expr cg agg_node)))
@@ -3277,8 +3281,8 @@
          (result_ptr (llvm:alloca |i8*|))
          (pred_invalid_ptr (llvm:alloca |i1|)))
     (let* ((builder_ptr (llvm:gep |%CodeGen| cg 0 7))
-             (builder (llvm:load builder_ptr |i8*|)))
-        (llvm:br (vibe:ptr-null? builder) 'error 'get_pred))
+           (builder (llvm:load builder_ptr |i8*|)))
+      (llvm:br (vibe:ptr-null? builder) 'error 'get_pred))
     (vibe:label-branch 'get_pred (vibe:ast-null? args) 'error 'check_pred_quote)
     (vibe:label-branch 'check_pred_quote (vibe:ast-null? (vibe:ast-ref args car)) 'error 'extract_pred)
     (llvm:label 'extract_pred
@@ -3929,17 +3933,17 @@
 ;; ============================================================================
 (llvm:define-function (test_store_br_bug ()) |void|
   (let* ((ptr (llvm:alloca |i32|)))
-      (llvm:store (llvm:const-int |i32| 42) ptr)
-      (llvm:br 'exit))
+    (llvm:store (llvm:const-int |i32| 42) ptr)
+    (llvm:br 'exit))
   (llvm:label 'exit
     (llvm:ret-void)))
 
 ;; Conditional br in let* (repros bug - see let-star-store-br-bug-resolution-plan.md)
 (llvm:define-function (test_cond_br_in_let ()) |void|
   (let* ((x (llvm:alloca |i1|))
-           (cond (llvm:const-int |i1| 1)))
-      (llvm:store cond x)
-      (llvm:br cond 'then 'else))
+         (cond (llvm:const-int |i1| 1)))
+    (llvm:store cond x)
+    (llvm:br cond 'then 'else))
   (llvm:label 'then (llvm:ret-void))
   (llvm:label 'else (llvm:ret-void)))
 
@@ -4144,28 +4148,28 @@
          (builder_store (llvm:alloca |i8*|))
          (param_names_store (llvm:alloca |%ASTNode*|)))
     ;; Clear local_values at start
-      (let* ((local_values_field (llvm:gep |%CodeGen| cg 0 10)))
-        (llvm:store (llvm:const-null |%ASTNode*|) local_values_field)
-        ;; Parse AST: node.cdr = (sig return-type body)
-        (let* ((cdr (vibe:ast-ref node cdr))
-               (sig_list (vibe:ast-ref cdr car))
-               (func_name_node (vibe:ast-ref sig_list car))
-               (func_name (vibe:ast-ref func_name_node value))
-               (func_name_len (vibe:ast-ref func_name_node value_len))
-               (params_list (vibe:ast-ref sig_list cdr))
-               (cdr_cdr (vibe:ast-ref cdr cdr))
-               (return_type_node (vibe:ast-ref cdr_cdr car))
-               (return_type (vibe:ast-ref return_type_node value))
-               (return_type_len (vibe:ast-ref return_type_node value_len))
-               (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr)))
-          (llvm:store func_name func_name_store)
-          (llvm:store func_name_len func_name_len_store)
-          (llvm:store params_list params_list_store)
-          ;; Resolve return type
-          (let* ((rt_ref (llvm:call codegen_resolve_type_string cg return_type return_type_len))
-                 (rt_null (vibe:ptr-null? rt_ref)))
-            (llvm:store rt_ref return_type_ref_store)
-            (llvm:br (vibe:ast-null? cdr_cdr_cdr) 'error 'try_body_direct))))
+    (let* ((local_values_field (llvm:gep |%CodeGen| cg 0 10)))
+      (llvm:store (llvm:const-null |%ASTNode*|) local_values_field)
+      ;; Parse AST: node.cdr = (sig return-type body)
+      (let* ((cdr (vibe:ast-ref node cdr))
+             (sig_list (vibe:ast-ref cdr car))
+             (func_name_node (vibe:ast-ref sig_list car))
+             (func_name (vibe:ast-ref func_name_node value))
+             (func_name_len (vibe:ast-ref func_name_node value_len))
+             (params_list (vibe:ast-ref sig_list cdr))
+             (cdr_cdr (vibe:ast-ref cdr cdr))
+             (return_type_node (vibe:ast-ref cdr_cdr car))
+             (return_type (vibe:ast-ref return_type_node value))
+             (return_type_len (vibe:ast-ref return_type_node value_len))
+             (cdr_cdr_cdr (vibe:ast-ref cdr_cdr cdr)))
+        (llvm:store func_name func_name_store)
+        (llvm:store func_name_len func_name_len_store)
+        (llvm:store params_list params_list_store)
+        ;; Resolve return type
+        (let* ((rt_ref (llvm:call codegen_resolve_type_string cg return_type return_type_len))
+               (rt_null (vibe:ptr-null? rt_ref)))
+          (llvm:store rt_ref return_type_ref_store)
+          (llvm:br (vibe:ast-null? cdr_cdr_cdr) 'error 'try_body_direct))))
     (llvm:label 'try_body_direct
       ;; Re-navigate to cdr_cdr_cdr
       (let* ((cdr (vibe:ast-ref node cdr))
@@ -5568,12 +5572,12 @@
          (arg_array (llvm:alloca |i8*|))
          (gep_result_ptr (llvm:alloca |i8*|)))
     (let* ((module (llvm:load (llvm:gep |%CodeGen| cg 0 6) |i8*|))
-             (builder (llvm:load (llvm:gep |%CodeGen| cg 0 7) |i8*|)))
-        (llvm:store (llvm:const-null |i8*|) func_val_ptr)
-        (llvm:store (llvm:const-null |i8*|) func_type_val_ptr)
-        (llvm:store (llvm:const-int |i32| 0) args_count_ptr)
-        (llvm:store (llvm:const-null |i8*|) gep_result_ptr)
-        (llvm:br (llvm:or (vibe:ptr-null? module) (vibe:ptr-null? builder)) 'text_only 'lookup_func))
+           (builder (llvm:load (llvm:gep |%CodeGen| cg 0 7) |i8*|)))
+      (llvm:store (llvm:const-null |i8*|) func_val_ptr)
+      (llvm:store (llvm:const-null |i8*|) func_type_val_ptr)
+      (llvm:store (llvm:const-int |i32| 0) args_count_ptr)
+      (llvm:store (llvm:const-null |i8*|) gep_result_ptr)
+      (llvm:br (llvm:or (vibe:ptr-null? module) (vibe:ptr-null? builder)) 'text_only 'lookup_func))
     (llvm:label 'lookup_func
       (let* ((func_name_len (llvm:call strlen func_name))
              (found_tracked (llvm:call codegen_get_llvm_function cg func_name func_name_len func_val_ptr func_type_val_ptr))
@@ -5674,12 +5678,12 @@
          (arg_count_ptr (llvm:alloca |i32|))
          (validate_i_ptr (llvm:alloca |i32|)))
     (let* ((builder (llvm:load (llvm:gep |%CodeGen| cg 0 7) |i8*|)))
-        (llvm:store (llvm:const-null |i8*|) func_type_ptr)
-        (llvm:store (llvm:const-null |%ASTNode*|) args_to_eval_ptr)
-        (llvm:store (llvm:const-null |i8*|) args_array_ptr)
-        (llvm:store (llvm:const-null |i8*|) func_ptr)
-        (llvm:store (llvm:const-int |i32| 0) arg_count_ptr)
-        (llvm:br (vibe:ptr-null? builder) 'error 'get_func))
+      (llvm:store (llvm:const-null |i8*|) func_type_ptr)
+      (llvm:store (llvm:const-null |%ASTNode*|) args_to_eval_ptr)
+      (llvm:store (llvm:const-null |i8*|) args_array_ptr)
+      (llvm:store (llvm:const-null |i8*|) func_ptr)
+      (llvm:store (llvm:const-int |i32| 0) arg_count_ptr)
+      (llvm:br (vibe:ptr-null? builder) 'error 'get_func))
     (vibe:label-branch 'get_func (vibe:ast-null? args) 'error 'get_func_node)
     (llvm:label 'get_func_node
       (let* ((func_node (vibe:ast-ref args car))

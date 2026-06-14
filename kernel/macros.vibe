@@ -8,21 +8,13 @@
     ((define-vibe-syntax name _doc transformer)
      (define-syntax name transformer))))
 
-; Token type literals (lexer → parser): see vibe:token-lit / vibe:token-type?
-; AST node type field (parser stores): atom=0 list=1 quote wrapper=2 — vibe:ast-type-lit / vibe:node-kind?
-
-; ASTNode field access — indices and load types match llvm:define-type ASTNode in types.vibe:
-;   0 type       |i32|     atom / list / quote wrapper — see vibe:node-kind? / vibe:ast-type-lit
-;   1 atom_type  |i32|     atom subtype (number, string, …)
-;   2 value      |i8*|     payload pointer
-;   3 value_len  |i64|     payload length
-;   4 car        |%ASTNode*|  (struct stores i8*; kernel loads as AST node pointer)
-;   5 cdr        |%ASTNode*|
-;   6 line       |i32|
-;   7 column     |i32|
-
 (define-vibe-syntax vibe:ast-ref
-  "Load one ASTNode field; second subform is a literal field name (see header comment)."
+  "Load one ASTNode field. Second subform is a literal field name matching the
+   ASTNode struct in types.vibe: type (i32, atom/list/quote-wrapper discriminant),
+   atom_type (i32, number/string/bytevector/pointer subtype), value (i8*, payload
+   pointer), value_len (i64, payload length), car (%ASTNode*), cdr (%ASTNode*),
+   line (i32), column (i32). The car/cdr fields are stored as i8* in the struct
+   but loaded here as %ASTNode* for kernel use."
   (syntax-rules (type atom_type value value_len car cdr line column)
     ((vibe:ast-ref node type)
      (llvm:load (llvm:gep |%ASTNode| node 0 0) |i32|))
@@ -42,7 +34,9 @@
      (llvm:load (llvm:gep |%ASTNode| node 0 7) |i32|))))
 
 (define-vibe-syntax vibe:ast-addr
-  "Pointer to one ASTNode field (llvm:gep only); for llvm:store and similar."
+  "Pointer to one ASTNode field (llvm:gep only); for llvm:store and similar.
+   Field name set matches vibe:ast-ref: type, atom_type, value, value_len, car,
+   cdr, line, column."
   (syntax-rules (type atom_type value value_len car cdr line column)
     ((vibe:ast-addr node type)
      (llvm:gep |%ASTNode| node 0 0))
@@ -214,15 +208,60 @@
     ((vibe:atom-type? n pointer)
      (llvm:icmp 'eq (vibe:ast-ref n atom_type) (llvm:const-int |i32| 999)))))
 
-; vibe:label-branch — collapse (llvm:label L (let* ((c X)) (llvm:br c T E)))
-; into one form. Generic CFG helper used kernel-wide. Internal temp `cond_val`
-; is bound in its own let* scope, so caller expressions must not reference it.
-
 (define-vibe-syntax vibe:label-branch
   "Label block: at LABEL evaluate COND, branch to THEN-LABEL if truthy else ELSE-LABEL.
-   Same polarity as llvm:br. Captures (llvm:label L (let* ((c X)) (llvm:br c T E))) as one form."
+   Same polarity as llvm:br. Captures (llvm:label L (let* ((c X)) (llvm:br c T E)))
+   as one form. Generic CFG helper used kernel-wide. Internal temp `cond_val` is
+   bound in its own let* scope, so caller COND expressions must not reference it."
   (syntax-rules ()
     ((vibe:label-branch label cond then-label else-label)
      (llvm:label label
        (let* ((cond_val cond))
          (llvm:br cond_val then-label else-label))))))
+
+(define-vibe-syntax vibe:pred?
+  "True when (llvm:call FN ARGS...) — a strict 0/1 C-bool predicate function —
+   returned 1. Use for kernel helpers like expander_is_atom_node, expander_atoms_equal,
+   etc. that have exactly two returns: (i32 0) and (i32 1)."
+  (syntax-rules ()
+    ((vibe:pred? fn arg ...)
+     (vibe:i32-one? (llvm:call fn arg ...)))))
+
+(define-vibe-syntax vibe:str-match?
+  "True when strncmp(a, b, len) returned 0 — first `len` bytes match. `len` is i32
+   (already truncated to strncmp's signature)."
+  (syntax-rules ()
+    ((vibe:str-match? a b len)
+     (vibe:i32-zero? (llvm:call strncmp a b len)))))
+
+(define-vibe-syntax vibe:ast-str-eq?
+  "True when two AST atoms have equal byte-string payloads (same value_len and
+   same bytes). Captures the 'len-equal AND strncmp-zero' idiom in atoms_equal
+   and macro-lookup paths. Both arguments must be plain identifiers (the macro
+   re-references value/value_len fields multiple times)."
+  (syntax-rules ()
+    ((vibe:ast-str-eq? a b)
+     (llvm:and (llvm:icmp 'eq (vibe:ast-ref a value_len) (vibe:ast-ref b value_len))
+               (vibe:str-match? (vibe:ast-ref a value)
+                                (vibe:ast-ref b value)
+                                (llvm:trunc (vibe:ast-ref a value_len) |i64| |i32|))))))
+
+(define-vibe-syntax vibe:lex-eof?
+  "True when the lexer is at end-of-input (lex_is_eof returned non-zero)."
+  (syntax-rules ()
+    ((vibe:lex-eof? lexer)
+     (vibe:i32-nonzero? (llvm:call lex_is_eof lexer)))))
+
+(define-vibe-syntax vibe:parse-check?
+  "True when the parser's current token matches the requested kind
+   (parse_check returned non-zero)."
+  (syntax-rules ()
+    ((vibe:parse-check? parser tok)
+     (vibe:i32-nonzero? (llvm:call parse_check parser tok)))))
+
+(define-vibe-syntax vibe:lex-char
+  "Read the lexer's current char as i32 (zext from the i8 returned by
+   lex_current_char). Pure read; advances nothing."
+  (syntax-rules ()
+    ((vibe:lex-char lexer)
+     (llvm:zext (llvm:call lex_current_char lexer) |i8| |i32|))))

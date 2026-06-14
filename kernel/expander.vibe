@@ -65,18 +65,14 @@
 ;; ============================================================================
 (llvm:define-function (expander_is_ellipsis_id (elt |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? elt) 'no 'chk_atom)
-  (llvm:label 'chk_atom
-    (let* ((is_atom (llvm:call expander_is_atom_node elt))
-           (ok (vibe:i32-one? is_atom)))
-      (llvm:br ok 'cmp_str 'no)))
+  (vibe:label-branch 'chk_atom (vibe:pred? expander_is_atom_node elt) 'cmp_str 'no)
   (llvm:label 'cmp_str
     (let* ((val (vibe:ast-ref elt value))
            (elen (vibe:ast-ref elt value_len))
            (want3 (llvm:icmp 'eq elen (llvm:const-int |i64| 3)))
            (target (llvm:gep |[4 x i8]| (llvm:get-global .str.ellipsis) 0 0))
            (len_trunc (llvm:trunc elen |i64| |i32|))
-           (cmp (llvm:call strncmp val target len_trunc))
-           (match (vibe:i32-zero? cmp))
+           (match (vibe:str-match? val target len_trunc))
            (both (llvm:and want3 match)))
       (llvm:br both 'yes 'no)))
   (llvm:label 'yes
@@ -89,15 +85,11 @@
 ;; ============================================================================
 (llvm:define-function (expander_pattern_tail_ends_ellipsis (pr |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? pr) 'no 'chk)
-  (llvm:label 'chk
-    (let* ((is_list (llvm:call expander_is_list_node pr))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'get_car 'no)))
+  (vibe:label-branch 'chk (vibe:pred? expander_is_list_node pr) 'get_car 'no)
   (llvm:label 'get_car
     (let* ((ec (vibe:ast-ref pr car))
            (ed (vibe:ast-ref pr cdr))
-           (is_ell (llvm:call expander_is_ellipsis_id ec))
-           (ell_y (vibe:i32-one? is_ell))
+           (ell_y (vibe:pred? expander_is_ellipsis_id ec))
            (dnull (vibe:ast-null? ed))
            (both (llvm:and ell_y dnull)))
       (llvm:br both 'yes 'no)))
@@ -169,25 +161,10 @@
 ;; expander_atoms_equal
 ;; ============================================================================
 (llvm:define-function (expander_atoms_equal (a |%ASTNode*|) (b |%ASTNode*|)) |i32|
-  (let* ((a_ok (llvm:call expander_is_atom_node a))
-         (b_ok (llvm:call expander_is_atom_node b))
-         (a_ok_1 (vibe:i32-one? a_ok))
-         (b_ok_1 (vibe:i32-one? b_ok))
-         (both_atoms (llvm:and a_ok_1 b_ok_1)))
-    (llvm:br both_atoms 'cmp_lens 'no))
-  (llvm:label 'cmp_lens
-    (let* ((a_len (vibe:ast-ref a value_len))
-           (b_len (vibe:ast-ref b value_len))
-           (len_eq (llvm:icmp 'eq a_len b_len)))
-      (llvm:br len_eq 'cmp_str 'no)))
-  (llvm:label 'cmp_str
-    (let* ((a_val (vibe:ast-ref a value))
-           (b_val (vibe:ast-ref b value))
-           (a_len (vibe:ast-ref a value_len))
-           (len_trunc (llvm:trunc a_len |i64| |i32|))
-           (cmp (llvm:call strncmp a_val b_val len_trunc))
-           (match (vibe:i32-zero? cmp)))
-      (llvm:br match 'yes 'no)))
+  (let* ((both_atoms (llvm:and (vibe:pred? expander_is_atom_node a)
+                               (vibe:pred? expander_is_atom_node b))))
+    (llvm:br both_atoms 'cmp 'no))
+  (vibe:label-branch 'cmp (vibe:ast-str-eq? a b) 'yes 'no)
   (llvm:label 'yes
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'no
@@ -200,8 +177,7 @@
   (llvm:br (vibe:ast-null? seen) 'not_found 'check_car)
   (llvm:label 'check_car
     (let* ((head (vibe:ast-ref seen car))
-           (eq (llvm:call expander_atoms_equal head sym))
-           (is_eq (vibe:i32-one? eq)))
+           (is_eq (vibe:pred? expander_atoms_equal head sym)))
       (llvm:br is_eq 'found 'next)))
   (llvm:label 'found
     (llvm:ret (llvm:const-int |i32| 1)))
@@ -219,19 +195,14 @@
   (llvm:br (vibe:ast-null? tail) 'ok_empty 'check_cons)
   (llvm:label 'ok_empty
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'check_cons
-    (let* ((is_list (llvm:call expander_is_list_node tail))
-           (ok_list (vibe:i32-one? is_list)))
-      (llvm:br ok_list 'get_elt 'bad)))
+  (vibe:label-branch 'check_cons (vibe:pred? expander_is_list_node tail) 'get_elt 'bad)
   (llvm:label 'get_elt
     (let* ((elt (vibe:ast-ref tail car))
-           (is_atom (llvm:call expander_is_atom_node elt))
-           (ok_atom (vibe:i32-one? is_atom)))
+           (ok_atom (vibe:pred? expander_is_atom_node elt)))
       (llvm:br ok_atom 'check_dup 'bad)))
   (llvm:label 'check_dup
     (let* ((elt (vibe:ast-ref tail car))
-           (dup (llvm:call expander_sym_in_seen_list seen elt))
-           (is_dup (vibe:i32-one? dup)))
+           (is_dup (vibe:pred? expander_sym_in_seen_list seen elt)))
       (llvm:br is_dup 'bad 'push)))
   (llvm:label 'push
     (let* ((elt (vibe:ast-ref tail car))
@@ -251,14 +222,8 @@
 ;; ============================================================================
 (llvm:define-function (expander_validate_pattern_element_struct (elt |%ASTNode*|) (literals |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? elt) 'ves_bad 'ves_dispatch)
-  (llvm:label 'ves_dispatch
-    (let* ((is_atom (llvm:call expander_is_atom_node elt))
-           (atom_y (vibe:i32-one? is_atom)))
-      (llvm:br atom_y 'ves_atom 'ves_list)))
-  (llvm:label 'ves_atom
-    (let* ((is_ell (llvm:call expander_is_ellipsis_id elt))
-           (ell_y (vibe:i32-one? is_ell)))
-      (llvm:br ell_y 'ves_bad 'ves_ok_atom)))
+  (vibe:label-branch 'ves_dispatch (vibe:pred? expander_is_atom_node elt) 'ves_atom 'ves_list)
+  (vibe:label-branch 'ves_atom (vibe:pred? expander_is_ellipsis_id elt) 'ves_bad 'ves_ok_atom)
   (llvm:label 'ves_ok_atom
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'ves_list
@@ -274,15 +239,11 @@
   (llvm:br (vibe:ast-null? tail) 'vss_ok_empty 'vss_check_cons)
   (llvm:label 'vss_ok_empty
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'vss_check_cons
-    (let* ((is_list (llvm:call expander_is_list_node tail))
-           (ok_list (vibe:i32-one? is_list)))
-      (llvm:br ok_list 'vss_get 'vss_bad)))
+  (vibe:label-branch 'vss_check_cons (vibe:pred? expander_is_list_node tail) 'vss_get 'vss_bad)
   (llvm:label 'vss_get
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ends_ell (llvm:call expander_pattern_tail_ends_ellipsis pr))
-           (ell_y (vibe:i32-one? ends_ell)))
+           (ell_y (vibe:pred? expander_pattern_tail_ends_ellipsis pr)))
       (llvm:br ell_y 'vss_ellipsis 'vss_plain)))
   (llvm:label 'vss_ellipsis
     (let* ((px (vibe:ast-ref tail car))
@@ -291,14 +252,12 @@
   (llvm:label 'vss_plain
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_ell_px (llvm:call expander_is_ellipsis_id px))
-           (ell_px (vibe:i32-one? is_ell_px)))
+           (ell_px (vibe:pred? expander_is_ellipsis_id px)))
       (llvm:br ell_px 'vss_bad 'vss_elt)))
   (llvm:label 'vss_elt
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_lit (llvm:call expander_literal_set_contains literals px))
-           (lit_y (vibe:i32-one? is_lit)))
+           (lit_y (vibe:pred? expander_literal_set_contains literals px)))
       (llvm:br lit_y 'vss_lit 'vss_nonlit)))
   (llvm:label 'vss_lit
     (let* ((pr (vibe:ast-ref tail cdr))
@@ -307,14 +266,12 @@
   (llvm:label 'vss_nonlit
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_list_px (llvm:call expander_is_list_node px))
-           (lx (vibe:i32-one? is_list_px)))
+           (lx (vibe:pred? expander_is_list_node px)))
       (llvm:br lx 'vss_nested 'vss_var)))
   (llvm:label 'vss_nested
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ok_in (llvm:call expander_validate_pattern_segment_struct_rec px literals))
-           (ok1 (vibe:i32-one? ok_in)))
+           (ok1 (vibe:pred? expander_validate_pattern_segment_struct_rec px literals)))
       (llvm:br ok1 'vss_after_nested 'vss_bad)))
   (llvm:label 'vss_after_nested
     (let* ((pr (vibe:ast-ref tail cdr))
@@ -332,22 +289,12 @@
 ;; ============================================================================
 (llvm:define-function (expander_pattern_vars_unique_rep (rep |%ASTNode*|) (literals |%ASTNode*|) (seen_ptr |%ASTNode**|)) |i32|
   (llvm:br (vibe:ast-null? rep) 'pvur_bad 'pvur_go)
-  (llvm:label 'pvur_go
-    (let* ((is_atom (llvm:call expander_is_atom_node rep))
-           (atom_y (vibe:i32-one? is_atom)))
-      (llvm:br atom_y 'pvur_atom 'pvur_list)))
-  (llvm:label 'pvur_atom
-    (let* ((is_ell (llvm:call expander_is_ellipsis_id rep))
-           (ell_y (vibe:i32-one? is_ell)))
-      (llvm:br ell_y 'pvur_bad 'pvur_atom_lit)))
-  (llvm:label 'pvur_atom_lit
-    (let* ((is_lit (llvm:call expander_literal_set_contains literals rep))
-           (lit_y (vibe:i32-one? is_lit)))
-      (llvm:br lit_y 'pvur_ok 'pvur_atom_var)))
+  (vibe:label-branch 'pvur_go (vibe:pred? expander_is_atom_node rep) 'pvur_atom 'pvur_list)
+  (vibe:label-branch 'pvur_atom (vibe:pred? expander_is_ellipsis_id rep) 'pvur_bad 'pvur_atom_lit)
+  (vibe:label-branch 'pvur_atom_lit (vibe:pred? expander_literal_set_contains literals rep) 'pvur_ok 'pvur_atom_var)
   (llvm:label 'pvur_atom_var
     (let* ((seen (llvm:load seen_ptr |%ASTNode*|))
-           (dup (llvm:call expander_sym_in_seen_list seen rep))
-           (is_dup (vibe:i32-one? dup)))
+           (is_dup (vibe:pred? expander_sym_in_seen_list seen rep)))
       (llvm:br is_dup 'pvur_bad 'pvur_push)))
   (llvm:label 'pvur_push
     (let* ((seen (llvm:load seen_ptr |%ASTNode*|))
@@ -369,15 +316,11 @@
   (llvm:br (vibe:ast-null? tail) 'pvut_ok_empty 'pvut_check_cons)
   (llvm:label 'pvut_ok_empty
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'pvut_check_cons
-    (let* ((is_list (llvm:call expander_is_list_node tail))
-           (ok_list (vibe:i32-one? is_list)))
-      (llvm:br ok_list 'pvut_get 'pvut_bad)))
+  (vibe:label-branch 'pvut_check_cons (vibe:pred? expander_is_list_node tail) 'pvut_get 'pvut_bad)
   (llvm:label 'pvut_get
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ends_ell (llvm:call expander_pattern_tail_ends_ellipsis pr))
-           (ell_y (vibe:i32-one? ends_ell)))
+           (ell_y (vibe:pred? expander_pattern_tail_ends_ellipsis pr)))
       (llvm:br ell_y 'pvut_ell 'pvut_plain)))
   (llvm:label 'pvut_ell
     (let* ((px (vibe:ast-ref tail car))
@@ -386,14 +329,12 @@
   (llvm:label 'pvut_plain
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_ell_px (llvm:call expander_is_ellipsis_id px))
-           (ell_px (vibe:i32-one? is_ell_px)))
+           (ell_px (vibe:pred? expander_is_ellipsis_id px)))
       (llvm:br ell_px 'pvut_bad 'pvut_elt)))
   (llvm:label 'pvut_elt
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_lit (llvm:call expander_literal_set_contains literals px))
-           (lit_y (vibe:i32-one? is_lit)))
+           (lit_y (vibe:pred? expander_literal_set_contains literals px)))
       (llvm:br lit_y 'pvut_lit 'pvut_nonlit)))
   (llvm:label 'pvut_lit
     (let* ((pr (vibe:ast-ref tail cdr))
@@ -402,14 +343,12 @@
   (llvm:label 'pvut_nonlit
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (is_list_px (llvm:call expander_is_list_node px))
-           (lx (vibe:i32-one? is_list_px)))
+           (lx (vibe:pred? expander_is_list_node px)))
       (llvm:br lx 'pvut_nested 'pvut_var)))
   (llvm:label 'pvut_nested
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ok_in (llvm:call expander_pattern_vars_unique_tail px literals seen_ptr))
-           (ok1 (vibe:i32-one? ok_in)))
+           (ok1 (vibe:pred? expander_pattern_vars_unique_tail px literals seen_ptr)))
       (llvm:br ok1 'pvut_after_nested 'pvut_bad)))
   (llvm:label 'pvut_after_nested
     (let* ((pr (vibe:ast-ref tail cdr))
@@ -418,8 +357,7 @@
   (llvm:label 'pvut_var
     (let* ((px (vibe:ast-ref tail car))
            (seen (llvm:load seen_ptr |%ASTNode*|))
-           (dup (llvm:call expander_sym_in_seen_list seen px))
-           (is_dup (vibe:i32-one? dup)))
+           (is_dup (vibe:pred? expander_sym_in_seen_list seen px)))
       (llvm:br is_dup 'pvut_bad 'pvut_push_var)))
   (llvm:label 'pvut_push_var
     (let* ((px (vibe:ast-ref tail car))
@@ -438,13 +376,11 @@
 ;; ============================================================================
 (llvm:define-function (expander_validate_pattern_tail_atoms_with_literals_rec (tail |%ASTNode*|) (literals |%ASTNode*|) (_seen |%ASTNode*|)) |i32|
   (let* ((seen_slot (llvm:alloca |%ASTNode*|)))
-    (let* ((st (llvm:call expander_validate_pattern_segment_struct_rec tail literals))
-           (st_ok (vibe:i32-one? st)))
+    (let* ((st_ok (vibe:pred? expander_validate_pattern_segment_struct_rec tail literals)))
       (llvm:br st_ok 'vpt_dup 'vpt_fail)))
   (llvm:label 'vpt_dup
     (llvm:store (llvm:const-null |%ASTNode*|) seen_slot)
-    (let* ((du (llvm:call expander_pattern_vars_unique_tail tail literals seen_slot))
-           (du_ok (vibe:i32-one? du)))
+    (let* ((du_ok (vibe:pred? expander_pattern_vars_unique_tail tail literals seen_slot)))
       (llvm:br du_ok 'vpt_ok 'vpt_fail)))
   (llvm:label 'vpt_ok
     (llvm:ret (llvm:const-int |i32| 1)))
@@ -456,14 +392,10 @@
 ;; ============================================================================
 (llvm:define-function (expander_validate_macro_pattern_with_literals (name |%ASTNode*|) (pattern |%ASTNode*|) (literals |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? pattern) 'vmpl_bad 'vmpl_is_list)
-  (llvm:label 'vmpl_is_list
-    (let* ((is_list (llvm:call expander_is_list_node pattern))
-           (ok_list (vibe:i32-one? is_list)))
-      (llvm:br ok_list 'vmpl_check_kw 'vmpl_bad)))
+  (vibe:label-branch 'vmpl_is_list (vibe:pred? expander_is_list_node pattern) 'vmpl_check_kw 'vmpl_bad)
   (llvm:label 'vmpl_check_kw
     (let* ((kw (vibe:ast-ref pattern car))
-           (kw_match (llvm:call expander_atoms_equal kw name))
-           (ok_kw (vibe:i32-one? kw_match)))
+           (ok_kw (vibe:pred? expander_atoms_equal kw name)))
       (llvm:br ok_kw 'vmpl_check_tail 'vmpl_bad)))
   (llvm:label 'vmpl_check_tail
     (let* ((tail (vibe:ast-ref pattern cdr))
@@ -490,10 +422,7 @@
     (llvm:br (vibe:ast-null? literals) 'lit_ok_empty 'lit_is_list)
     (llvm:label 'lit_ok_empty
       (llvm:ret (llvm:const-int |i32| 1)))
-    (llvm:label 'lit_is_list
-      (let* ((is_list (llvm:call expander_is_list_node literals))
-             (ok_list (vibe:i32-one? is_list)))
-        (llvm:br ok_list 'lit_check_empty_form 'lit_bad)))
+    (vibe:label-branch 'lit_is_list (vibe:pred? expander_is_list_node literals) 'lit_check_empty_form 'lit_bad)
     (llvm:label 'lit_check_empty_form
       (let* ((car_v (vibe:ast-ref literals car))
              (cdr_v (vibe:ast-ref literals cdr))
@@ -511,14 +440,12 @@
       (llvm:ret (llvm:const-int |i32| 1)))
     (llvm:label 'lit_walk_check_cons
       (let* ((cur (llvm:load walk_cur_ptr |%ASTNode*|))
-             (is_list (llvm:call expander_is_list_node cur))
-             (ok_list (vibe:i32-one? is_list)))
+             (ok_list (vibe:pred? expander_is_list_node cur)))
         (llvm:br ok_list 'lit_walk_elt 'lit_bad)))
     (llvm:label 'lit_walk_elt
       (let* ((cur (llvm:load walk_cur_ptr |%ASTNode*|))
              (elt (vibe:ast-ref cur car))
-             (is_atom (llvm:call expander_is_atom_node elt))
-             (ok_atom (vibe:i32-one? is_atom)))
+             (ok_atom (vibe:pred? expander_is_atom_node elt)))
         (llvm:br ok_atom 'lit_walk_next 'lit_bad)))
     (llvm:label 'lit_walk_next
       (let* ((cur (llvm:load walk_cur_ptr |%ASTNode*|))
@@ -538,10 +465,7 @@
     (llvm:br (vibe:ast-null? literals) 'lsc_no 'lsc_is_list)
     (llvm:label 'lsc_no
       (llvm:ret (llvm:const-int |i32| 0)))
-    (llvm:label 'lsc_is_list
-      (let* ((is_list (llvm:call expander_is_list_node literals))
-             (ok (vibe:i32-one? is_list)))
-        (llvm:br ok 'lsc_empty_check 'lsc_no)))
+    (vibe:label-branch 'lsc_is_list (vibe:pred? expander_is_list_node literals) 'lsc_empty_check 'lsc_no)
     (llvm:label 'lsc_empty_check
       (let* ((car_v (vibe:ast-ref literals car))
              (cdr_v (vibe:ast-ref literals cdr))
@@ -555,14 +479,12 @@
     (vibe:label-branch 'lsc_loop (vibe:ast-null? (llvm:load walk_ptr |%ASTNode*|)) 'lsc_no 'lsc_step)
     (llvm:label 'lsc_step
       (let* ((cur (llvm:load walk_ptr |%ASTNode*|))
-             (is_list (llvm:call expander_is_list_node cur))
-             (ok (vibe:i32-one? is_list)))
+             (ok (vibe:pred? expander_is_list_node cur)))
         (llvm:br ok 'lsc_cmp 'lsc_no)))
     (llvm:label 'lsc_cmp
       (let* ((cur (llvm:load walk_ptr |%ASTNode*|))
              (elt (vibe:ast-ref cur car))
-             (eq (llvm:call expander_atoms_equal elt sym))
-             (hit (vibe:i32-one? eq)))
+             (hit (vibe:pred? expander_atoms_equal elt sym)))
         (llvm:br hit 'lsc_yes 'lsc_next)))
     (llvm:label 'lsc_yes
       (llvm:ret (llvm:const-int |i32| 1)))
@@ -614,8 +536,7 @@
              (sr (vibe:ast-ref wrapper car))
              (sr_cdr (vibe:ast-ref sr cdr))
              (literals (vibe:ast-ref sr_cdr car))
-             (lit_ok (llvm:call expander_validate_literals_list literals))
-             (lit_ok_b (vibe:i32-one? lit_ok)))
+             (lit_ok_b (vibe:pred? expander_validate_literals_list literals)))
         (llvm:store literals literals_ptr)
         (llvm:br lit_ok_b 'psm_get_clause_tail 'fail)))
     (llvm:label 'psm_get_clause_tail
@@ -637,8 +558,7 @@
     (llvm:label 'psm_one_clause
       (let* ((cur (llvm:load cur_ptr |%ASTNode*|))
              (clause (vibe:ast-ref cur car))
-             (is_list (llvm:call expander_is_list_node clause))
-             (ok_list (vibe:i32-one? is_list)))
+             (ok_list (vibe:pred? expander_is_list_node clause)))
         (llvm:br ok_list 'psm_clause_has_cdr 'fail)))
     (llvm:label 'psm_clause_has_cdr
       (let* ((cur (llvm:load cur_ptr |%ASTNode*|))
@@ -654,8 +574,7 @@
              (pattern (vibe:ast-ref clause car))
              (clause_cdr (vibe:ast-ref clause cdr))
              (template (vibe:ast-ref clause_cdr car))
-             (ok_pat (llvm:call expander_validate_macro_pattern_with_literals name pattern literals))
-             (pat_ok (vibe:i32-one? ok_pat)))
+             (pat_ok (vibe:pred? expander_validate_macro_pattern_with_literals name pattern literals)))
         (llvm:br pat_ok 'psm_push_clause 'fail)))
     (llvm:label 'psm_push_clause
       (let* ((cur (llvm:load cur_ptr |%ASTNode*|))
@@ -691,25 +610,11 @@
   (llvm:label 'compare
     (let* ((entry (vibe:ast-ref env car))
            (macro_name (vibe:ast-ref entry car)))
-      (llvm:br (vibe:ast-null? macro_name) 'next 'get_lens)))
-  (llvm:label 'get_lens
+      (llvm:br (vibe:ast-null? macro_name) 'next 'check_match)))
+  (llvm:label 'check_match
     (let* ((entry (vibe:ast-ref env car))
            (macro_name (vibe:ast-ref entry car))
-           (name_val (vibe:ast-ref name_ast value))
-           (name_len (vibe:ast-ref name_ast value_len))
-           (macro_val (vibe:ast-ref macro_name value))
-           (macro_len (vibe:ast-ref macro_name value_len))
-           (len_match (llvm:icmp 'eq name_len macro_len)))
-      (llvm:br len_match 'compare_str 'next)))
-  (llvm:label 'compare_str
-    (let* ((entry (vibe:ast-ref env car))
-           (macro_name (vibe:ast-ref entry car))
-           (name_val (vibe:ast-ref name_ast value))
-           (name_len (vibe:ast-ref name_ast value_len))
-           (macro_val (vibe:ast-ref macro_name value))
-           (len_trunc (llvm:trunc name_len |i64| |i32|))
-           (cmp (llvm:call strncmp name_val macro_val len_trunc))
-           (match (vibe:i32-zero? cmp)))
+           (match (vibe:ast-str-eq? name_ast macro_name)))
       (llvm:br match 'found 'next)))
   (llvm:label 'found
     (let* ((entry (vibe:ast-ref env car))
@@ -738,8 +643,7 @@
   (llvm:label 'check
     (let* ((entry (vibe:ast-ref bindings car))
            (ev (vibe:ast-ref entry car))
-           (eq (llvm:call expander_atoms_equal ev sym))
-           (hit (vibe:i32-one? eq)))
+           (hit (vibe:pred? expander_atoms_equal ev sym)))
       (llvm:br hit 'got 'next)))
   (llvm:label 'got
     (let* ((entry (vibe:ast-ref bindings car))
@@ -757,14 +661,10 @@
 ;; ============================================================================
 (llvm:define-function (expander_sym_in_ell_list (ell |%ASTNode*|) (sym |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? ell) 'sil_no 'sil_chk)
-  (llvm:label 'sil_chk
-    (let* ((is_list (llvm:call expander_is_list_node ell))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'sil_car 'sil_no)))
+  (vibe:label-branch 'sil_chk (vibe:pred? expander_is_list_node ell) 'sil_car 'sil_no)
   (llvm:label 'sil_car
     (let* ((h (vibe:ast-ref ell car))
-           (eq (llvm:call expander_atoms_equal h sym))
-           (hit (vibe:i32-one? eq)))
+           (hit (vibe:pred? expander_atoms_equal h sym)))
       (llvm:br hit 'sil_yes 'sil_next)))
   (llvm:label 'sil_next
     (let* ((t (vibe:ast-ref ell cdr))
@@ -804,14 +704,12 @@
   (llvm:br (vibe:ast-null? acc) 'sik_no 'sik_go)
   (llvm:label 'sik_go
     (let* ((hd (vibe:ast-ref acc car))
-           (is_list (llvm:call expander_is_list_node hd))
-           (ok (vibe:i32-one? is_list)))
+           (ok (vibe:pred? expander_is_list_node hd)))
       (llvm:br ok 'sik_var 'sik_no)))
   (llvm:label 'sik_var
     (let* ((hd (vibe:ast-ref acc car))
            (v (vibe:ast-ref hd car))
-           (eq (llvm:call expander_atoms_equal v sym))
-           (hit (vibe:i32-one? eq)))
+           (hit (vibe:pred? expander_atoms_equal v sym)))
       (llvm:br hit 'sik_yes 'sik_tail)))
   (llvm:label 'sik_tail
     (let* ((tl (vibe:ast-ref acc cdr))
@@ -826,8 +724,7 @@
 ;; expander_ell_acc_keys_add
 ;; ============================================================================
 (llvm:define-function (expander_ell_acc_keys_add (acc |%ASTNode*|) (sym |%ASTNode*|)) |%ASTNode*|
-  (let* ((dup (llvm:call expander_sym_in_ell_acc_keys acc sym))
-         (is_dup (vibe:i32-one? dup)))
+  (let* ((is_dup (vibe:pred? expander_sym_in_ell_acc_keys acc sym)))
     (llvm:br is_dup 'eaka_skip 'eaka_add)
     (llvm:label 'eaka_skip
       (llvm:ret acc))
@@ -840,15 +737,11 @@
 ;; ============================================================================
 (llvm:define-function (expander_ell_acc_init_elt_atom_branch (elt |%ASTNode*|) (literals |%ASTNode*|) (acc |%ASTNode*|)) |%ASTNode*|
   (let* ((_eab (llvm:const-int |i32| 0)))
-    (let* ((is_ell (llvm:call expander_is_ellipsis_id elt))
-           (ey (vibe:i32-one? is_ell)))
+    (let* ((ey (vibe:pred? expander_is_ellipsis_id elt)))
       (llvm:br ey 'eab_bad 'eab_alit))
     (llvm:label 'eab_bad
       (llvm:ret acc))
-    (llvm:label 'eab_alit
-      (let* ((is_lit (llvm:call expander_literal_set_contains literals elt))
-             (ly (vibe:i32-one? is_lit)))
-        (llvm:br ly 'eab_skip 'eab_var)))
+    (vibe:label-branch 'eab_alit (vibe:pred? expander_literal_set_contains literals elt) 'eab_skip 'eab_var)
     (llvm:label 'eab_skip
       (llvm:ret acc))
     (llvm:label 'eab_var
@@ -883,15 +776,11 @@
   (llvm:br (vibe:ast-null? tail) 'eait_ok 'eait_c)
   (llvm:label 'eait_ok
     (llvm:ret acc))
-  (llvm:label 'eait_c
-    (let* ((is_list (llvm:call expander_is_list_node tail))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'eait_go 'eait_ok)))
+  (vibe:label-branch 'eait_c (vibe:pred? expander_is_list_node tail) 'eait_go 'eait_ok)
   (llvm:label 'eait_go
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ends (llvm:call expander_pattern_tail_ends_ellipsis pr))
-           (ey (vibe:i32-one? ends)))
+           (ey (vibe:pred? expander_pattern_tail_ends_ellipsis pr)))
       (llvm:br ey 'eait_ell 'eait_plain)))
   (llvm:label 'eait_ell
     (let* ((px (vibe:ast-ref tail car))
@@ -908,10 +797,7 @@
   (llvm:br (vibe:ast-null? rep) 'eair_empty 'eair_d)
   (llvm:label 'eair_empty
     (llvm:ret acc))
-  (llvm:label 'eair_d
-    (let* ((is_atom (llvm:call expander_is_atom_node rep))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'eair_atom 'eair_list)))
+  (vibe:label-branch 'eair_d (vibe:pred? expander_is_atom_node rep) 'eair_atom 'eair_list)
   (llvm:label 'eair_atom
     (let* ((n (llvm:call expander_ell_acc_init_elt rep literals acc)))
       (llvm:ret n)))
@@ -929,8 +815,7 @@
            (tl (vibe:ast-ref acc cdr))
            (row_var (vibe:ast-ref hd car))
            (chain (vibe:ast-ref hd cdr))
-           (eq (llvm:call expander_atoms_equal row_var var))
-           (hit (vibe:i32-one? eq)))
+           (hit (vibe:pred? expander_atoms_equal row_var var)))
       (llvm:br hit 'eaa_hit 'eaa_next)))
   (llvm:label 'eaa_hit
     (let* ((hd (vibe:ast-ref acc car))
@@ -959,8 +844,7 @@
   (llvm:label 'emp_step
     (let* ((outer (vibe:ast-ref patch car))
            (rest (vibe:ast-ref patch cdr))
-           (is_list (llvm:call expander_is_list_node outer))
-           (ok (vibe:i32-one? is_list)))
+           (ok (vibe:pred? expander_is_list_node outer)))
       (llvm:br ok 'emp_pair 'emp_bad)))
   (llvm:label 'emp_pair
     (let* ((outer (vibe:ast-ref patch car))
@@ -983,8 +867,7 @@
   (llvm:label 'elf_step
     (let* ((hd (vibe:ast-ref acc car))
            (tl (vibe:ast-ref acc cdr))
-           (is_list (llvm:call expander_is_list_node hd))
-           (ok (vibe:i32-one? is_list)))
+           (ok (vibe:pred? expander_is_list_node hd)))
       (llvm:br ok 'elf_row 'elf_skip)))
   (llvm:label 'elf_row
     (let* ((hd (vibe:ast-ref acc car))
@@ -1008,22 +891,12 @@
 ;; ============================================================================
 (llvm:define-function (expander_out_ell_merge_elt (out_ell |%ASTNode**|) (elt |%ASTNode*|) (literals |%ASTNode*|)) |i32|
   (llvm:br (vibe:ast-null? elt) 'oeml_bad 'oeml_d)
-  (llvm:label 'oeml_d
-    (let* ((is_atom (llvm:call expander_is_atom_node elt))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'oeml_atom 'oeml_list)))
-  (llvm:label 'oeml_atom
-    (let* ((is_ell (llvm:call expander_is_ellipsis_id elt))
-           (ey (vibe:i32-one? is_ell)))
-      (llvm:br ey 'oeml_ok 'oeml_alit)))
-  (llvm:label 'oeml_alit
-    (let* ((is_lit (llvm:call expander_literal_set_contains literals elt))
-           (ly (vibe:i32-one? is_lit)))
-      (llvm:br ly 'oeml_ok 'oeml_var)))
+  (vibe:label-branch 'oeml_d (vibe:pred? expander_is_atom_node elt) 'oeml_atom 'oeml_list)
+  (vibe:label-branch 'oeml_atom (vibe:pred? expander_is_ellipsis_id elt) 'oeml_ok 'oeml_alit)
+  (vibe:label-branch 'oeml_alit (vibe:pred? expander_literal_set_contains literals elt) 'oeml_ok 'oeml_var)
   (llvm:label 'oeml_var
     (let* ((head (llvm:load out_ell |%ASTNode*|))
-           (in (llvm:call expander_sym_in_ell_list head elt))
-           (iy (vibe:i32-one? in)))
+           (iy (vibe:pred? expander_sym_in_ell_list head elt)))
       (llvm:br iy 'oeml_ok 'oeml_add)))
   (llvm:label 'oeml_add
     (let* ((head (llvm:load out_ell |%ASTNode*|))
@@ -1042,10 +915,7 @@
   (llvm:br (vibe:ast-null? rep) 'oemr_ok 'oemr_d)
   (llvm:label 'oemr_ok
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'oemr_d
-    (let* ((is_atom (llvm:call expander_is_atom_node rep))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'oemr_atom 'oemr_list)))
+  (vibe:label-branch 'oemr_d (vibe:pred? expander_is_atom_node rep) 'oemr_atom 'oemr_list)
   (llvm:label 'oemr_atom
     (let* ((r (llvm:call expander_out_ell_merge_elt out_ell rep literals)))
       (llvm:ret r)))
@@ -1057,15 +927,11 @@
   (llvm:br (vibe:ast-null? tail) 'oemt_ok 'oemt_c)
   (llvm:label 'oemt_ok
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'oemt_c
-    (let* ((is_list (llvm:call expander_is_list_node tail))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'oemt_go 'oemt_ok)))
+  (vibe:label-branch 'oemt_c (vibe:pred? expander_is_list_node tail) 'oemt_go 'oemt_ok)
   (llvm:label 'oemt_go
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (ends (llvm:call expander_pattern_tail_ends_ellipsis pr))
-           (ey (vibe:i32-one? ends)))
+           (ey (vibe:pred? expander_pattern_tail_ends_ellipsis pr)))
       (llvm:br ey 'oemt_ell 'oemt_plain)))
   (llvm:label 'oemt_ell
     (let* ((px (vibe:ast-ref tail car))
@@ -1074,11 +940,8 @@
   (llvm:label 'oemt_plain
     (let* ((px (vibe:ast-ref tail car))
            (pr (vibe:ast-ref tail cdr))
-           (r1 (llvm:call expander_out_ell_merge_elt out_ell px literals))
-           (r2 (llvm:call expander_out_ell_merge_tail out_ell pr literals))
-           (o1 (vibe:i32-one? r1))
-           (o2 (vibe:i32-one? r2))
-           (both (llvm:and o1 o2)))
+           (both (llvm:and (vibe:pred? expander_out_ell_merge_elt out_ell px literals)
+                           (vibe:pred? expander_out_ell_merge_tail out_ell pr literals))))
       (llvm:br both 'oemt_ok2 'oemt_fail)))
   (llvm:label 'oemt_ok2
     (llvm:ret (llvm:const-int |i32| 1)))
@@ -1089,16 +952,12 @@
   (llvm:br (vibe:ast-null? vars) 'oemvl_done 'oemvl_step)
   (llvm:label 'oemvl_done
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'oemvl_step
-    (let* ((is_list (llvm:call expander_is_list_node vars))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'oemvl_go 'oemvl_done)))
+  (vibe:label-branch 'oemvl_step (vibe:pred? expander_is_list_node vars) 'oemvl_go 'oemvl_done)
   (llvm:label 'oemvl_go
     (let* ((v (vibe:ast-ref vars car))
            (rest (vibe:ast-ref vars cdr))
            (head (llvm:load out_ell |%ASTNode*|))
-           (in (llvm:call expander_sym_in_ell_list head v))
-           (iy (vibe:i32-one? in)))
+           (iy (vibe:pred? expander_sym_in_ell_list head v)))
       (llvm:br iy 'oemvl_next 'oemvl_add)))
   (llvm:label 'oemvl_add
     (let* ((v (vibe:ast-ref vars car))
@@ -1126,8 +985,7 @@
   (llvm:label 'bmf_step
     (let* ((enc (vibe:ast-ref inner car))
            (rest (vibe:ast-ref inner cdr))
-           (is_list (llvm:call expander_is_list_node enc))
-           (ok (vibe:i32-one? is_list)))
+           (ok (vibe:pred? expander_is_list_node enc)))
       (llvm:br ok 'bmf_pair 'bmf_done)))
   (llvm:label 'bmf_pair
     (let* ((enc (vibe:ast-ref inner car))
@@ -1144,26 +1002,11 @@
 (llvm:define-function (expander_match_one_rep (rep |%ASTNode*|) (e |%ASTNode*|) (literals |%ASTNode*|) (out_patch |%ASTNode**|) (out_ell_inner |%ASTNode**|)) |i32|
   (llvm:store (llvm:const-null |%ASTNode*|) out_patch)
   (llvm:br (vibe:ast-null? rep) 'mor_fail 'mor_d)
-  (llvm:label 'mor_d
-    (let* ((is_atom (llvm:call expander_is_atom_node rep))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'mor_atom 'mor_list)))
-  (llvm:label 'mor_atom
-    (let* ((is_ell (llvm:call expander_is_ellipsis_id rep))
-           (ey (vibe:i32-one? is_ell)))
-      (llvm:br ey 'mor_fail 'mor_alit)))
-  (llvm:label 'mor_alit
-    (let* ((is_lit (llvm:call expander_literal_set_contains literals rep))
-           (ly (vibe:i32-one? is_lit)))
-      (llvm:br ly 'mor_lit 'mor_var)))
-  (llvm:label 'mor_lit
-    (let* ((ea (llvm:call expander_is_atom_node e))
-           (ey (vibe:i32-one? ea)))
-      (llvm:br ey 'mor_lit_eq 'mor_fail)))
-  (llvm:label 'mor_lit_eq
-    (let* ((eq (llvm:call expander_atoms_equal rep e))
-           (ok (vibe:i32-one? eq)))
-      (llvm:br ok 'mor_lit_ok 'mor_fail)))
+  (vibe:label-branch 'mor_d (vibe:pred? expander_is_atom_node rep) 'mor_atom 'mor_list)
+  (vibe:label-branch 'mor_atom (vibe:pred? expander_is_ellipsis_id rep) 'mor_fail 'mor_alit)
+  (vibe:label-branch 'mor_alit (vibe:pred? expander_literal_set_contains literals rep) 'mor_lit 'mor_var)
+  (vibe:label-branch 'mor_lit (vibe:pred? expander_is_atom_node e) 'mor_lit_eq 'mor_fail)
+  (vibe:label-branch 'mor_lit_eq (vibe:pred? expander_atoms_equal rep e) 'mor_lit_ok 'mor_fail)
   (llvm:label 'mor_lit_ok
     (llvm:ret (llvm:const-int |i32| 1)))
   (llvm:label 'mor_var
@@ -1187,40 +1030,31 @@
   (llvm:label 'msp_both_null
     (llvm:store bindings out_final)
     (llvm:ret (llvm:const-int |i32| 1)))
-  (llvm:label 'msp_pchk
-    (let* ((p_list (llvm:call expander_is_list_node ptail))
-           (p_ok (vibe:i32-one? p_list)))
-      (llvm:br p_ok 'msp_plist 'msp_fail)))
+  (vibe:label-branch 'msp_pchk (vibe:pred? expander_is_list_node ptail) 'msp_plist 'msp_fail)
   (llvm:label 'msp_plist
     (let* ((px (vibe:ast-ref ptail car))
            (pr (vibe:ast-ref ptail cdr))
-           (ends (llvm:call expander_pattern_tail_ends_ellipsis pr))
-           (ey (vibe:i32-one? ends)))
+           (ey (vibe:pred? expander_pattern_tail_ends_ellipsis pr)))
       (llvm:br ey 'msp_ell 'msp_plain)))
   (llvm:label 'msp_ell
     (let* ((px (vibe:ast-ref ptail car))
            (ok (llvm:call expander_match_ellipsis_rep px itail literals bindings out_final out_ell)))
       (llvm:ret ok)))
   (vibe:label-branch 'msp_plain (vibe:ast-null? itail) 'msp_fail 'msp_iok)
-  (llvm:label 'msp_iok
-    (let* ((i_list (llvm:call expander_is_list_node itail))
-           (i_ok (vibe:i32-one? i_list)))
-      (llvm:br i_ok 'msp_ix 'msp_fail)))
+  (vibe:label-branch 'msp_iok (vibe:pred? expander_is_list_node itail) 'msp_ix 'msp_fail)
   (llvm:label 'msp_ix
     (let* ((px (vibe:ast-ref ptail car))
            (pr (vibe:ast-ref ptail cdr))
            (ix (vibe:ast-ref itail car))
            (ir (vibe:ast-ref itail cdr))
-           (px_list (llvm:call expander_is_list_node px))
-           (lx (vibe:i32-one? px_list)))
+           (lx (vibe:pred? expander_is_list_node px)))
       (llvm:br lx 'msp_nested 'msp_atom)))
   (llvm:label 'msp_nested
     (let* ((px (vibe:ast-ref ptail car))
            (pr (vibe:ast-ref ptail cdr))
            (ix (vibe:ast-ref itail car))
            (ir (vibe:ast-ref itail cdr))
-           (ix_list (llvm:call expander_is_list_node ix))
-           (ix_ok (vibe:i32-one? ix_list)))
+           (ix_ok (vibe:pred? expander_is_list_node ix)))
       (llvm:br ix_ok 'msp_n_go 'msp_fail)))
   (llvm:label 'msp_n_go
     (llvm:store (llvm:const-null |%ASTNode*|) inner_slot)
@@ -1228,8 +1062,7 @@
            (pr (vibe:ast-ref ptail cdr))
            (ix (vibe:ast-ref itail car))
            (ir (vibe:ast-ref itail cdr))
-           (ok (llvm:call expander_match_subplist px ix literals (llvm:const-null |%ASTNode*|) inner_slot out_ell))
-           (okb (vibe:i32-one? ok)))
+           (okb (vibe:pred? expander_match_subplist px ix literals (llvm:const-null |%ASTNode*|) inner_slot out_ell)))
       (llvm:br okb 'msp_n_cont 'msp_fail)))
   (llvm:label 'msp_n_cont
     (let* ((pr (vibe:ast-ref ptail cdr))
@@ -1240,29 +1073,25 @@
       (llvm:ret ok2)))
   (llvm:label 'msp_atom
     (let* ((px (vibe:ast-ref ptail car))
-           (is_ell (llvm:call expander_is_ellipsis_id px))
-           (ey (vibe:i32-one? is_ell)))
+           (ey (vibe:pred? expander_is_ellipsis_id px)))
       (llvm:br ey 'msp_fail 'msp_a2)))
   (llvm:label 'msp_a2
     (let* ((px (vibe:ast-ref ptail car))
            (pr (vibe:ast-ref ptail cdr))
            (ix (vibe:ast-ref itail car))
            (ir (vibe:ast-ref itail cdr))
-           (is_lit (llvm:call expander_literal_set_contains literals px))
-           (ly (vibe:i32-one? is_lit)))
+           (ly (vibe:pred? expander_literal_set_contains literals px)))
       (llvm:br ly 'msp_lit 'msp_var)))
   (llvm:label 'msp_lit
     (let* ((ix (vibe:ast-ref itail car))
-           (ia (llvm:call expander_is_atom_node ix))
-           (ax (vibe:i32-one? ia)))
+           (ax (vibe:pred? expander_is_atom_node ix)))
       (llvm:br ax 'msp_lit_eq 'msp_fail)))
   (llvm:label 'msp_lit_eq
     (let* ((px (vibe:ast-ref ptail car))
            (ix (vibe:ast-ref itail car))
            (pr (vibe:ast-ref ptail cdr))
            (ir (vibe:ast-ref itail cdr))
-           (eq (llvm:call expander_atoms_equal px ix))
-           (ok (vibe:i32-one? eq)))
+           (ok (vibe:pred? expander_atoms_equal px ix)))
       (llvm:br ok 'msp_lit_rec 'msp_fail)))
   (llvm:label 'msp_lit_rec
     (let* ((pr (vibe:ast-ref ptail cdr))
@@ -1288,18 +1117,14 @@
   (llvm:label 'mp_fail
     (llvm:ret (llvm:const-int |i32| 0)))
   (vibe:label-branch 'mp_pnn (vibe:ast-null? invocation) 'mp_fail 'mp_inn)
-  (llvm:label 'mp_inn
-    (let* ((p_list (llvm:call expander_is_list_node pattern))
-           (i_list (llvm:call expander_is_list_node invocation))
-           (p_ok (vibe:i32-one? p_list))
-           (i_ok (vibe:i32-one? i_list))
-           (both (llvm:and p_ok i_ok)))
-      (llvm:br both 'mp_lists 'mp_fail)))
+  (vibe:label-branch 'mp_inn
+    (llvm:and (vibe:pred? expander_is_list_node pattern)
+              (vibe:pred? expander_is_list_node invocation))
+    'mp_lists 'mp_fail)
   (llvm:label 'mp_lists
     (let* ((pc (vibe:ast-ref pattern car))
            (ic (vibe:ast-ref invocation car))
-           (kw (llvm:call expander_atoms_equal pc ic))
-           (kw_ok (vibe:i32-one? kw)))
+           (kw_ok (vibe:pred? expander_atoms_equal pc ic)))
       (llvm:br kw_ok 'mp_kw_ok 'mp_fail)))
   (llvm:label 'mp_kw_ok
     (let* ((pr (vibe:ast-ref pattern cdr))
@@ -1323,8 +1148,7 @@
       (llvm:store (llvm:const-null |%ASTNode*|) patch_slot)
       (let* ((cur (llvm:load cur_ptr |%ASTNode*|))
              (ev (vibe:ast-ref cur car))
-             (ok (llvm:call expander_match_one_rep rep ev literals patch_slot out_ell))
-             (okb (vibe:i32-one? ok)))
+             (okb (vibe:pred? expander_match_one_rep rep ev literals patch_slot out_ell)))
         (llvm:br okb 'mer_merge 'mer_fail)))
     (llvm:label 'mer_merge
       (let* ((patch (llvm:load patch_slot |%ASTNode*|))
@@ -1403,14 +1227,8 @@
   (llvm:br (vibe:ast-null? frag) 'fel_neg 'fel_d)
   (llvm:label 'fel_neg
     (llvm:ret (llvm:const-int |i64| -1)))
-  (llvm:label 'fel_d
-    (let* ((is_atom (llvm:call expander_is_atom_node frag))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'fel_atom 'fel_list)))
-  (llvm:label 'fel_atom
-    (let* ((in (llvm:call expander_sym_in_ell_list ell_vars frag))
-           (iy (vibe:i32-one? in)))
-      (llvm:br iy 'fel_in 'fel_neg)))
+  (vibe:label-branch 'fel_d (vibe:pred? expander_is_atom_node frag) 'fel_atom 'fel_list)
+  (vibe:label-branch 'fel_atom (vibe:pred? expander_sym_in_ell_list ell_vars frag) 'fel_in 'fel_neg)
   (llvm:label 'fel_in
     (let* ((lst (llvm:call expander_binding_lookup bindings frag))
            (ln (llvm:call expander_ellipsis_list_length lst)))
@@ -1442,14 +1260,8 @@
   (llvm:br (vibe:ast-null? template) 'sti_null 'sti_d)
   (llvm:label 'sti_null
     (llvm:ret (llvm:const-null |%ASTNode*|)))
-  (llvm:label 'sti_d
-    (let* ((is_atom (llvm:call expander_is_atom_node template))
-           (ax (vibe:i32-one? is_atom)))
-      (llvm:br ax 'sti_atom 'sti_list)))
-  (llvm:label 'sti_atom
-    (let* ((in_ell (llvm:call expander_sym_in_ell_list ell_vars template))
-           (in_y (vibe:i32-one? in_ell)))
-      (llvm:br in_y 'sti_ell 'sti_plain)))
+  (vibe:label-branch 'sti_d (vibe:pred? expander_is_atom_node template) 'sti_atom 'sti_list)
+  (vibe:label-branch 'sti_atom (vibe:pred? expander_sym_in_ell_list ell_vars template) 'sti_ell 'sti_plain)
   (vibe:label-branch 'sti_ell (llvm:icmp 'slt idx (llvm:const-int |i64| 0)) 'sti_keep 'sti_idx)
   (llvm:label 'sti_idx
     (let* ((val (llvm:call expander_binding_lookup bindings template))
@@ -1477,24 +1289,19 @@
   (llvm:br (vibe:ast-null? t) 'slti_null 'slti_d)
   (llvm:label 'slti_null
     (llvm:ret (llvm:const-null |%ASTNode*|)))
-  (llvm:label 'slti_d
-    (let* ((is_list (llvm:call expander_is_list_node t))
-           (ok (vibe:i32-one? is_list)))
-      (llvm:br ok 'slti_go 'slti_raw)))
+  (vibe:label-branch 'slti_d (vibe:pred? expander_is_list_node t) 'slti_go 'slti_raw)
   (llvm:label 'slti_raw
     (llvm:ret t))
   (llvm:label 'slti_go
     (let* ((a (vibe:ast-ref t car))
            (d (vibe:ast-ref t cdr))
-           (d_list (llvm:call expander_is_list_node d))
-           (dy (vibe:i32-one? d_list)))
+           (dy (vibe:pred? expander_is_list_node d)))
       (llvm:br dy 'slti_dc 'slti_plain)))
   (llvm:label 'slti_dc
     (let* ((d (vibe:ast-ref t cdr))
            (dc (vibe:ast-ref d car))
            (dd (vibe:ast-ref d cdr))
-           (is_ell (llvm:call expander_is_ellipsis_id dc))
-           (ey (vibe:i32-one? is_ell))
+           (ey (vibe:pred? expander_is_ellipsis_id dc))
            (ddn (vibe:ast-null? dd))
            (ed (llvm:and ey ddn)))
       (llvm:br ed 'slti_ell 'slti_plain)))
@@ -1567,17 +1374,13 @@
     (llvm:br (vibe:ast-null? expr) 'ret_null 'not_null)
     (llvm:label 'ret_null
       (llvm:ret (llvm:const-null |%ASTNode*|)))
-    (llvm:label 'not_null
-      (let* ((is_list (llvm:call expander_is_list_node expr))
-             (list_yes (vibe:i32-one? is_list)))
-        (llvm:br list_yes 'is_list 'ret_atom)))
+    (vibe:label-branch 'not_null (vibe:pred? expander_is_list_node expr) 'is_list 'ret_atom)
     (llvm:label 'ret_atom
       (llvm:ret expr))
     (llvm:label 'is_list
       (let* ((ecar (vibe:ast-ref expr car))
              (ecdr (vibe:ast-ref expr cdr))
-             (car_is_atom (llvm:call expander_is_atom_node ecar))
-             (car_atom_ok (vibe:i32-one? car_is_atom)))
+             (car_atom_ok (vibe:pred? expander_is_atom_node ecar)))
         (llvm:br car_atom_ok 'maybe_macro 'recurse)))
     (llvm:label 'maybe_macro
       (let* ((ecar (vibe:ast-ref expr car))
@@ -1601,8 +1404,7 @@
         (llvm:store template template_slot)
         (llvm:store (llvm:const-null |%ASTNode*|) bindings_slot)
         (llvm:store (llvm:const-null |%ASTNode*|) ell_slot)
-        (let* ((mok (llvm:call expander_match_pattern pattern expr lit bindings_slot ell_slot))
-               (mok_ok (vibe:i32-one? mok)))
+        (let* ((mok_ok (vibe:pred? expander_match_pattern pattern expr lit bindings_slot ell_slot)))
           (llvm:br mok_ok 'expand_matched 'try_clause_advance))))
     (llvm:label 'try_clause_advance
       (let* ((cur (llvm:load clauses_iter_slot |%ASTNode*|))
@@ -1664,8 +1466,7 @@
 ;; expander_process_one
 ;; ============================================================================
 (llvm:define-function (expander_process_one (form |%ASTNode*|) (env_ptr |%ASTNode**|)) |%ASTNode*|
-  (let* ((is_ds (llvm:call expander_is_define_syntax form)))
-    (llvm:br (vibe:i32-one? is_ds) 'handle_define_syntax 'expand))
+  (llvm:br (vibe:pred? expander_is_define_syntax form) 'handle_define_syntax 'expand)
   (vibe:label-branch 'handle_define_syntax (vibe:ast-null? (llvm:call expander_parse_simple_macro form)) 'expand 'add_to_env)
   (llvm:label 'add_to_env
     (let* ((entry (llvm:call expander_parse_simple_macro form))
@@ -1676,8 +1477,7 @@
   (llvm:label 'expand
     (let* ((env (llvm:load env_ptr |%ASTNode*|))
            (expanded (llvm:call expander_expand_expr form env)))
-      (let* ((is_expanded_ds (llvm:call expander_is_define_syntax expanded)))
-        (llvm:br (vibe:i32-one? is_expanded_ds) 'expand_install_define_syntax 'expand_ret))
+      (llvm:br (vibe:pred? expander_is_define_syntax expanded) 'expand_install_define_syntax 'expand_ret)
       (vibe:label-branch 'expand_install_define_syntax (vibe:ast-null? (llvm:call expander_parse_simple_macro expanded)) 'expand_ret 'expand_add_installed_macro)
       (llvm:label 'expand_add_installed_macro
         (let* ((entry (llvm:call expander_parse_simple_macro expanded))
